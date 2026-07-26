@@ -54,8 +54,8 @@ The existing log modal receives a third action, **Copy** / **Копироват�
    text, rejects empty text, and reports clipboard failures.
 3. Existing Rust, TypeScript, Svelte, Kotlin, manifest, VPN-contract, native
    dependency, and APK-content gates remain required.
-4. A signed arm64 APK and AAB are rebuilt as version 0.2.0 with
-   `versionCode = 2000`. No live VPN,
+4. A signed arm64 APK is rebuilt as version 0.2.0 with `versionCode = 2000`.
+   No live VPN,
    reconnect, public-IP, or DNS tests are run on the development host.
 
 The existing Android GitHub release and tag are deleted only after the

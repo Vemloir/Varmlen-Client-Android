@@ -22,7 +22,7 @@ A VpnService builds the tun interface; hev-socks5-tunnel (tun2socks) bridges it 
 source ~/varmlen-android-env.sh          # JDK 17, Android SDK and NDK, rust android targets
 bash scripts/android-native.sh           # fetch xray-android and build tun2socks into jniLibs
 npm install
-npm run tauri android build -- --target aarch64 --apk --aab
+npm run tauri android build -- --target aarch64 --apk
 ```
 
 Before publishing, run:
