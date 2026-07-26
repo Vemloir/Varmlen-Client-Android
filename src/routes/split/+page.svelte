@@ -362,7 +362,7 @@
     padding: 28px 18px;
     text-align: center;
     background: var(--bg-elev);
-    border: 1px dashed var(--border);
+    border: none;
     border-radius: var(--radius);
     display: flex;
     flex-direction: column;
@@ -526,7 +526,7 @@
     contain-intrinsic-size: auto 52px;
   }
   .picker-row + .picker-row {
-    border-top: 1px solid var(--bg);
+    border-top: none;
   }
   @media (hover: hover) {
     .picker-row:hover:not(:disabled) {

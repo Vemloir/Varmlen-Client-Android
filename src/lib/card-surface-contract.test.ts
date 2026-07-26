@@ -6,7 +6,7 @@ const read = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
 describe("card surface contract", () => {
-  it("uses borderless cards and page-coloured row separators", () => {
+  it("uses borderless card surfaces without row separators", () => {
     const css = read("../app.css");
     const home = read("../routes/+page.svelte");
     const settings = read("../routes/settings/+page.svelte");
@@ -15,20 +15,21 @@ describe("card surface contract", () => {
     expect(css).toMatch(/\.card\s*\{[^}]*border:\s*none;/s);
     expect(css).toMatch(/\.list\s*\{[^}]*border:\s*none;/s);
     expect(css).toMatch(
-      /\.list > \* \+ \*\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
+      /\.list > \* \+ \*\s*\{[^}]*border-top:\s*none;/s,
     );
     expect(home).toMatch(/\.sub-card\s*\{[^}]*border:\s*none;/s);
     expect(settings).toMatch(/\.theme-tile\s*\{[^}]*border:\s*none;/s);
     expect(settings).toMatch(
-      /\.row \+ \.row\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
+      /\.row \+ \.row\s*\{[^}]*border-top:\s*none;/s,
     );
     expect(settings).toMatch(/\.ver-list\s*\{[^}]*border:\s*none;/s);
     expect(settings).toMatch(
-      /\.ver-list li \+ li\s*\{\s*border-top:\s*1px solid var\(--bg\);/s,
+      /\.ver-list li \+ li\s*\{\s*border-top:\s*none;/s,
     );
+    expect(split).toMatch(/\.empty-state\s*\{[^}]*border:\s*none;/s);
     expect(split).toMatch(/\.picker\s*\{[^}]*border:\s*none;/s);
     expect(split).toMatch(
-      /\.picker-row \+ \.picker-row\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
+      /\.picker-row \+ \.picker-row\s*\{[^}]*border-top:\s*none;/s,
     );
   });
 

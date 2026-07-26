@@ -913,7 +913,7 @@
     cursor: pointer;
   }
   .row + .row {
-    border-top: 1px solid var(--bg);
+    border-top: none;
   }
   /* Sub-setting that only applies when its parent toggle is on. */
   .row.disabled {
@@ -1057,7 +1057,7 @@
     border-radius: var(--radius-sm);
     background: var(--bg-elev-2);
   }
-  .ver-list li + li { border-top: 1px solid var(--bg); }
+  .ver-list li + li { border-top: none; }
   .ver-row {
     color: var(--text);
     padding: 10px 12px;
