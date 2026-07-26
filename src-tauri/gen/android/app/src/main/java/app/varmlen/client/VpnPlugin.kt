@@ -2,6 +2,7 @@ package app.varmlen.client
 
 import android.app.Activity
 import android.content.BroadcastReceiver
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -34,6 +35,11 @@ import java.util.UUID
 class BarStyleArgs {
     /** true when the app is in LIGHT theme → dark system-bar icons. */
     var light: Boolean = false
+}
+
+@InvokeArg
+class ClipboardWriteArgs {
+    var text: String = ""
 }
 
 @InvokeArg
@@ -148,6 +154,18 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (_: Throwable) { "" }
         ret.put("text", text)
         invoke.resolve(ret)
+    }
+
+    @Command
+    fun writeClipboard(invoke: Invoke) {
+        val args = invoke.parseArgs(ClipboardWriteArgs::class.java)
+        try {
+            val cm = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("Varmlen VPN log", args.text))
+            invoke.resolve()
+        } catch (error: Throwable) {
+            invoke.reject(error.message ?: "Could not write to the clipboard")
+        }
     }
 
     /** Dark/light system-bar icons to match the app theme. */

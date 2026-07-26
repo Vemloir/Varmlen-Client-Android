@@ -153,6 +153,20 @@ pub fn read_clipboard<R: Runtime>(app: &AppHandle<R>) -> Result<String, String> 
 }
 
 #[derive(Serialize)]
+struct ClipboardWriteArgs {
+    text: String,
+}
+
+/// Write text to the Android system clipboard.
+pub fn write_clipboard<R: Runtime>(app: &AppHandle<R>, text: String) -> Result<(), String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>("writeClipboard", ClipboardWriteArgs { text })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
 struct BarStyleArgs {
     light: bool,
 }

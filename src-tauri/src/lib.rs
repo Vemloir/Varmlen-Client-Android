@@ -281,6 +281,7 @@ pub fn run() {
             vpn::vpn_log,
             vpn::clear_vpn_log,
             vpn::read_clipboard,
+            vpn::write_clipboard,
             vpn::set_status_bar,
             vpn::notifications_enabled,
             vpn::open_notification_settings,

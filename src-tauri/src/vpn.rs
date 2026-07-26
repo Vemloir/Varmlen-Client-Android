@@ -768,6 +768,21 @@ pub async fn read_clipboard(app: tauri::AppHandle) -> Result<String, String> {
     }
 }
 
+/// Write the system clipboard. Android uses the native plugin; desktop uses
+/// navigator.clipboard directly from the user gesture.
+#[tauri::command]
+pub async fn write_clipboard(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::mobile_vpn::write_clipboard(&app, text);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (&app, text);
+        Err("use navigator.clipboard on desktop".to_string())
+    }
+}
+
 /// Match the Android system-bar icon colour to the app theme (light → dark icons).
 #[tauri::command]
 pub async fn set_status_bar(app: tauri::AppHandle, light: bool) -> Result<(), String> {

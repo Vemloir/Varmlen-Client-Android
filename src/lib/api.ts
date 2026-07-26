@@ -201,6 +201,11 @@ export function readClipboard(): Promise<string> {
   return invoke<string>("read_clipboard");
 }
 
+/** Write the system clipboard on Android. */
+export function writeClipboard(text: string): Promise<void> {
+  return invoke<void>("write_clipboard", { text });
+}
+
 /** Match the Android system-bar icons to the app theme (no-op on desktop). */
 export function setStatusBar(light: boolean): Promise<void> {
   return invoke<void>("set_status_bar", { light });

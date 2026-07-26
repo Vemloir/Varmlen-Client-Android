@@ -3,9 +3,10 @@
   import { settings, type VpnMode, type PingMethod, type LogLevel } from "$lib/settings.svelte";
   import { i18n, t, LANGUAGES, type Lang } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
-  import { capsGranted, grantCaps, autostartStatus, setAutostart, vpnLog, clearVpnLog, notificationsEnabled, openNotificationSettings, openVpnSettings } from "$lib/api";
+  import { capsGranted, grantCaps, autostartStatus, setAutostart, vpnLog, clearVpnLog, writeClipboard, notificationsEnabled, openNotificationSettings, openVpnSettings } from "$lib/api";
+  import { copyDisplayedLog } from "$lib/log-copy";
   import Dropdown from "$lib/components/Dropdown.svelte";
-  import { onMount, tick } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { isAndroid } from "$lib/platform";
 
   const logLevelOptions = $derived([
@@ -19,7 +20,15 @@
   let logText = $state("");
   let logBusy = $state(false);
   let logEl = $state<HTMLElement>();
+  let logCopyState = $state<"idle" | "copied" | "failed">("idle");
+  let logCopyReset: ReturnType<typeof setTimeout> | undefined;
+  function resetLogCopyFeedback() {
+    if (logCopyReset !== undefined) clearTimeout(logCopyReset);
+    logCopyReset = undefined;
+    logCopyState = "idle";
+  }
   async function refreshLog() {
+    resetLogCopyFeedback();
     logBusy = true;
     try {
       logText = (await vpnLog()) || "";
@@ -43,6 +52,21 @@
     } catch {}
     await refreshLog();
   }
+  async function copyLog() {
+    const result = await copyDisplayedLog(logText, (text) =>
+      isAndroid ? writeClipboard(text) : navigator.clipboard.writeText(text),
+    );
+    if (result === "empty") return;
+    logCopyState = result;
+    if (logCopyReset !== undefined) clearTimeout(logCopyReset);
+    logCopyReset = setTimeout(() => {
+      logCopyState = "idle";
+      logCopyReset = undefined;
+    }, 1500);
+  }
+  onDestroy(() => {
+    if (logCopyReset !== undefined) clearTimeout(logCopyReset);
+  });
 
   // Custom, touch-grabbable scrollbar for the log (the native WebView one is
   // tiny and janky to drag). The thumb tracks scrollTop and, while dragged,
@@ -708,6 +732,13 @@
       </div>
       <div class="modal-actions">
         <button class="btn" onclick={wipeLog}>{t("settings.logClear")}</button>
+        <button class="btn" onclick={copyLog} disabled={logText.length === 0}>
+          {logCopyState === "failed"
+            ? t("settings.logCopyFailed")
+            : logCopyState === "copied"
+              ? t("settings.logCopied")
+              : t("settings.logCopy")}
+        </button>
         <button class="btn btn-primary" onclick={refreshLog} disabled={logBusy}>
           {t("settings.logRefresh")}
         </button>
