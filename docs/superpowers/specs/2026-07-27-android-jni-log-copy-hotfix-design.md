@@ -2,8 +2,9 @@
 
 ## Goal
 
-Ship an Android 0.2.1 hotfix that restores tun2socks startup in release builds
-and lets a user copy the complete VPN log from the existing log viewer.
+Replace the broken Android 0.2.0 release with a corrected build that restores
+tun2socks startup in release builds and lets a user copy the complete VPN log
+from the existing log viewer.
 
 ## Confirmed root cause
 
@@ -53,8 +54,11 @@ The existing log modal receives a third action, **Copy** / **Копироват�
    text, rejects empty text, and reports clipboard failures.
 3. Existing Rust, TypeScript, Svelte, Kotlin, manifest, VPN-contract, native
    dependency, and APK-content gates remain required.
-4. A signed arm64 APK and AAB are built as version 0.2.1. No live VPN,
+4. A signed arm64 APK and AAB are rebuilt as version 0.2.0 with
+   `versionCode = 2000`. No live VPN,
    reconnect, public-IP, or DNS tests are run on the development host.
 
-Publishing the GitHub release is a separate explicit step after all artifacts
-and signatures pass.
+The existing Android GitHub release and tag are deleted only after the
+replacement artifacts and signatures pass. The corrected commit is then tagged
+`v0.2.0` and the release is recreated under the same URL. The Linux repository
+and Linux 0.2.0 release are not changed.
