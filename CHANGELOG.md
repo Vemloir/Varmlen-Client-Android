@@ -2,6 +2,15 @@
 
 ## 0.2.0
 
+### Corrected Android reissue
+
+- Fixed the tun2socks JNI descriptors that prevented the original 0.2.0 APK
+  from connecting.
+- Treat a native tun2socks startup failure as a fail-closed connection error.
+- Added Copy, Copied, and Copy failed states to the full in-app VPN log viewer.
+- Added a release-APK gate that compares the DEX and bundled native JNI
+  contracts before publication.
+
 ### Android VPN
 
 - The UI reports connected only after the foreground service, Xray, TUN, and
