@@ -741,11 +741,16 @@ mod tests {
         // hijacked into the DNS module, and the DoH upstream is forced to proxy.
         let s =
             parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
-        let cfg = build_xray_config(&s, &split(), "tun", TunMode::XrayNative, true, "warning");
+        let cfg = build_xray_config(&s, &split(), "tun", TunMode::Tun2socks, true, "warning");
         assert_eq!(cfg["dns"]["servers"][0], "https://1.1.1.1/dns-query");
         let serialized = serde_json::to_string(&cfg).unwrap();
         assert!(!serialized.contains("localhost") && !serialized.contains("\"local\""));
+        assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 1);
+        assert!(!serialized.contains("dns-in"));
+        assert!(!serialized.contains("dokodemo-door"));
+        assert!(!serialized.contains("5353"));
         let dns_hijack = rule_for(&cfg, "inboundTag").unwrap();
+        assert_eq!(dns_hijack["inboundTag"][0], "socks-in");
         assert_eq!(dns_hijack["port"], 53);
         assert_eq!(dns_hijack["outboundTag"], "dns-out");
         // DoH upstream pinned to proxy.
