@@ -160,6 +160,9 @@ pub struct ImportResult {
     pub meta: SubscriptionMeta,
     pub servers: Vec<VlessServer>,
     pub description: Option<String>,
+    /// Original JSON payload for editable JSON subscriptions. None for
+    /// share-link/base64 subscriptions.
+    pub source_json: Option<String>,
 }
 
 /// Metadata keys that panels (Marzban / Happ-style) inline into the body as
@@ -792,6 +795,10 @@ pub fn parse_vmess(uri: &str) -> Result<VlessServer, ParseError> {
 /// Parse a subscription body: a list of proxy URIs (plaintext or base64).
 /// Lines with unsupported schemes are skipped.
 pub fn parse_subscription(body: &str) -> Vec<VlessServer> {
+    let trimmed = body.trim_start_matches('\u{feff}').trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        return parse_json_subscription(trimmed).1;
+    }
     let text = decode_body(body);
     text.lines()
         .filter_map(|line| {
@@ -988,6 +995,28 @@ mod tests {
         let body = "# c\nvless://a@h-a:443?type=tcp&security=reality#A\nvless://b@h-b:443?type=xhttp&security=reality#B\ngarbage";
         let v = parse_subscription(body);
         assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn parse_subscription_accepts_json() {
+        let body = r#"{
+          "remarks": "Germany",
+          "outbounds": [{
+            "protocol": "vless",
+            "settings": {
+              "vnext": [{
+                "address": "de.example.com",
+                "port": 443,
+                "users": [{ "id": "3f7e7d8c-1234-5678-9abc-def012345678" }]
+              }]
+            },
+            "streamSettings": { "network": "tcp", "security": "none" }
+          }]
+        }"#;
+        let servers = parse_subscription(body);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].host, "de.example.com");
+        assert_eq!(servers[0].label, "Germany");
     }
 
     #[test]

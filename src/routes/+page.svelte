@@ -6,17 +6,23 @@
   import { readClipboard } from "$lib/api";
   import { isAndroid } from "$lib/platform";
   import { placePopup, portal } from "$lib/popup";
+  import FlagIcon from "$lib/components/FlagIcon.svelte";
+  import { formatJson, isJsonInput } from "$lib/subscription-json";
 
   import type { Subscription, ServerEntry } from "$lib/subs.svelte";
 
   let showImport = $state(false);
-  let importMode = $state<"choose" | "manual">("choose");
+  let importMode = $state<"choose" | "link" | "json">("choose");
   let subUrl = $state("");
   let importError = $state<string | null>(null);
   let openMenuFor = $state<string | null>(null);
   let infoFor = $state<Subscription | null>(null);
   let renameFor = $state<Subscription | null>(null);
   let renameDraft = $state("");
+  let jsonFor = $state<Subscription | null>(null);
+  let jsonDraft = $state("");
+  let jsonError = $state<string | null>(null);
+  let jsonSaving = $state(false);
   let detailFor = $state<ServerEntry | null>(null);
   // Fixed-position coords for the "…" menu so it escapes the card's overflow:hidden.
   let menuPos = $state({ top: 0, right: 0 });
@@ -27,8 +33,9 @@
       return;
     }
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    // 4 items (~36px each) + padding; flip up / clamp so it always fits.
-    menuPos = placePopup(r, 200, 4 * 36 + 8);
+    const itemCount = subs.list.find((s) => s.id === subId)?.sourceJson ? 5 : 4;
+    // Items are ~36px each; flip up / clamp so the menu always fits.
+    menuPos = placePopup(r, 200, itemCount * 36 + 8);
     openMenuFor = subId;
   }
 
@@ -86,6 +93,25 @@
     if (renameFor) subs.rename(renameFor.id, renameDraft);
     renameFor = null;
   }
+  function openJson(sub: Subscription) {
+    jsonFor = sub;
+    jsonDraft = formatJson(sub.sourceJson ?? "{}");
+    jsonError = null;
+    openMenuFor = null;
+  }
+  async function saveJson(): Promise<void> {
+    if (!jsonFor || !jsonDraft.trim()) return;
+    jsonError = null;
+    jsonSaving = true;
+    try {
+      await subs.updateJson(jsonFor.id, jsonDraft);
+      jsonFor = null;
+    } catch (e) {
+      jsonError = e instanceof Error ? e.message : String(e);
+    } finally {
+      jsonSaving = false;
+    }
+  }
 
   // Subscription headers (support / web-page URLs) are attacker-controlled, so
   // only hand the OS opener a vetted web/Telegram scheme — never file:, etc.
@@ -123,7 +149,7 @@
       showImport = false;
     } catch (e) {
       importError = e instanceof Error ? e.message : String(e);
-      importMode = "manual";
+      importMode = isJsonInput(subUrl) ? "json" : "link";
     }
   }
 
@@ -135,13 +161,13 @@
       // Android's WebView blocks navigator.clipboard, so read it natively there.
       text = (isAndroid ? await readClipboard() : await navigator.clipboard.readText())?.trim() ?? "";
     } catch {
-      // Clipboard blocked — fall back to manual entry.
-      importMode = "manual";
+      // Clipboard blocked — fall back to the compact link entry.
+      importMode = "link";
       importError = t("import.clipboardFail");
       return;
     }
     if (!text) {
-      importMode = "manual";
+      importMode = "link";
       importError = t("import.clipboardEmpty");
       return;
     }
@@ -268,6 +294,11 @@
               <button role="menuitem" class="menu-item" onclick={() => openRename(sub)}>
                 {t("menu.rename")}
               </button>
+              {#if sub.sourceJson}
+                <button role="menuitem" class="menu-item" onclick={() => openJson(sub)}>
+                  {t("menu.json")}
+                </button>
+              {/if}
               <button
                 role="menuitem"
                 class="menu-item"
@@ -331,7 +362,7 @@
             >
               <span class="srv-stripe"></span>
               <button class="srv-btn" onclick={() => subs.selectServer(srv.id)}>
-                <span class="flag">{srv.flag ?? ""}</span>
+                <FlagIcon flag={srv.flag ?? ""} />
                 <div class="srv-info">
                   <div class="srv-name">{srv.name}</div>
                   <div class="srv-tr dim">{srv.transport}</div>
@@ -433,7 +464,10 @@
       aria-label="Location details"
     >
       <header class="modal-head">
-        <h2>{detailFor.flag ? detailFor.flag + " " : ""}{detailFor.name}</h2>
+        <h2 class="location-title">
+          <FlagIcon flag={detailFor.flag ?? ""} />
+          <span>{detailFor.name}</span>
+        </h2>
         <button class="icon-btn" onclick={() => (detailFor = null)} aria-label={t("common.close")}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
@@ -446,6 +480,49 @@
           <dd class="mono small">{value}</dd>
         {/each}
       </dl>
+    </div>
+  </div>
+{/if}
+
+{#if jsonFor}
+  <div class="modal-backdrop" onclick={() => (jsonFor = null)} role="presentation">
+    <div
+      class="modal card json-modal"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={(e) => e.key === "Escape" && (jsonFor = null)}
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      aria-label={t("json.title")}
+    >
+      <header class="modal-head">
+        <h2>{t("json.title")}</h2>
+        <button class="icon-btn" onclick={() => (jsonFor = null)} aria-label={t("common.close")}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+      </header>
+      {#if jsonFor.jsonEdited}
+        <p class="muted">{t("json.edited")}</p>
+      {/if}
+      <textarea
+        class="json-editor"
+        bind:value={jsonDraft}
+        spellcheck="false"
+        disabled={jsonSaving}
+      ></textarea>
+      {#if jsonError}
+        <div class="error">{jsonError}</div>
+      {/if}
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick={() => (jsonFor = null)} disabled={jsonSaving}>
+          {t("common.cancel")}
+        </button>
+        <button class="btn btn-primary" onclick={saveJson} disabled={jsonSaving || !jsonDraft.trim()}>
+          {jsonSaving ? t("json.saving") : t("json.save")}
+        </button>
+      </div>
     </div>
   </div>
 {/if}
@@ -502,25 +579,53 @@
           <button class="btn btn-primary" onclick={importFromClipboard} disabled={subs.importing}>
             {subs.importing ? t("import.importing") : t("import.fromClipboard")}
           </button>
-          <button class="btn" onclick={() => (importMode = "manual")} disabled={subs.importing}>
-            {t("import.manual")}
+          <button class="btn" onclick={() => (importMode = "link")} disabled={subs.importing}>
+            {t("import.link")}
+          </button>
+          <button class="btn" onclick={() => (importMode = "json")} disabled={subs.importing}>
+            {t("import.json")}
           </button>
         </div>
         {#if importError}
           <div class="error">{importError}</div>
         {/if}
-      {:else}
-        <p class="muted">{t("import.manualHint")}</p>
-        <textarea
-          class="import-text"
-          placeholder={"vless://…\nhttps://…\n{ \"outbounds\": [ … ] }"}
+      {:else if importMode === "link"}
+        <p class="muted">{t("import.linkHint")}</p>
+        <input
+          type="text"
+          class="import-link"
+          placeholder="https://…"
           bind:value={subUrl}
+          onkeydown={(e) => e.key === "Enter" && void importSubscription()}
+          disabled={subs.importing}
+        />
+        {#if importError}
+          <div class="error">{importError}</div>
+        {/if}
+        <div class="modal-actions">
+          <button class="btn btn-ghost" onclick={() => (importMode = "choose")} disabled={subs.importing}>
+            {t("import.back")}
+          </button>
+          <button class="btn btn-primary" onclick={importSubscription} disabled={subs.importing || !subUrl.trim()}>
+            {subs.importing ? t("import.importing") : t("import.add")}
+          </button>
+        </div>
+      {:else}
+        <p class="muted">{t("import.jsonHint")}</p>
+        <textarea
+          class="import-json"
+          placeholder={'{\n  "outbounds": [ … ]\n}'}
+          bind:value={subUrl}
+          spellcheck="false"
           disabled={subs.importing}
         ></textarea>
         {#if importError}
           <div class="error">{importError}</div>
         {/if}
         <div class="modal-actions">
+          <button class="btn btn-ghost" onclick={() => (importMode = "choose")} disabled={subs.importing}>
+            {t("import.back")}
+          </button>
           <button class="btn btn-primary" onclick={importSubscription} disabled={subs.importing || !subUrl.trim()}>
             {subs.importing ? t("import.importing") : t("import.add")}
           </button>
@@ -582,6 +687,12 @@
     .modal-head .icon-btn:hover {
       color: var(--text);
     }
+  }
+  .location-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
   }
 
   .scroll {
@@ -965,14 +1076,6 @@
   .srv-row.active {
     background: var(--accent-faint);
   }
-  .flag {
-    font-size: 22px;
-    line-height: 1;
-    flex-shrink: 0;
-    /* fixed slot so rows without a flag emoji keep the same text indent */
-    width: 26px;
-    text-align: center;
-  }
   .srv-info {
     flex: 1;
     min-width: 0;
@@ -1054,14 +1157,27 @@
     width: 100%;
     padding: 12px;
   }
-  .import-text {
+  .import-link {
     width: 100%;
-    min-height: 120px;
+  }
+  .import-json,
+  .json-editor {
+    width: 100%;
     resize: vertical;
     font-family: ui-monospace, monospace;
     font-size: 12px;
     line-height: 1.5;
     white-space: pre;
+  }
+  .import-json {
+    min-height: 180px;
+  }
+  .json-modal {
+    max-height: calc(100dvh - 24px);
+  }
+  .json-editor {
+    min-height: 280px;
+    flex: 1;
   }
   .error {
     color: var(--danger);

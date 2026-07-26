@@ -27,6 +27,7 @@ const EN: Dict = {
   // subscription menu
   "menu.info": "Subscription info",
   "menu.rename": "Rename",
+  "menu.json": "View JSON",
   "menu.pin": "Pin",
   "menu.unpin": "Unpin",
   "menu.remove": "Remove subscription",
@@ -46,14 +47,23 @@ const EN: Dict = {
 
   // import modal
   "import.title": "Add subscription",
-  "import.hint": "From the clipboard, or enter it by hand.",
+  "import.hint": "Choose how you want to add the subscription.",
   "import.importing": "Importing…",
   "import.add": "Add",
+  "import.back": "Back",
   "import.fromClipboard": "Paste from clipboard",
-  "import.manual": "Enter manually",
-  "import.manualHint": "A subscription URL, a vless:// / vmess:// / trojan:// / ss:// link, or JSON (xray config / outbounds).",
+  "import.link": "Enter link",
+  "import.json": "Enter JSON",
+  "import.linkHint": "A subscription URL or a vless:// / vmess:// / trojan:// / ss:// link.",
+  "import.jsonHint": "Paste an xray JSON config or an object containing outbounds.",
   "import.clipboardFail": "Couldn't read the clipboard - paste it below.",
   "import.clipboardEmpty": "The clipboard is empty - paste it below.",
+
+  // JSON editor
+  "json.title": "Subscription JSON",
+  "json.edited": "Edited locally. Automatic updates are paused until you refresh from the source.",
+  "json.save": "Save changes",
+  "json.saving": "Saving…",
 
   // generic
   "common.close": "Close",
@@ -194,6 +204,7 @@ const RU: Dict = {
 
   "menu.info": "Информация о подписке",
   "menu.rename": "Переименовать",
+  "menu.json": "Посмотреть JSON",
   "menu.pin": "Закрепить",
   "menu.unpin": "Открепить",
   "menu.remove": "Удалить подписку",
@@ -210,14 +221,22 @@ const RU: Dict = {
   "rename.title": "Переименовать подписку",
 
   "import.title": "Добавить подписку",
-  "import.hint": "Из буфера обмена или ввести вручную.",
+  "import.hint": "Выберите способ добавления подписки.",
   "import.importing": "Добавление…",
   "import.add": "Добавить",
+  "import.back": "Назад",
   "import.fromClipboard": "Вставить из буфера",
-  "import.manual": "Ввести вручную",
-  "import.manualHint": "URL подписки, ссылка vless:// / vmess:// / trojan:// / ss:// или JSON (конфиг xray / outbounds).",
+  "import.link": "Ввести ссылку",
+  "import.json": "Ввести JSON",
+  "import.linkHint": "URL подписки или ссылка vless:// / vmess:// / trojan:// / ss://.",
+  "import.jsonHint": "Вставьте JSON-конфиг xray или объект с outbounds.",
   "import.clipboardFail": "Не удалось прочитать буфер - вставьте ниже.",
   "import.clipboardEmpty": "Буфер обмена пуст - вставьте ниже.",
+
+  "json.title": "JSON подписки",
+  "json.edited": "Изменён локально. Автообновление приостановлено до ручного обновления из источника.",
+  "json.save": "Сохранить изменения",
+  "json.saving": "Сохранение…",
 
   "common.close": "Закрыть",
   "common.cancel": "Отмена",

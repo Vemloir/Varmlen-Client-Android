@@ -11,6 +11,7 @@ import {
   type VlessServer,
 } from "$lib/api";
 import { settings, type PingMethod } from "$lib/settings.svelte";
+import { isRemoteSource } from "$lib/subscription-json";
 
 /** Ping result for a server entry. `null` = unknown / not yet measured,
  *  `"pinging"` = probe in flight, `"timeout"` = host unreachable / timed out,
@@ -46,6 +47,10 @@ export interface Subscription {
   supportUrl: string | null;
   /** Provider website (Profile-Web-Page-Url) — shown as an info icon. */
   webPageUrl: string | null;
+  /** Original JSON returned by a JSON subscription or pasted by the user. */
+  sourceJson: string | null;
+  /** Locally edited remote JSON is not overwritten by background refreshes. */
+  jsonEdited: boolean;
   servers: ServerEntry[];
   collapsed: boolean;
   /** Pinned subscriptions sort to the top of the list. */
@@ -101,6 +106,8 @@ function migrateIds(subs: Subscription[]): { subs: Subscription[]; remapped: Rec
     }
     if (sub.description === undefined) sub.description = null;
     if (sub.webPageUrl === undefined) sub.webPageUrl = null;
+    if (sub.sourceJson === undefined) sub.sourceJson = null;
+    if (sub.jsonEdited === undefined) sub.jsonEdited = false;
     if (sub.pinned === undefined) sub.pinned = false;
     if (sub.refreshing) sub.refreshing = false;
   }
@@ -334,6 +341,8 @@ class SubsStore {
         expiresAtUnix: result.meta.expires_at_unix,
         supportUrl: result.meta.support_url,
         webPageUrl: result.meta.web_page_url,
+        sourceJson: result.source_json,
+        jsonEdited: false,
         servers,
         collapsed: false,
         pinned: false,
@@ -389,6 +398,8 @@ class SubsStore {
                 : s.expiresAtUnix,
               supportUrl: result.meta.support_url,
               webPageUrl: result.meta.web_page_url,
+              sourceJson: result.source_json,
+              jsonEdited: false,
               importedAt: new Date().toISOString(),
               refreshing: false,
             }
@@ -408,6 +419,37 @@ class SubsStore {
     }
   }
 
+  /** Validate and atomically apply edited subscription JSON. Remote sources keep
+   *  their URL so an explicit Refresh can restore the provider's version. */
+  async updateJson(subId: string, source: string): Promise<void> {
+    const sub = this.list.find((s) => s.id === subId);
+    if (!sub) throw new Error("subscription not found");
+    const trimmed = source.trim();
+    if (!trimmed) throw new Error("empty JSON");
+
+    const result = await fetchSubscription(trimmed);
+    if (!result.source_json || result.servers.length === 0) {
+      throw new Error("no servers found in the JSON");
+    }
+
+    const freshServers = result.servers.map(toServerEntry);
+    const remote = isRemoteSource(sub.url);
+    this.list = this.list.map((s) =>
+      s.id === subId
+        ? {
+            ...s,
+            url: remote ? s.url : trimmed,
+            sourceJson: result.source_json,
+            jsonEdited: remote,
+            servers: freshServers,
+            importedAt: new Date().toISOString(),
+          }
+        : s,
+    );
+    this.reconcileSelection();
+    this.prunePings();
+  }
+
   /** Start the background auto-refresh loop: each subscription is re-fetched
    *  once its server-advertised interval has elapsed since the last update
    *  (`importedAt` is bumped on every successful refresh, so it survives
@@ -425,6 +467,7 @@ class SubsStore {
   private async refreshDue(): Promise<void> {
     const now = Date.now();
     const due = this.list.filter((s) => {
+      if (s.jsonEdited) return false;
       if (!s.updateIntervalHours || s.updateIntervalHours <= 0) return false;
       if (s.refreshing) return false;
       const last = Date.parse(s.importedAt);

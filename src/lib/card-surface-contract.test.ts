@@ -41,4 +41,17 @@ describe("card surface contract", () => {
     expect(settings).toContain("appVersion = await getVersion()");
     expect(settings).toContain("Varmlen {appVersion}");
   });
+
+  it("uses native flags and separate link and JSON import modes", () => {
+    const css = read("../app.css");
+    const home = read("../routes/+page.svelte");
+
+    expect(css).toContain('@import "flag-icons/css/flag-icons.min.css";');
+    expect(home).toContain('import FlagIcon from "$lib/components/FlagIcon.svelte";');
+    expect(home).toContain('$state<"choose" | "link" | "json">');
+    expect(home).toContain('class="import-link"');
+    expect(home).toContain('class="import-json"');
+    expect(home).toContain('t("menu.json")');
+    expect(home).toContain('class="json-editor"');
+  });
 });

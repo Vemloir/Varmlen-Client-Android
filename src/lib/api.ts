@@ -41,6 +41,7 @@ export interface ImportResult {
   meta: SubscriptionMeta;
   servers: VlessServer[];
   description: string | null;
+  source_json: string | null;
 }
 
 export function parseVlessUri(uri: string): Promise<VlessServer> {
