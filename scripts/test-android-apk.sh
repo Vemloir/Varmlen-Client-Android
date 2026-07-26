@@ -65,7 +65,7 @@ require_dex_method "app.varmlen.client.TProxyService boolean TProxyIsRunning()"
 require_dex_method "app.varmlen.client.TProxyService long[] TProxyGetStats()"
 
 unzip -p "$APK" "lib/arm64-v8a/libhev-socks5-tunnel.so" >"$NATIVE_LIB"
-strings "$NATIVE_LIB" >"$NATIVE_STRINGS"
+strings -n 3 "$NATIVE_LIB" >"$NATIVE_STRINGS"
 
 require_native_string() {
   value="$1"
