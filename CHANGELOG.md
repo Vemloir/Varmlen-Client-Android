@@ -10,6 +10,8 @@
 - Added Copy, Copied, and Copy failed states to the full in-app VPN log viewer.
 - Added a release-APK gate that compares the DEX and bundled native JNI
   contracts before publication.
+- Locked VPN DNS to the single tun2socks data path; the Android `VpnService`
+  remains the only component that assigns the tunnel DNS server.
 
 ### Android VPN
 
@@ -39,6 +41,8 @@
 - Android Xray and tun2socks are now included in the release, while Linux Xray,
   setcap scripts, and desktop helper payloads are removed.
 - Added APK, manifest, native-dependency, frontend, Rust, and Kotlin gates.
+- Release signing can read the keystore password from an external file and
+  explicitly enables APK Signature Schemes v2 and v3.
 
 ### Signing migration
 
