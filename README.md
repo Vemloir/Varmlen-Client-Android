@@ -25,6 +25,10 @@ npm install
 npm run tauri android build -- --target aarch64 --apk
 ```
 
+Release signing accepts the legacy external `VARMLEN_KEYSTORE_PROPERTIES`
+file, or `VARMLEN_KEYSTORE_FILE`, `VARMLEN_KEYSTORE_PASSWORD_FILE`, and
+optionally `VARMLEN_KEY_ALIAS`. Secrets stay outside the repository.
+
 Before publishing, run:
 
 ```bash

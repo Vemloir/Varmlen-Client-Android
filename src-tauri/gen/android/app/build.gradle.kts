@@ -24,7 +24,29 @@ val releaseSigningProps = Properties().apply {
         file(path).inputStream().use { load(it) }
     }
 }
-val hasReleaseSigning = releaseSigningProps.getProperty("storeFile") != null
+fun passwordFromFile(environmentName: String): String? {
+    val path = System.getenv(environmentName) ?: return null
+    val passwordFile = file(path)
+    return if (passwordFile.isFile) {
+        passwordFile.readText().trimEnd('\r', '\n')
+    } else {
+        null
+    }
+}
+
+val releaseStoreFile =
+    releaseSigningProps.getProperty("storeFile") ?: System.getenv("VARMLEN_KEYSTORE_FILE")
+val releaseStorePassword =
+    releaseSigningProps.getProperty("storePassword")
+        ?: passwordFromFile("VARMLEN_KEYSTORE_PASSWORD_FILE")
+val releaseKeyAlias =
+    releaseSigningProps.getProperty("keyAlias")
+        ?: System.getenv("VARMLEN_KEY_ALIAS")
+        ?: "varmlen"
+val releaseKeyPassword =
+    releaseSigningProps.getProperty("keyPassword") ?: releaseStorePassword
+val hasReleaseSigning =
+    releaseStoreFile != null && releaseStorePassword != null && releaseKeyPassword != null
 
 android {
     compileSdk = 36
@@ -47,10 +69,12 @@ android {
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
-                storeFile = file(releaseSigningProps.getProperty("storeFile"))
-                storePassword = releaseSigningProps.getProperty("storePassword")
-                keyAlias = releaseSigningProps.getProperty("keyAlias")
-                keyPassword = releaseSigningProps.getProperty("keyPassword")
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
