@@ -227,10 +227,10 @@ fn build_stream_settings(s: &VlessServer) -> Value {
             }
             stream.insert("kcpSettings".into(), Value::Object(k));
         }
-        "tcp" => {
+        "tcp"
             // TCP with HTTP header obfuscation (headerType=http) needs a
             // tcpSettings.header so xray frames requests as fake HTTP.
-            if s.raw_params.get("headerType").map(String::as_str) == Some("http") {
+            if s.raw_params.get("headerType").map(String::as_str) == Some("http") => {
                 let mut req = serde_json::Map::new();
                 if let Some(host) = host_hdr {
                     req.insert("headers".into(), json!({ "Host": split_list(&host) }));
@@ -243,7 +243,6 @@ fn build_stream_settings(s: &VlessServer) -> Value {
                     json!({ "header": { "type": "http", "request": Value::Object(req) } }),
                 );
             }
-        }
         _ => {}
     }
 
@@ -388,6 +387,7 @@ fn build_inbounds(tun: TunMode) -> Vec<Value> {
 /// Mode semantics (apps and sites are INDEPENDENT):
 ///   - selective (whitelist): listed entries -> proxy.
 ///   - general   (blacklist): listed entries -> direct.
+///
 /// Default outbound:
 ///   - Android (tun2socks): the per-app split is the VpnService's job (xray's
 ///     process matcher can't match Android packages), so the xray default is
@@ -406,7 +406,11 @@ fn build_route_rules(
     let apps_out = if apps_selective { "proxy" } else { "direct" };
     let sites_out = if sites_selective { "proxy" } else { "direct" };
     let default_out = if android {
-        if sites_selective { "direct" } else { "proxy" }
+        if sites_selective {
+            "direct"
+        } else {
+            "proxy"
+        }
     } else if apps_selective && sites_selective {
         "direct"
     } else {
@@ -551,7 +555,14 @@ pub fn generate_xray_config(
     mode: String,
     allow_lan: bool,
 ) -> Result<String, String> {
-    let cfg = build_xray_config(&server, &split, &mode, TunMode::default(), allow_lan, "warning");
+    let cfg = build_xray_config(
+        &server,
+        &split,
+        &mode,
+        TunMode::default(),
+        allow_lan,
+        "warning",
+    );
     serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
 }
 
@@ -607,7 +618,10 @@ mod tests {
         .expect("parse");
         let cfg = build_xray_config(&s, &split(), "tun", TunMode::XrayNative, true, "warning");
         let out = &cfg["outbounds"][0];
-        assert_eq!(out["settings"]["vnext"][0]["users"][0]["flow"], "xtls-rprx-vision");
+        assert_eq!(
+            out["settings"]["vnext"][0]["users"][0]["flow"],
+            "xtls-rprx-vision"
+        );
         assert_eq!(out["streamSettings"]["network"], "tcp");
         assert!(out["streamSettings"].get("xhttpSettings").is_none());
     }
@@ -629,7 +643,8 @@ mod tests {
 
     #[test]
     fn splithttp_aliases_to_xhttp() {
-        let ss = stream_for("vless://u@1.2.3.4:443?type=splithttp&security=reality&pbk=K&path=%2Fx#S");
+        let ss =
+            stream_for("vless://u@1.2.3.4:443?type=splithttp&security=reality&pbk=K&path=%2Fx#S");
         assert_eq!(ss["network"], "xhttp");
         assert_eq!(ss["xhttpSettings"]["path"], "/x");
     }
@@ -657,7 +672,10 @@ mod tests {
         let ss = stream_for("vless://u@1.2.3.4:80?type=tcp&security=none&headerType=http&host=fake.com&path=%2Fobf#O");
         assert_eq!(ss["network"], "tcp");
         assert_eq!(ss["tcpSettings"]["header"]["type"], "http");
-        assert_eq!(ss["tcpSettings"]["header"]["request"]["headers"]["Host"][0], "fake.com");
+        assert_eq!(
+            ss["tcpSettings"]["header"]["request"]["headers"]["Host"][0],
+            "fake.com"
+        );
     }
 
     #[test]
@@ -681,7 +699,11 @@ mod tests {
         assert_eq!(inb["settings"]["name"], TUN_NAME);
         assert_eq!(inb["settings"]["mtu"], 1500);
         let keys: Vec<&String> = inb["settings"].as_object().unwrap().keys().collect();
-        assert_eq!(keys.len(), 2, "tun settings must be exactly {{name, mtu}}, got {keys:?}");
+        assert_eq!(
+            keys.len(),
+            2,
+            "tun settings must be exactly {{name, mtu}}, got {keys:?}"
+        );
         assert!(inb["sniffing"]["enabled"].as_bool().unwrap());
     }
 
@@ -699,10 +721,17 @@ mod tests {
 
     #[test]
     fn proxy_and_direct_outbounds_carry_dial_mark() {
-        let s = parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
+        let s =
+            parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
         let cfg = build_xray_config(&s, &split(), "tun", TunMode::XrayNative, true, "warning");
-        assert_eq!(cfg["outbounds"][0]["streamSettings"]["sockopt"]["mark"], XRAY_DIAL_MARK);
-        assert_eq!(cfg["outbounds"][1]["streamSettings"]["sockopt"]["mark"], XRAY_DIAL_MARK);
+        assert_eq!(
+            cfg["outbounds"][0]["streamSettings"]["sockopt"]["mark"],
+            XRAY_DIAL_MARK
+        );
+        assert_eq!(
+            cfg["outbounds"][1]["streamSettings"]["sockopt"]["mark"],
+            XRAY_DIAL_MARK
+        );
         assert_eq!(cfg["outbounds"][1]["protocol"], "freedom");
     }
 
@@ -710,7 +739,8 @@ mod tests {
     fn dns_routes_through_proxy_no_leak() {
         // Anti-leak: resolver is DoH (not a plaintext/localhost server), :53 is
         // hijacked into the DNS module, and the DoH upstream is forced to proxy.
-        let s = parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
+        let s =
+            parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
         let cfg = build_xray_config(&s, &split(), "tun", TunMode::XrayNative, true, "warning");
         assert_eq!(cfg["dns"]["servers"][0], "https://1.1.1.1/dns-query");
         let serialized = serde_json::to_string(&cfg).unwrap();
@@ -719,8 +749,16 @@ mod tests {
         assert_eq!(dns_hijack["port"], 53);
         assert_eq!(dns_hijack["outboundTag"], "dns-out");
         // DoH upstream pinned to proxy.
-        let doh_rule = cfg["routing"]["rules"].as_array().unwrap().iter()
-            .find(|r| r.get("ip").and_then(|v| v.as_array()).map(|a| a[0] == "1.1.1.1").unwrap_or(false))
+        let doh_rule = cfg["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| {
+                r.get("ip")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a[0] == "1.1.1.1")
+                    .unwrap_or(false)
+            })
             .unwrap();
         assert_eq!(doh_rule["outboundTag"], "proxy");
     }
@@ -733,12 +771,14 @@ mod tests {
             sites_mode: "general".into(),
             apps: vec!["thunderbird".into()],
             sites: vec!["*.ru".into(), "example.com".into()],
-            ..Default::default()
         };
         let cfg = build_xray_config(&s, &sp, "tun", TunMode::XrayNative, true, "warning");
         let rules = cfg["routing"]["rules"].as_array().unwrap();
         // Every rule must carry type:field for cross-version safety.
-        assert!(rules.iter().all(|r| r["type"] == "field"), "all rules need type:field");
+        assert!(
+            rules.iter().all(|r| r["type"] == "field"),
+            "all rules need type:field"
+        );
         assert_eq!(rules.last().unwrap()["outboundTag"], "proxy"); // default
         let proc_rule = rule_for(&cfg, "process").unwrap();
         assert_eq!(proc_rule["process"][0], "thunderbird");
@@ -760,10 +800,12 @@ mod tests {
             sites_mode: "selective".into(),
             apps: vec!["firefox".into()],
             sites: vec!["example.com".into()],
-            ..Default::default()
         };
         let cfg = build_xray_config(&s, &sp, "tun", TunMode::XrayNative, true, "warning");
-        assert_eq!(cfg["routing"]["rules"].as_array().unwrap().last().unwrap()["outboundTag"], "direct");
+        assert_eq!(
+            cfg["routing"]["rules"].as_array().unwrap().last().unwrap()["outboundTag"],
+            "direct"
+        );
         let proc_rule = rule_for(&cfg, "process").unwrap();
         assert_eq!(proc_rule["process"][0], "firefox");
         assert_eq!(proc_rule["outboundTag"], "proxy"); // whitelisted app tunnels
@@ -773,9 +815,17 @@ mod tests {
     #[test]
     fn selective_sites_only_default_direct() {
         let s = parse_proxy_uri("vless://u@1.2.3.4:443?security=reality&pbk=K#X").unwrap();
-        let sp = SplitInput { apps_mode: "selective".into(), sites_mode: "selective".into(), sites: vec!["example.com".into()], ..Default::default() };
+        let sp = SplitInput {
+            apps_mode: "selective".into(),
+            sites_mode: "selective".into(),
+            sites: vec!["example.com".into()],
+            ..Default::default()
+        };
         let cfg = build_xray_config(&s, &sp, "tun", TunMode::XrayNative, true, "warning");
-        assert_eq!(cfg["routing"]["rules"].as_array().unwrap().last().unwrap()["outboundTag"], "direct");
+        assert_eq!(
+            cfg["routing"]["rules"].as_array().unwrap().last().unwrap()["outboundTag"],
+            "direct"
+        );
         assert_eq!(rule_for(&cfg, "domain").unwrap()["outboundTag"], "proxy");
         assert!(rule_for(&cfg, "process").is_none()); // no apps -> no process rule
     }
@@ -812,20 +862,34 @@ mod tests {
         // An excluded app's own traffic to 1.1.1.1 must hit its process rule
         // before the DoH pin (ip:1.1.1.1 -> proxy), so the exclusion is honoured.
         let s = parse_proxy_uri("vless://u@1.2.3.4:443?security=reality&pbk=K#X").unwrap();
-        let sp = SplitInput { apps_mode: "general".into(), sites_mode: "general".into(), apps: vec!["firefox".into()], ..Default::default() };
+        let sp = SplitInput {
+            apps_mode: "general".into(),
+            sites_mode: "general".into(),
+            apps: vec!["firefox".into()],
+            ..Default::default()
+        };
         let cfg = build_xray_config(&s, &sp, "tun", TunMode::XrayNative, true, "warning");
         let rules = cfg["routing"]["rules"].as_array().unwrap();
-        let proc_idx = rules.iter().position(|r| r.get("process").is_some()).unwrap();
+        let proc_idx = rules
+            .iter()
+            .position(|r| r.get("process").is_some())
+            .unwrap();
         let doh_idx = rules
             .iter()
-            .position(|r| r.get("ip").and_then(|v| v.as_array()).map(|a| a.iter().any(|x| x == "1.1.1.1")).unwrap_or(false))
+            .position(|r| {
+                r.get("ip")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().any(|x| x == "1.1.1.1"))
+                    .unwrap_or(false)
+            })
             .unwrap();
         assert!(proc_idx < doh_idx, "process rule must precede the DoH pin");
     }
 
     #[test]
     fn trojan_outbound_shape() {
-        let s = parse_proxy_uri("trojan://secretpass@1.2.3.4:443?security=tls&sni=a.com#T").unwrap();
+        let s =
+            parse_proxy_uri("trojan://secretpass@1.2.3.4:443?security=tls&sni=a.com#T").unwrap();
         let cfg = build_xray_config(&s, &split(), "tun", TunMode::XrayNative, true, "warning");
         let out = &cfg["outbounds"][0];
         assert_eq!(out["protocol"], "trojan");
@@ -863,9 +927,14 @@ mod tests {
 
     #[test]
     fn proxy_mode_is_socks_only_no_tun() {
-        let s = parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
+        let s =
+            parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
         let cfg = build_xray_config(&s, &split(), "proxy", TunMode::XrayNative, true, "warning");
         assert_eq!(cfg["inbounds"][0]["protocol"], "socks");
-        assert!(cfg["inbounds"].as_array().unwrap().iter().all(|i| i["protocol"] != "tun"));
+        assert!(cfg["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["protocol"] != "tun"));
     }
 }

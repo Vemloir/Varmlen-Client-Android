@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.VpnService
@@ -12,6 +13,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.service.quicksettings.TileService
+import androidx.core.content.ContextCompat
 import java.io.File
 
 /**
@@ -55,6 +58,8 @@ class VarmlenVpnService : VpnService() {
         const val EXTRA_APPS = "apps"
         const val EXTRA_APPS_ALLOW = "appsAllow"
         const val EXTRA_LOG_LEVEL = "logLevel"
+        const val EXTRA_REQUEST_ID = "requestId"
+        const val EXTRA_ERROR = "error"
         const val LOG_FILE = "varmlen.log"
         private const val CHANNEL = "varmlen_vpn"
         private const val NOTIF_ID = 1
@@ -108,13 +113,11 @@ class VarmlenVpnService : VpnService() {
             i.putExtra(EXTRA_APPS, (p.getStringSet("apps", emptySet()) ?: emptySet()).toTypedArray())
             i.putExtra(EXTRA_APPS_ALLOW, p.getBoolean("appsAllow", false))
             i.putExtra(EXTRA_LOG_LEVEL, p.getString("logLevel", "warn"))
-            ctx.startService(i)
+            ContextCompat.startForegroundService(ctx, i)
         }
 
         fun stop(ctx: Context) {
-            ctx.startService(
-                Intent(ctx, VarmlenVpnService::class.java).setAction(ACTION_DISCONNECT)
-            )
+            ctx.stopService(Intent(ctx, VarmlenVpnService::class.java))
         }
     }
 
@@ -137,6 +140,7 @@ class VarmlenVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             ACTION_CONNECT -> {
+                val requestId = intent.getStringExtra(EXTRA_REQUEST_ID)
                 try {
                     startAll(
                         intent.getStringExtra(EXTRA_CONFIG) ?: error("no config"),
@@ -144,11 +148,12 @@ class VarmlenVpnService : VpnService() {
                         intent.getStringExtra(EXTRA_DNS) ?: "1.1.1.1",
                         intent.getStringArrayExtra(EXTRA_APPS) ?: emptyArray(),
                         intent.getBooleanExtra(EXTRA_APPS_ALLOW, false),
-                        intent.getStringExtra(EXTRA_LOG_LEVEL) ?: "warn"
+                        intent.getStringExtra(EXTRA_LOG_LEVEL) ?: "warn",
+                        requestId
                     )
                 } catch (e: Throwable) {
                     log("connect failed", e)
-                    stopAll()
+                    stopAll(e.message ?: e.javaClass.simpleName, requestId)
                 }
             }
             else -> {
@@ -176,29 +181,23 @@ class VarmlenVpnService : VpnService() {
 
     private fun startAll(
         config: String, socksPort: Int, dns: String,
-        apps: Array<String>, appsAllow: Boolean, logLevel: String
+        apps: Array<String>, appsAllow: Boolean, logLevel: String,
+        requestId: String?
     ) {
         log("startAll socksPort=$socksPort dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel")
-        // Remember the connect params so the Quick Settings tile can re-launch
-        // the VPN without the app being open.
-        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString("config", config)
-            .putInt("socksPort", socksPort)
-            .putString("dns", dns)
-            .putStringSet("apps", apps.toSet())
-            .putBoolean("appsAllow", appsAllow)
-            .putString("logLevel", logLevel)
-            .apply()
+        val xrayBin = File(applicationInfo.nativeLibraryDir, "libxray.so")
+        require(xrayBin.isFile && xrayBin.canExecute()) {
+            "Bundled Xray executable is missing"
+        }
+        startForegroundOrThrow()
         // Tear down any previous instance first — a reconnect (e.g. after a split
         // change) must not stack a second xray on the same port or clobber hev's
         // single work thread.
         teardown()
-        startForegroundSafe()
         stopping = false
 
         // 1) xray as a local SOCKS proxy (the generated config binds 127.0.0.1:socksPort).
         val cfgFile = File(filesDir, "xray.json").apply { writeText(config) }
-        val xrayBin = File(applicationInfo.nativeLibraryDir, "libxray.so")
         log("exec xray: ${xrayBin.absolutePath} (exists=${xrayBin.exists()})")
         val proc = ProcessBuilder(xrayBin.absolutePath, "run", "-c", cfgFile.absolutePath)
             .directory(filesDir)
@@ -225,13 +224,26 @@ class VarmlenVpnService : VpnService() {
             .addAddress(TUN_ADDR, 30)
             .addRoute("0.0.0.0", 0)
             .addDnsServer(dns)
-        for (pkg in apps) {
+        val appPolicy = vpnAppPolicy(apps, appsAllow, packageName)
+        var installedAllowedApps = 0
+        for (pkg in appPolicy.allowed) {
             try {
-                if (appsAllow) builder.addAllowedApplication(pkg)
-                else builder.addDisallowedApplication(pkg)
-            } catch (_: Exception) { /* app not installed */ }
+                builder.addAllowedApplication(pkg)
+                installedAllowedApps += 1
+            } catch (_: Exception) {
+                log("selected allowlist app is no longer installed: $pkg")
+            }
         }
-        try { builder.addDisallowedApplication(packageName) } catch (_: Exception) {}
+        if (appPolicy.allowed.isNotEmpty() && installedAllowedApps == 0) {
+            error("None of the selected allowlist applications are installed")
+        }
+        for (pkg in appPolicy.disallowed) {
+            try {
+                builder.addDisallowedApplication(pkg)
+            } catch (_: Exception) {
+                log("selected denylist app is no longer installed: $pkg")
+            }
+        }
         val fd = builder.establish() ?: error("establish() returned null")
         tun = fd
         log("tun established fd=${fd.fd}")
@@ -255,8 +267,18 @@ class VarmlenVpnService : VpnService() {
         log("tun2socks starting (native)")
         TProxyService.TProxyStartService(hevFile.absolutePath, fd.fd)
 
+        // Save only a configuration that reached the connected state. A failed
+        // attempt must not poison later starts from the Quick Settings tile.
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("config", config)
+            .putInt("socksPort", socksPort)
+            .putString("dns", dns)
+            .putStringSet("apps", apps.toSet())
+            .putBoolean("appsAllow", appsAllow)
+            .putString("logLevel", logLevel)
+            .apply()
         setWant(this, true)
-        broadcastState(true)
+        broadcastState(true, requestId = requestId)
         // Start the per-second speed + uptime notification updates.
         connectedAt = System.currentTimeMillis()
         lastTx = 0L; lastRx = 0L; lastStatsAt = 0L
@@ -265,10 +287,21 @@ class VarmlenVpnService : VpnService() {
         log("connected")
     }
 
-    private fun broadcastState(running: Boolean) {
+    private fun broadcastState(
+        running: Boolean,
+        error: String? = null,
+        requestId: String? = null
+    ) {
         try {
-            sendBroadcast(
-                Intent(ACTION_STATE).setPackage(packageName).putExtra(EXTRA_RUNNING, running)
+            val intent = Intent(ACTION_STATE)
+                .setPackage(packageName)
+                .putExtra(EXTRA_RUNNING, running)
+            if (error != null) intent.putExtra(EXTRA_ERROR, error)
+            if (requestId != null) intent.putExtra(EXTRA_REQUEST_ID, requestId)
+            sendBroadcast(intent)
+            TileService.requestListeningState(
+                this,
+                ComponentName(this, VarmlenTileService::class.java)
             )
         } catch (_: Throwable) {}
     }
@@ -284,9 +317,9 @@ class VarmlenVpnService : VpnService() {
         tun = null
     }
 
-    private fun stopAll() {
+    private fun stopAll(error: String? = null, requestId: String? = null) {
         setWant(this, false)
-        broadcastState(false)
+        broadcastState(false, error, requestId)
         teardown()
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
         stopSelf()
@@ -304,26 +337,21 @@ class VarmlenVpnService : VpnService() {
         super.onDestroy()
     }
 
-    /** Best-effort foreground; never throws (the VPN works either way). */
-    private fun startForegroundSafe() {
-        try {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                // LOW: visible (so the user sees the live speed + uptime) but no
-                // sound. If POST_NOTIFICATIONS isn't granted the system hides it
-                // while the service still stays foreground.
-                nm.createNotificationChannel(
-                    NotificationChannel(CHANNEL, "VPN", NotificationManager.IMPORTANCE_LOW)
-                )
-            }
-            val notif = buildNotif("Connecting…")
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else {
-                startForeground(NOTIF_ID, notif)
-            }
-        } catch (e: Throwable) {
-            log("startForeground failed (continuing)", e)
+    /** Foreground startup is mandatory. Continuing after this fails produces a
+     *  VPN that Android is allowed to kill seconds later while the UI says it
+     *  is connected, so failures propagate to the pending connect request. */
+    private fun startForegroundOrThrow() {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL, "VPN", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+        val notif = buildNotif("Connecting…")
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIF_ID, notif)
         }
     }
 
@@ -337,7 +365,13 @@ class VarmlenVpnService : VpnService() {
             Intent(this, VarmlenVpnService::class.java).setAction(ACTION_DISCONNECT),
             PendingIntent.FLAG_IMMUTABLE
         )
-        return Notification.Builder(this, CHANNEL)
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, CHANNEL)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(this)
+        }
+        return builder
             .setContentTitle("Varmlen")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_tile)

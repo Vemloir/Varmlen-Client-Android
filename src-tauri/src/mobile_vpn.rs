@@ -189,6 +189,15 @@ pub fn open_notification_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
+/// Open Android's VPN settings where Always-on and lockdown are configured.
+pub fn open_vpn_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>("openVpnSettings", ())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 pub fn disconnect<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let vpn = app.state::<Vpn<R>>();
     vpn.0

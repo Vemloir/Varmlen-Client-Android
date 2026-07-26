@@ -3,7 +3,7 @@
   import { settings, type VpnMode, type PingMethod, type LogLevel } from "$lib/settings.svelte";
   import { i18n, t, LANGUAGES, type Lang } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
-  import { capsGranted, grantCaps, autostartStatus, setAutostart, vpnLog, clearVpnLog, notificationsEnabled, openNotificationSettings } from "$lib/api";
+  import { capsGranted, grantCaps, autostartStatus, setAutostart, vpnLog, clearVpnLog, notificationsEnabled, openNotificationSettings, openVpnSettings } from "$lib/api";
   import Dropdown from "$lib/components/Dropdown.svelte";
   import { onMount, tick } from "svelte";
   import { isAndroid } from "$lib/platform";
@@ -326,6 +326,17 @@
           ariaLabel={t("settings.language")}
         />
       </div>
+      {#if isAndroid}
+      <button type="button" class="row log-row" onclick={() => openVpnSettings()}>
+        <div class="row-text">
+          <div class="row-title">{t("settings.androidKillswitch")}</div>
+          <div class="row-sub muted">{t("settings.androidKillswitchSub")}</div>
+        </div>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+      {:else}
       <label class="row">
         <div class="row-text">
           <div class="row-title">{t("settings.killswitch")}</div>
@@ -340,6 +351,7 @@
           <span class="slider"></span>
         </span>
       </label>
+      {/if}
       <label class="row">
         <div class="row-text">
           <div class="row-title">{t("settings.allowLan")}</div>

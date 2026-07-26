@@ -1,6 +1,6 @@
 [package]
 name = "varmlen"
-version = "0.1.2"
+version = "0.2.0"
 description = "Varmlen — open-source xray-core client with per-app and per-domain split tunneling"
 authors = ["Varmlen contributors"]
 license = "MIT"
@@ -50,4 +50,3 @@ tauri-plugin-single-instance = "2"
 # File picker via the XDG desktop portal — shows the user's own DE file manager
 # dialog (with proper search). Cross-desktop, not GNOME-specific.
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
-

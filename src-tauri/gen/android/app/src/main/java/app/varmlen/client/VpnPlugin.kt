@@ -13,9 +13,12 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import java.io.ByteArrayOutputStream
 import androidx.activity.result.ActivityResult
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
@@ -25,6 +28,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import java.util.UUID
 
 @InvokeArg
 class BarStyleArgs {
@@ -47,15 +51,26 @@ class ConnectArgs {
 @TauriPlugin
 class VpnPlugin(private val activity: Activity) : Plugin(activity) {
     private var pendingArgs: ConnectArgs? = null
+    private data class PendingConnect(val id: String, val invoke: Invoke)
+    private var pendingConnect: PendingConnect? = null
+    private val connectTimeouts = Handler(Looper.getMainLooper())
 
     // Bridges the VpnService's (other-process) state broadcast to a JS event, so
     // the UI updates instantly on a notification/tile/system disconnect.
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
             val running = i?.getBooleanExtra(VarmlenVpnService.EXTRA_RUNNING, false) ?: false
+            val requestId = i?.getStringExtra(VarmlenVpnService.EXTRA_REQUEST_ID)
+            val error = i?.getStringExtra(VarmlenVpnService.EXTRA_ERROR)
             val data = JSObject()
             data.put("running", running)
             trigger("vpnState", data)
+            val pending = pendingConnect
+            if (requestId != null && pending?.id == requestId) {
+                pendingConnect = null
+                if (running) pending.invoke.resolve()
+                else pending.invoke.reject(error ?: "VPN service failed to start")
+            }
         }
     }
 
@@ -82,8 +97,7 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
             startActivityForResult(invoke, consent, "onConsent")
             return
         }
-        startVpn(args)
-        invoke.resolve()
+        beginConnect(invoke, args)
     }
 
     @ActivityCallback
@@ -91,8 +105,7 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         val args = pendingArgs
         pendingArgs = null
         if (result.resultCode == Activity.RESULT_OK && args != null) {
-            startVpn(args)
-            invoke.resolve()
+            beginConnect(invoke, args)
         } else {
             invoke.reject("VPN permission denied")
         }
@@ -100,9 +113,7 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun disconnect(invoke: Invoke) {
-        val intent = Intent(activity, VarmlenVpnService::class.java)
-        intent.action = VarmlenVpnService.ACTION_DISCONNECT
-        activity.startService(intent)
+        VarmlenVpnService.stop(activity)
         invoke.resolve()
     }
 
@@ -183,6 +194,19 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve()
     }
 
+    @Command
+    fun openVpnSettings(invoke: Invoke) {
+        try {
+            activity.startActivity(
+                Intent(android.provider.Settings.ACTION_VPN_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            invoke.resolve()
+        } catch (error: Throwable) {
+            invoke.reject(error.message ?: "Could not open Android VPN settings")
+        }
+    }
+
     /** Paths the Rust side needs to run xray for a proxy ping: the bundled
      *  binary (in nativeLibraryDir) and a writable config dir (filesDir). */
     @Command
@@ -244,7 +268,27 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         return "data:image/webp;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
-    private fun startVpn(args: ConnectArgs) {
+    private fun beginConnect(invoke: Invoke, args: ConnectArgs) {
+        pendingConnect?.invoke?.reject("Superseded by a newer VPN connection request")
+        val requestId = UUID.randomUUID().toString()
+        pendingConnect = PendingConnect(requestId, invoke)
+        try {
+            startVpn(args, requestId)
+        } catch (error: Throwable) {
+            pendingConnect = null
+            invoke.reject(error.message ?: "Could not start VPN service")
+            return
+        }
+        connectTimeouts.postDelayed({
+            val pending = pendingConnect
+            if (pending?.id == requestId) {
+                pendingConnect = null
+                pending.invoke.reject("VPN service did not confirm startup within 15 seconds")
+            }
+        }, 15_000)
+    }
+
+    private fun startVpn(args: ConnectArgs, requestId: String) {
         val intent = Intent(activity, VarmlenVpnService::class.java)
         intent.action = VarmlenVpnService.ACTION_CONNECT
         intent.putExtra(VarmlenVpnService.EXTRA_CONFIG, args.config)
@@ -253,9 +297,7 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         intent.putExtra(VarmlenVpnService.EXTRA_APPS, args.apps)
         intent.putExtra(VarmlenVpnService.EXTRA_APPS_ALLOW, args.appsAllow)
         intent.putExtra(VarmlenVpnService.EXTRA_LOG_LEVEL, args.logLevel)
-        // startService (not startForegroundService): we're invoked from the
-        // foreground activity, so this is allowed and avoids the strict
-        // "must call startForeground within 5s" crash on Android 14+.
-        activity.startService(intent)
+        intent.putExtra(VarmlenVpnService.EXTRA_REQUEST_ID, requestId)
+        ContextCompat.startForegroundService(activity, intent)
     }
 }

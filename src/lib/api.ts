@@ -216,6 +216,11 @@ export function openNotificationSettings(): Promise<void> {
   return invoke<void>("open_notification_settings");
 }
 
+/** Open Android's Always-on VPN / lockdown settings. */
+export function openVpnSettings(): Promise<void> {
+  return invoke<void>("open_vpn_settings");
+}
+
 export function clearVpnLog(): Promise<void> {
   return invoke<void>("clear_vpn_log");
 }

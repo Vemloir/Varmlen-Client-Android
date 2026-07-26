@@ -1,12 +1,13 @@
 {
   "name": "varmlen",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Varmlen — open-source xray-core client with per-app and per-domain split tunneling.",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
+    "test": "vitest run",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri"
@@ -26,9 +27,13 @@
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "~5.6.2",
-    "vite": "^6.0.3"
+    "vite": "^6.0.3",
+    "vitest": "^3.2.7"
   },
   "allowScripts": {
     "esbuild@0.25.12": true
+  },
+  "overrides": {
+    "cookie": "0.7.2"
   }
 }

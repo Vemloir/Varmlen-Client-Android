@@ -8,6 +8,8 @@
 set -euo pipefail
 
 XRAY_VER="26.6.27"
+XRAY_SHA256="9621d72c2f706f47d7bc3c79b5326c12aa29d29013beada1c60df84ff8fe3a0f"
+HEV_COMMIT="180cda8b304b71b9d9ef8ea93aeb0e4e00e15f7d"
 ABI="arm64-v8a"
 # hev-socks5-tunnel ships an Android JNI in src/hev-jni.c that registers
 # TProxyStartService/TProxyStopService onto <PKGNAME>/TProxyService. Build with
@@ -25,6 +27,7 @@ if [ ! -f "$JNI/libxray.so" ]; then
   TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
   curl -fsSL -o "$TMP/x.zip" \
     "https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VER}/Xray-android-arm64-v8a.zip"
+  echo "$XRAY_SHA256  $TMP/x.zip" | sha256sum -c -
   unzip -o -q "$TMP/x.zip" xray -d "$TMP"
   install -m 0755 "$TMP/xray" "$JNI/libxray.so"
 fi
@@ -34,8 +37,10 @@ if [ ! -f "$JNI/libhev-socks5-tunnel.so" ]; then
   [ -n "$NDK" ] || { echo "set ANDROID_NDK_HOME or NDK_HOME"; exit 1; }
   echo "building hev-socks5-tunnel (tun2socks, JNI PKGNAME=$PKGNAME)…"
   T2S="$(mktemp -d)"
-  git clone --recursive --depth 1 https://github.com/heiher/hev-socks5-tunnel \
+  git clone --filter=blob:none --no-checkout https://github.com/heiher/hev-socks5-tunnel \
     "$T2S/hev-socks5-tunnel"
+  git -C "$T2S/hev-socks5-tunnel" checkout --detach "$HEV_COMMIT"
+  git -C "$T2S/hev-socks5-tunnel" submodule update --init --recursive --depth 1
   mkdir -p "$T2S/jni"
   ln -s "$T2S/hev-socks5-tunnel" "$T2S/jni/hev-socks5-tunnel"
   echo 'include $(call all-subdir-makefiles)' > "$T2S/jni/Android.mk"

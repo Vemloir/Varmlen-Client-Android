@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Varmlen",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "identifier": "app.varmlen.client",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build && cargo build --release --manifest-path helper/Cargo.toml && bash scripts/fetch-xray.sh",
+    "beforeBuildCommand": "npm run build && bash scripts/android-native.sh",
     "frontendDist": "../build"
   },
   "app": {
@@ -33,12 +33,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "resources": {
-      "../helper/target/release/varmlen-probe": "varmlen-probe",
-      "../helper/varmlen-setcap.sh": "varmlen-setcap.sh",
-      "../helper/uninstall.sh": "uninstall.sh",
-      "cores/xray": "xray"
-    }
+    ]
   }
 }

@@ -31,7 +31,7 @@ class VarmlenTileService : TileService() {
             return
         }
         VarmlenVpnService.start(this)
-        setTile(true)
+        setTileUnavailable()
     }
 
     private fun openApp() {
@@ -49,6 +49,12 @@ class VarmlenTileService : TileService() {
     private fun setTile(active: Boolean) {
         val t = qsTile ?: return
         t.state = if (active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        t.updateTile()
+    }
+
+    private fun setTileUnavailable() {
+        val t = qsTile ?: return
+        t.state = Tile.STATE_UNAVAILABLE
         t.updateTile()
     }
 }

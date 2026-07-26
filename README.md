@@ -22,10 +22,25 @@ A VpnService builds the tun interface; hev-socks5-tunnel (tun2socks) bridges it 
 source ~/varmlen-android-env.sh          # JDK 17, Android SDK and NDK, rust android targets
 bash scripts/android-native.sh           # fetch xray-android and build tun2socks into jniLibs
 npm install
-npm run tauri android build -- --debug --target aarch64 --apk
+npm run tauri android build -- --target aarch64 --apk --aab
 ```
 
-The APK lands in `src-tauri/gen/android/app/build/outputs/apk/universal/debug/`.
+Before publishing, run:
+
+```bash
+npm test
+npm run check
+npm audit --audit-level=low
+cargo test --manifest-path src-tauri/Cargo.toml --locked
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+scripts/test-android-manifest.sh
+scripts/test-android-vpn-contract.sh
+scripts/test-android-native-script.sh
+scripts/test-android-apk.sh <signed-apk>
+```
+
+Version 0.2.0 is arm64-only. Because the 0.1.2 signing key was lost, back up
+subscriptions and uninstall 0.1.2 before installing 0.2.0.
 
 ## License
 

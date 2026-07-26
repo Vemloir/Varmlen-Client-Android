@@ -137,7 +137,7 @@ fn autostart_path() -> Option<PathBuf> {
 pub fn autostart_status() -> AutostartStatus {
     #[cfg(desktop)]
     {
-        return match autostart_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+        match autostart_path().and_then(|p| std::fs::read_to_string(p).ok()) {
             Some(c) => AutostartStatus {
                 enabled: true,
                 minimized: c.contains("--minimized"),
@@ -146,7 +146,7 @@ pub fn autostart_status() -> AutostartStatus {
                 enabled: false,
                 minimized: false,
             },
-        };
+        }
     }
     #[cfg(not(desktop))]
     AutostartStatus {

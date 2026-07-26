@@ -46,13 +46,19 @@ fn dump_storage(path: &PathBuf) -> Result<HashMap<String, String>, String> {
 /// an empty map if no legacy files exist — that's a normal first install.
 #[tauri::command]
 pub fn read_legacy_storage(app: tauri::AppHandle) -> Result<HashMap<String, String>, String> {
-    let data_dir = app.path().app_data_dir().map_err(|e| format!("app_data_dir: {e}"))?;
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
     let ls_dir = data_dir.join("localstorage");
-    let mut paths: Vec<PathBuf> = ["http_127.0.0.1_1420.localstorage", "http_localhost_1420.localstorage"]
-        .iter()
-        .map(|n| ls_dir.join(n))
-        .filter(|p| p.exists())
-        .collect();
+    let mut paths: Vec<PathBuf> = [
+        "http_127.0.0.1_1420.localstorage",
+        "http_localhost_1420.localstorage",
+    ]
+    .iter()
+    .map(|n| ls_dir.join(n))
+    .filter(|p| p.exists())
+    .collect();
     // Read oldest first so the newest file's values overwrite via insert.
     paths.sort_by_key(|p| p.metadata().and_then(|m| m.modified()).ok());
     let mut merged = HashMap::new();

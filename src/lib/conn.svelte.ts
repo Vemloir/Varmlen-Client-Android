@@ -4,6 +4,7 @@ import { split } from "$lib/split.svelte";
 import { settings } from "$lib/settings.svelte";
 import { t } from "$lib/i18n.svelte";
 import { listen } from "@tauri-apps/api/event";
+import { ConnectionOperationGate } from "$lib/connection-operation";
 
 // "dropped": the tunnel died unexpectedly and the kill switch is holding traffic
 // blocked (fail-closed). Distinct from "disconnected" so the UI can say so.
@@ -30,7 +31,7 @@ class ConnStore {
   /** True while in the "dropped" phase WITH the kill switch holding traffic. */
   blockedByKillswitch = $state(false);
 
-  private reapplyTimer: ReturnType<typeof setTimeout> | null = null;
+  private operations = new ConnectionOperationGate();
   private dropListenerStarted = false;
 
   /** Subscribe to backend "vpn-dropped" events (tunnel died unexpectedly). The
@@ -39,6 +40,7 @@ class ConnStore {
     if (this.dropListenerStarted) return;
     this.dropListenerStarted = true;
     void listen<boolean>("vpn-dropped", (e) => {
+      this.operations.cancel();
       if (e.payload) {
         this.status = "dropped";
         this.blockedByKillswitch = true;
@@ -85,8 +87,7 @@ class ConnStore {
     if (sig === this.lastSig) return;
     this.lastSig = sig;
     if (this.status !== "connected" && this.status !== "connecting") return;
-    if (this.reapplyTimer) clearTimeout(this.reapplyTimer);
-    this.reapplyTimer = setTimeout(() => void this.connect(), 500);
+    this.operations.schedule(() => void this.connect(), 500);
   }
 
   async toggle(): Promise<void> {
@@ -106,6 +107,7 @@ class ConnStore {
   }
 
   async connect(): Promise<void> {
+    const generation = this.operations.begin();
     this.error = null;
     this.blockedByKillswitch = false;
     const server = subs.selectedServerRaw();
@@ -132,43 +134,54 @@ class ConnStore {
       );
       const remain = MIN_CONNECTING_MS - (Date.now() - startedAt);
       if (remain > 0) await new Promise((r) => setTimeout(r, remain));
+      if (!this.operations.isCurrent(generation)) return;
       if (!resp.ok) throw new Error(resp.error || "connection failed");
-      this.status = "connected";
-      this.lastConnectedAt = Date.now();
+      this.applyBackendState(resp.state);
     } catch (e) {
       const remain = MIN_CONNECTING_MS - (Date.now() - startedAt);
       if (remain > 0) await new Promise((r) => setTimeout(r, remain));
+      if (!this.operations.isCurrent(generation)) return;
       this.error = msg(e);
-      this.status = "disconnected";
+      try {
+        const status = await vpnStatus();
+        if (!this.operations.isCurrent(generation)) return;
+        this.applyBackendState(status.state);
+      } catch {
+        this.status = "disconnected";
+      }
     }
   }
 
   async disconnect(): Promise<void> {
+    const generation = this.operations.cancel();
     try {
-      await vpnDisconnect();
-    } catch {
-      // best effort — drop to disconnected regardless
+      const response = await vpnDisconnect();
+      if (!this.operations.isCurrent(generation)) return;
+      this.applyBackendState(response.state);
+      this.error = null;
+    } catch (e) {
+      if (!this.operations.isCurrent(generation)) return;
+      this.error = msg(e);
+      try {
+        const status = await vpnStatus();
+        if (!this.operations.isCurrent(generation)) return;
+        this.applyBackendState(status.state);
+      } catch {
+        this.status = "dropped";
+        this.blockedByKillswitch = true;
+      }
     }
-    this.status = "disconnected";
-    this.blockedByKillswitch = false;
-    this.error = null;
   }
 
   /** Reconcile UI with the helper's actual state (e.g. window recreated while
    *  still connected, or core crashed/dropped while the window was away). */
   async refresh(): Promise<void> {
     this.startDropListener();
+    const generation = this.operations.snapshot();
     try {
       const resp = await vpnStatus();
-      if (resp.state === "connected") {
-        this.status = "connected";
-        this.lastConnectedAt = Date.now();
-        this.blockedByKillswitch = false;
-      } else if (resp.state === "dropped") {
-        this.status = "dropped";
-        this.blockedByKillswitch = true;
-        this.error = t("conn.dropped");
-      } else if (
+      if (!this.operations.isCurrent(generation)) return;
+      if (
         resp.state === "disconnected" &&
         (this.status === "connected" || this.status === "dropped") &&
         Date.now() - this.lastConnectedAt > this.CONNECT_GRACE_MS
@@ -176,6 +189,8 @@ class ConnStore {
         // Don't trust a single "not running" poll right after connecting.
         this.status = "disconnected";
         this.blockedByKillswitch = false;
+      } else if (resp.state !== "disconnected") {
+        this.applyBackendState(resp.state);
       }
     } catch {
       // helper unreachable — leave UI as is
@@ -198,6 +213,23 @@ class ConnStore {
       this.status = "disconnected";
       this.blockedByKillswitch = false;
     }
+  }
+
+  private applyBackendState(state: string): void {
+    if (state === "connected") {
+      this.status = "connected";
+      this.lastConnectedAt = Date.now();
+      this.blockedByKillswitch = false;
+      return;
+    }
+    if (state === "dropped") {
+      this.status = "dropped";
+      this.blockedByKillswitch = true;
+      this.error ||= t("conn.dropped");
+      return;
+    }
+    this.status = "disconnected";
+    this.blockedByKillswitch = false;
   }
 }
 

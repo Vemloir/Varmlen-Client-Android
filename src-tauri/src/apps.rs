@@ -80,8 +80,21 @@ fn binary_from_exec(exec: &str) -> Option<String> {
 /// Launchers that front many different apps — their binary name is useless as
 /// an identifier because every entry would collapse to the same value.
 const LAUNCHERS: &[&str] = &[
-    "steam", "flatpak", "snap", "wine", "lutris", "gamescope", "heroic",
-    "env", "sh", "bash", "python", "python3", "java", "mono", "dotnet",
+    "steam",
+    "flatpak",
+    "snap",
+    "wine",
+    "lutris",
+    "gamescope",
+    "heroic",
+    "env",
+    "sh",
+    "bash",
+    "python",
+    "python3",
+    "java",
+    "mono",
+    "dotnet",
 ];
 
 /// A stable, unique identifier for an app — ideally the real process name that
@@ -95,9 +108,10 @@ fn derive_app_id(exec: &str, desktop_stem: &str) -> String {
         return bin;
     }
     if bin == "flatpak" {
-        if let Some(appid) = exec.split_whitespace().find(|t| {
-            !t.starts_with('-') && !t.starts_with('%') && t.matches('.').count() >= 2
-        }) {
+        if let Some(appid) = exec
+            .split_whitespace()
+            .find(|t| !t.starts_with('-') && !t.starts_with('%') && t.matches('.').count() >= 2)
+        {
             // The real process (e.g. "zen") — what xray's process matcher
             // matches — not the reverse-DNS app id.
             return flatpak_process_name(appid).unwrap_or_else(|| appid.to_string());
@@ -120,10 +134,16 @@ fn flatpak_app_dirs() -> Vec<PathBuf> {
 /// install metadata; when that's a wrapper script, parses its `exec …` line for
 /// the actual binary (e.g. zen's `launch-script.sh` → `/app/zen/zen` → "zen").
 fn flatpak_process_name(app_id: &str) -> Option<String> {
-    let basename = |s: &str| Path::new(s).file_name().map(|n| n.to_string_lossy().to_string());
+    let basename = |s: &str| {
+        Path::new(s)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+    };
     for base in flatpak_app_dirs() {
         let active = base.join(app_id).join("current/active");
-        let Ok(meta) = fs::read_to_string(active.join("metadata")) else { continue };
+        let Ok(meta) = fs::read_to_string(active.join("metadata")) else {
+            continue;
+        };
         let Some(command) = meta
             .lines()
             .find_map(|l| l.strip_prefix("command="))
@@ -214,7 +234,9 @@ fn build_icon_index() -> HashMap<String, PathBuf> {
         if visited > 6000 {
             break; // safety bound against pathological trees
         }
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             let Ok(ft) = entry.file_type() else { continue };
@@ -230,7 +252,9 @@ fn build_icon_index() -> HashMap<String, PathBuf> {
             if ext != "png" && ext != "svg" && ext != "xpm" {
                 continue;
             }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
             let score = icon_score(&path);
             match index.get(stem) {
                 Some((_, best)) if *best >= score => {}
@@ -341,7 +365,10 @@ pub fn app_from_file(path: String) -> Option<InstalledApp> {
                 icon.get_or_insert_with(|| v.trim().to_string());
             }
         }
-        let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         let id = match &exec {
             Some(e) => derive_app_id(e, &stem),
             None => stem.clone(),
@@ -349,11 +376,19 @@ pub fn app_from_file(path: String) -> Option<InstalledApp> {
         let display = name.unwrap_or_else(|| id.clone());
         let index = build_icon_index();
         let icon = icon.and_then(|i| resolve_icon(&i, &index));
-        return Some(InstalledApp { id, name: display, icon });
+        return Some(InstalledApp {
+            id,
+            name: display,
+            icon,
+        });
     }
 
     let base = p.file_name()?.to_string_lossy().to_string();
-    Some(InstalledApp { id: base.clone(), name: base, icon: None })
+    Some(InstalledApp {
+        id: base.clone(),
+        name: base,
+        icon: None,
+    })
 }
 
 /// Open the system file picker (via the XDG desktop portal → the DE's native
@@ -368,10 +403,10 @@ pub async fn pick_file() -> Option<String> {
         if let Some(home) = std::env::var_os("HOME") {
             dialog = dialog.set_directory(home);
         }
-        return dialog
+        dialog
             .pick_file()
             .await
-            .map(|f| f.path().to_string_lossy().to_string());
+            .map(|f| f.path().to_string_lossy().to_string())
     }
     #[cfg(not(desktop))]
     None
@@ -398,7 +433,9 @@ fn list_desktop_apps() -> Vec<InstalledApp> {
     let icon_index = build_icon_index();
     let mut by_id: BTreeMap<String, InstalledApp> = BTreeMap::new();
     for dir in desktop_dirs() {
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
@@ -410,6 +447,6 @@ fn list_desktop_apps() -> Vec<InstalledApp> {
         }
     }
     let mut apps: Vec<InstalledApp> = by_id.into_values().collect();
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_key(|a| a.name.to_lowercase());
     apps
 }

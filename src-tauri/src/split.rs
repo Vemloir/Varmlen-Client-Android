@@ -45,6 +45,10 @@ impl SplitInput {
 
     /// Enabled, non-empty app/process names.
     pub fn enabled_apps(&self) -> Vec<String> {
-        self.apps.iter().filter(|a| !a.is_empty()).cloned().collect()
+        self.apps
+            .iter()
+            .filter(|a| !a.is_empty())
+            .cloned()
+            .collect()
     }
 }

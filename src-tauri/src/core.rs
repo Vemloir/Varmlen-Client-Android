@@ -41,7 +41,11 @@ impl CoreKind {
     }
     /// Binary file name inside the per-version dir.
     pub fn bin_name(self) -> &'static str {
-        if cfg!(windows) { "xray.exe" } else { "xray" }
+        if cfg!(windows) {
+            "xray.exe"
+        } else {
+            "xray"
+        }
     }
     fn active_file(self) -> String {
         format!("active-{}.txt", self.slug())
@@ -93,7 +97,9 @@ fn version_binary(app: &AppHandle, kind: CoreKind, tag: &str) -> Result<PathBuf,
     if !valid_tag(tag) {
         return Err(format!("invalid version tag: {tag}"));
     }
-    Ok(versions_dir(app, kind)?.join(strip_v(tag)).join(kind.bin_name()))
+    Ok(versions_dir(app, kind)?
+        .join(strip_v(tag))
+        .join(kind.bin_name()))
 }
 
 fn strip_v(tag: &str) -> &str {
@@ -110,7 +116,8 @@ fn valid_tag(tag: &str) -> bool {
         && t.len() <= 64
         && t != "."
         && t != ".."
-        && t.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+' | b'_'))
+        && t.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+' | b'_'))
 }
 
 /// The active version's binary path for a kind; errors if none active/missing.
@@ -128,10 +135,17 @@ fn bundled_core_path(app: &AppHandle, kind: CoreKind) -> Option<PathBuf> {
 /// Read a core binary's own version (`xray version` → "26.6.27"), so the seeded
 /// version dir is named correctly without a hardcoded tag to keep in sync.
 fn core_version_of(bin: &PathBuf) -> Option<String> {
-    let out = std::process::Command::new(bin).arg("version").output().ok()?;
+    let out = std::process::Command::new(bin)
+        .arg("version")
+        .output()
+        .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     // First line: "Xray 26.6.27 (Xray, Penetrates Everything.) <hash> ..."
-    text.lines().next()?.split_whitespace().nth(1).map(|s| s.to_string())
+    text.lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)
+        .map(|s| s.to_string())
 }
 
 /// Seed the bundled core into the versions dir if NOTHING is installed yet, so
@@ -143,9 +157,15 @@ pub fn seed_bundled_core(app: &AppHandle) {
     if binary_path(app, kind).is_ok() {
         return; // already have a usable, active core
     }
-    let Some(src) = bundled_core_path(app, kind) else { return };
-    let Some(tag) = core_version_of(&src).filter(|t| valid_tag(t)) else { return };
-    let Ok(dest) = version_binary(app, kind, &tag) else { return };
+    let Some(src) = bundled_core_path(app, kind) else {
+        return;
+    };
+    let Some(tag) = core_version_of(&src).filter(|t| valid_tag(t)) else {
+        return;
+    };
+    let Ok(dest) = version_binary(app, kind, &tag) else {
+        return;
+    };
     if let Some(parent) = dest.parent() {
         if std::fs::create_dir_all(parent).is_err() {
             return;
@@ -180,7 +200,11 @@ pub fn active_tag(app: &AppHandle, kind: CoreKind) -> Option<String> {
     let dir = core_dir(app).ok()?;
     let v = std::fs::read_to_string(dir.join(kind.active_file())).ok()?;
     let v = v.trim().to_string();
-    if v.is_empty() { None } else { Some(v) }
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
 }
 
 fn write_active(app: &AppHandle, kind: CoreKind, tag: &str) -> Result<(), String> {
@@ -203,7 +227,12 @@ fn clear_active(app: &AppHandle, kind: CoreKind) -> Result<(), String> {
 /// Idempotent: a no-op once cleaned.
 fn migrate_legacy_layout(app: &AppHandle) {
     let Ok(dir) = core_dir(app) else { return };
-    for f in ["sing-box", "version.txt", "active.txt", "active-singbox.txt"] {
+    for f in [
+        "sing-box",
+        "version.txt",
+        "active.txt",
+        "active-singbox.txt",
+    ] {
         let _ = std::fs::remove_file(dir.join(f));
     }
     let _ = std::fs::remove_dir_all(dir.join("versions").join("singbox"));
@@ -212,8 +241,12 @@ fn migrate_legacy_layout(app: &AppHandle) {
 /// All tags with a binary on disk for a kind, newest-first.
 fn installed_tags(app: &AppHandle, kind: CoreKind) -> Vec<String> {
     migrate_legacy_layout(app);
-    let Ok(dir) = versions_dir(app, kind) else { return Vec::new() };
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let Ok(dir) = versions_dir(app, kind) else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
     let mut tags: Vec<String> = entries
         .filter_map(|e| e.ok())
         .filter_map(|e| {
@@ -252,24 +285,48 @@ fn http_client() -> Result<reqwest::Client, String> {
 
 async fn fetch_latest_release(kind: CoreKind) -> Result<serde_json::Value, String> {
     let client = http_client()?;
-    let url = format!("https://api.github.com/repos/{}/releases/latest", kind.repo());
-    let resp = client.get(url).send().await.map_err(|e| format!("release request: {e}"))?;
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        kind.repo()
+    );
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("release request: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("GitHub API HTTP {}", resp.status()));
     }
-    let text = resp.text().await.map_err(|e| format!("release body: {e}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("release body: {e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("release json: {e}"))
 }
 
 async fn fetch_release_by_tag(kind: CoreKind, tag: &str) -> Result<serde_json::Value, String> {
     let client = http_client()?;
-    let tag = if tag.starts_with('v') { tag.to_string() } else { format!("v{tag}") };
-    let url = format!("https://api.github.com/repos/{}/releases/tags/{tag}", kind.repo());
-    let resp = client.get(url).send().await.map_err(|e| format!("release request: {e}"))?;
+    let tag = if tag.starts_with('v') {
+        tag.to_string()
+    } else {
+        format!("v{tag}")
+    };
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/tags/{tag}",
+        kind.repo()
+    );
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("release request: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("GitHub API HTTP {}", resp.status()));
     }
-    let text = resp.text().await.map_err(|e| format!("release body: {e}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("release body: {e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("release json: {e}"))
 }
 
@@ -298,12 +355,22 @@ pub struct CoreRelease {
 pub async fn list_core_releases(kind: String) -> Result<Vec<CoreRelease>, String> {
     let kind = CoreKind::parse(&kind)?;
     let client = http_client()?;
-    let url = format!("https://api.github.com/repos/{}/releases?per_page=30", kind.repo());
-    let resp = client.get(url).send().await.map_err(|e| format!("releases request: {e}"))?;
+    let url = format!(
+        "https://api.github.com/repos/{}/releases?per_page=30",
+        kind.repo()
+    );
+    let resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("releases request: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("GitHub API HTTP {}", resp.status()));
     }
-    let text = resp.text().await.map_err(|e| format!("releases body: {e}"))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("releases body: {e}"))?;
     let arr: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("releases json: {e}"))?;
     Ok(arr
@@ -317,9 +384,20 @@ pub async fn list_core_releases(kind: String) -> Result<Vec<CoreRelease>, String
                 .and_then(|n| n.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| tag.clone());
-            let date = r.get("published_at").and_then(|d| d.as_str()).map(|s| s.to_string());
-            let prerelease = r.get("prerelease").and_then(|p| p.as_bool()).unwrap_or(false);
-            Some(CoreRelease { tag, name, date, prerelease })
+            let date = r
+                .get("published_at")
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string());
+            let prerelease = r
+                .get("prerelease")
+                .and_then(|p| p.as_bool())
+                .unwrap_or(false);
+            Some(CoreRelease {
+                tag,
+                name,
+                date,
+                prerelease,
+            })
         })
         .collect())
 }
@@ -380,7 +458,11 @@ async fn download_and_install(
         .map(|h| h.to_lowercase());
 
     let client = http_client()?;
-    let resp = client.get(&url).send().await.map_err(|e| format!("download: {e}"))?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("download: {e}"))?;
     if !resp.status().is_success() {
         return Err(format!("download HTTP {}", resp.status()));
     }
@@ -414,7 +496,12 @@ async fn download_and_install(
         if now.duration_since(last_emit) >= Duration::from_millis(100) {
             let _ = app.emit(
                 "core://progress",
-                CoreProgress { tag: tag.to_string(), downloaded: buf.len() as u64, total, speed_bps },
+                CoreProgress {
+                    tag: tag.to_string(),
+                    downloaded: buf.len() as u64,
+                    total,
+                    speed_bps,
+                },
             );
             last_emit = now;
         }
@@ -422,7 +509,12 @@ async fn download_and_install(
 
     let _ = app.emit(
         "core://progress",
-        CoreProgress { tag: tag.to_string(), downloaded: buf.len() as u64, total: buf.len() as u64, speed_bps },
+        CoreProgress {
+            tag: tag.to_string(),
+            downloaded: buf.len() as u64,
+            total: buf.len() as u64,
+            speed_bps,
+        },
     );
 
     if let Some(expected) = digest {
@@ -445,7 +537,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn set_exec(dest: &PathBuf) {
@@ -470,7 +566,11 @@ fn extract_binary_targz(tar_gz: &[u8], dest: &PathBuf, member: &str) -> Result<(
     for entry in entries {
         let mut entry = entry.map_err(|e| format!("tar entry: {e}"))?;
         let path = entry.path().map_err(|e| format!("tar path: {e}"))?;
-        let is_bin = path.file_name().and_then(|n| n.to_str()).map(|n| n == member).unwrap_or(false);
+        let is_bin = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n == member)
+            .unwrap_or(false);
         if is_bin {
             entry.unpack(dest).map_err(|e| format!("unpack: {e}"))?;
             set_exec(dest);
@@ -492,11 +592,14 @@ fn extract_binary_zip(zip_bytes: &[u8], dest: &PathBuf, member: &str) -> Result<
             let mut out = std::fs::File::create(dest).map_err(|e| format!("create binary: {e}"))?;
             let mut chunk = [0u8; 65536];
             loop {
-                let n = file.read(&mut chunk).map_err(|e| format!("zip read: {e}"))?;
+                let n = file
+                    .read(&mut chunk)
+                    .map_err(|e| format!("zip read: {e}"))?;
                 if n == 0 {
                     break;
                 }
-                out.write_all(&chunk[..n]).map_err(|e| format!("write binary: {e}"))?;
+                out.write_all(&chunk[..n])
+                    .map_err(|e| format!("write binary: {e}"))?;
             }
             drop(out);
             set_exec(dest);
@@ -525,14 +628,23 @@ pub async fn core_info(app: AppHandle, kind: String) -> Result<CoreInfo, String>
         (None, Some(_)) => true,
         (Some(a), Some(l)) => version_cmp(l, a) == std::cmp::Ordering::Greater,
     };
-    Ok(CoreInfo { installed, active, latest, has_update })
+    Ok(CoreInfo {
+        installed,
+        active,
+        latest,
+        has_update,
+    })
 }
 
 /// Download `version` (or latest when null) for `kind`. First install for a
 /// kind auto-activates it. xray installs trigger a setcap prompt: its native TUN
 /// needs CAP_NET_ADMIN (file caps are cleared whenever the binary is rewritten).
 #[tauri::command]
-pub async fn core_install(app: AppHandle, kind: String, version: Option<String>) -> Result<String, String> {
+pub async fn core_install(
+    app: AppHandle,
+    kind: String,
+    version: Option<String>,
+) -> Result<String, String> {
     let kind = CoreKind::parse(&kind)?;
     let release = match version {
         Some(t) => fetch_release_by_tag(kind, &t).await?,
@@ -552,7 +664,8 @@ pub async fn core_install(app: AppHandle, kind: String, version: Option<String>)
     // active xray must be re-capped after any download of the active tag.
     if became_active && kind == CoreKind::Xray {
         let app2 = app.clone();
-        let _ = tokio::task::spawn_blocking(move || crate::vpn::request_setcap_blocking(&app2)).await;
+        let _ =
+            tokio::task::spawn_blocking(move || crate::vpn::request_setcap_blocking(&app2)).await;
     }
     Ok(tag)
 }
@@ -569,7 +682,8 @@ pub async fn core_activate(app: AppHandle, kind: String, tag: String) -> Result<
     write_active(&app, kind, &tag)?;
     if kind == CoreKind::Xray {
         let app2 = app.clone();
-        let _ = tokio::task::spawn_blocking(move || crate::vpn::request_setcap_blocking(&app2)).await;
+        let _ =
+            tokio::task::spawn_blocking(move || crate::vpn::request_setcap_blocking(&app2)).await;
     }
     Ok(())
 }

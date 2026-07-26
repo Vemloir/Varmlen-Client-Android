@@ -51,7 +51,9 @@ where
     D: serde::Deserializer<'de>,
 {
     let opt: Option<String> = Option::deserialize(d)?;
-    Ok(opt.filter(|s| !s.is_empty()).unwrap_or_else(default_protocol))
+    Ok(opt
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(default_protocol))
 }
 
 /// A single VPN endpoint parsed from a proxy URI. The struct keeps its
@@ -194,6 +196,7 @@ fn is_meta_key(key: &str) -> bool {
 ///      subscription-userinfo, mux-*, …) — collected into `headers`.
 ///   2. Free-text lines (a real human note, or a base64 `announce` banner) —
 ///      joined into `description`.
+///
 /// Stops at the first non-comment, non-blank line (the first proxy URI).
 pub fn parse_body_meta(body: &str) -> (std::collections::HashMap<String, String>, Option<String>) {
     let text = decode_body(body);
@@ -228,7 +231,6 @@ pub fn parse_body_meta(body: &str) -> (std::collections::HashMap<String, String>
     };
     (headers, description)
 }
-
 
 /// Schemes we know how to parse.
 pub fn is_supported_uri(line: &str) -> bool {
@@ -341,7 +343,14 @@ fn collect_json_servers(v: &serde_json::Value, out: &mut Vec<VlessServer>, depth
                 return;
             }
             // Otherwise recurse into the common container keys.
-            for key in ["outbounds", "servers", "links", "proxies", "configs", "list"] {
+            for key in [
+                "outbounds",
+                "servers",
+                "links",
+                "proxies",
+                "configs",
+                "list",
+            ] {
                 if let Some(child) = obj.get(key) {
                     collect_json_servers(child, out, depth + 1);
                 }
@@ -468,11 +477,18 @@ fn apply_stream(s: &mut VlessServer, stream: Option<&serde_json::Value>) {
         if s.fingerprint.is_none() {
             s.fingerprint = json_str(tls, "fingerprint");
         }
-        if tls.get("allowInsecure").and_then(|x| x.as_bool()).unwrap_or(false) {
+        if tls
+            .get("allowInsecure")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false)
+        {
             s.raw_params.insert("allowInsecure".into(), "1".into());
         }
         if let Some(alpn) = tls.get("alpn").and_then(|a| a.as_array()) {
-            let list: Vec<String> = alpn.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+            let list: Vec<String> = alpn
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
             if !list.is_empty() {
                 s.raw_params.insert("alpn".into(), list.join(","));
             }
@@ -483,13 +499,20 @@ fn apply_stream(s: &mut VlessServer, stream: Option<&serde_json::Value>) {
         "ws" => {
             if let Some(ws) = st.get("wsSettings") {
                 s.path = json_str(ws, "path");
-                if let Some(h) = ws.get("headers").and_then(|h| h.get("Host")).and_then(|x| x.as_str()) {
+                if let Some(h) = ws
+                    .get("headers")
+                    .and_then(|h| h.get("Host"))
+                    .and_then(|x| x.as_str())
+                {
                     s.raw_params.insert("host".into(), h.into());
                 }
             }
         }
         "xhttp" => {
-            if let Some(x) = st.get("xhttpSettings").or_else(|| st.get("splithttpSettings")) {
+            if let Some(x) = st
+                .get("xhttpSettings")
+                .or_else(|| st.get("splithttpSettings"))
+            {
                 s.path = json_str(x, "path");
                 s.mode = json_str(x, "mode");
                 if let Some(h) = json_str(x, "host") {
@@ -510,7 +533,10 @@ fn apply_stream(s: &mut VlessServer, stream: Option<&serde_json::Value>) {
                 if let Some(svc) = json_str(g, "serviceName") {
                     s.raw_params.insert("serviceName".into(), svc);
                 }
-                if g.get("multiMode").and_then(|m| m.as_bool()).unwrap_or(false) {
+                if g.get("multiMode")
+                    .and_then(|m| m.as_bool())
+                    .unwrap_or(false)
+                {
                     s.mode = Some("multi".into());
                 }
                 if let Some(auth) = json_str(g, "authority") {
@@ -543,10 +569,21 @@ pub fn parse_vless(uri: &str) -> Result<VlessServer, ParseError> {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
-    let mut s = VlessServer::base("vless", host.clone(), port, label_from(url.fragment(), &host, port));
+    let mut s = VlessServer::base(
+        "vless",
+        host.clone(),
+        port,
+        label_from(url.fragment(), &host, port),
+    );
     s.uuid = uuid;
-    s.transport = params.get("type").cloned().unwrap_or_else(|| "tcp".to_string());
-    s.security = params.get("security").cloned().unwrap_or_else(|| "none".to_string());
+    s.transport = params
+        .get("type")
+        .cloned()
+        .unwrap_or_else(|| "tcp".to_string());
+    s.security = params
+        .get("security")
+        .cloned()
+        .unwrap_or_else(|| "none".to_string());
     s.sni = params.get("sni").cloned();
     s.fingerprint = params.get("fp").cloned();
     s.public_key = params.get("pbk").cloned();
@@ -576,11 +613,22 @@ pub fn parse_trojan(uri: &str) -> Result<VlessServer, ParseError> {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
-    let mut s = VlessServer::base("trojan", host.clone(), port, label_from(url.fragment(), &host, port));
+    let mut s = VlessServer::base(
+        "trojan",
+        host.clone(),
+        port,
+        label_from(url.fragment(), &host, port),
+    );
     s.uuid = password.clone();
     s.password = Some(password);
-    s.transport = params.get("type").cloned().unwrap_or_else(|| "tcp".to_string());
-    s.security = params.get("security").cloned().unwrap_or_else(|| "tls".to_string());
+    s.transport = params
+        .get("type")
+        .cloned()
+        .unwrap_or_else(|| "tcp".to_string());
+    s.security = params
+        .get("security")
+        .cloned()
+        .unwrap_or_else(|| "tls".to_string());
     s.sni = params.get("sni").cloned();
     s.fingerprint = params.get("fp").cloned();
     s.path = params.get("path").cloned();
@@ -612,7 +660,8 @@ pub fn parse_shadowsocks(uri: &str) -> Result<VlessServer, ParseError> {
         (decoded, hp.to_string())
     } else {
         // Whole thing is base64.
-        let decoded = b64_decode_str(main).ok_or_else(|| ParseError::InvalidUri("ss base64".into()))?;
+        let decoded =
+            b64_decode_str(main).ok_or_else(|| ParseError::InvalidUri("ss base64".into()))?;
         let (u, hp) = decoded.rsplit_once('@').ok_or(ParseError::MissingHost)?;
         (u.to_string(), hp.to_string())
     };
@@ -624,7 +673,12 @@ pub fn parse_shadowsocks(uri: &str) -> Result<VlessServer, ParseError> {
     let port: u16 = port_str.parse().map_err(|_| ParseError::MissingPort)?;
     let host = host.trim_matches(['[', ']']).to_string();
 
-    let mut s = VlessServer::base("shadowsocks", host.clone(), port, label_from(fragment, &host, port));
+    let mut s = VlessServer::base(
+        "shadowsocks",
+        host.clone(),
+        port,
+        label_from(fragment, &host, port),
+    );
     s.method = Some(method.to_string());
     s.password = Some(password.to_string());
     Ok(s)
@@ -633,11 +687,16 @@ pub fn parse_shadowsocks(uri: &str) -> Result<VlessServer, ParseError> {
 /// Parse a `vmess://<base64-json>` URI (the common v2rayN JSON form).
 pub fn parse_vmess(uri: &str) -> Result<VlessServer, ParseError> {
     let payload = uri.trim().strip_prefix("vmess://").unwrap_or("");
-    let json = b64_decode_str(payload).ok_or_else(|| ParseError::InvalidUri("vmess base64".into()))?;
+    let json =
+        b64_decode_str(payload).ok_or_else(|| ParseError::InvalidUri("vmess base64".into()))?;
     let v: serde_json::Value =
         serde_json::from_str(&json).map_err(|e| ParseError::InvalidUri(e.to_string()))?;
 
-    let host = v.get("add").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let host = v
+        .get("add")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
     if host.is_empty() {
         return Err(ParseError::MissingHost);
     }
@@ -654,15 +713,28 @@ pub fn parse_vmess(uri: &str) -> Result<VlessServer, ParseError> {
     if port == 0 {
         return Err(ParseError::MissingPort);
     }
-    let uuid = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let uuid = v
+        .get("id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
     if uuid.is_empty() {
         return Err(ParseError::MissingCredentials);
     }
     let ps = v.get("ps").and_then(|x| x.as_str()).map(|s| s.to_string());
 
-    let mut s = VlessServer::base("vmess", host.clone(), port, ps.unwrap_or_else(|| format!("{host}:{port}")));
+    let mut s = VlessServer::base(
+        "vmess",
+        host.clone(),
+        port,
+        ps.unwrap_or_else(|| format!("{host}:{port}")),
+    );
     s.uuid = uuid;
-    let net = v.get("net").and_then(|x| x.as_str()).unwrap_or("tcp").to_string();
+    let net = v
+        .get("net")
+        .and_then(|x| x.as_str())
+        .unwrap_or("tcp")
+        .to_string();
     s.transport = net.clone();
     s.security = match v.get("tls").and_then(|x| x.as_str()) {
         Some("tls") => "tls".to_string(),
@@ -670,7 +742,10 @@ pub fn parse_vmess(uri: &str) -> Result<VlessServer, ParseError> {
         _ => "none".to_string(),
     };
     s.sni = v.get("sni").and_then(|x| x.as_str()).map(|s| s.to_string());
-    s.path = v.get("path").and_then(|x| x.as_str()).map(|s| s.to_string());
+    s.path = v
+        .get("path")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string());
     s.fingerprint = v.get("fp").and_then(|x| x.as_str()).map(|s| s.to_string());
 
     // vmess overloads its keys per transport. Mirror them into raw_params under
@@ -690,8 +765,12 @@ pub fn parse_vmess(uri: &str) -> Result<VlessServer, ParseError> {
     // `aid` may be a number or a string.
     if let Some(aid) = v.get("aid") {
         match aid {
-            serde_json::Value::Number(n) => { raw.insert("aid".into(), n.to_string()); }
-            serde_json::Value::String(st) if !st.is_empty() => { raw.insert("aid".into(), st.clone()); }
+            serde_json::Value::Number(n) => {
+                raw.insert("aid".into(), n.to_string());
+            }
+            serde_json::Value::String(st) if !st.is_empty() => {
+                raw.insert("aid".into(), st.clone());
+            }
             _ => {}
         }
     }
@@ -802,7 +881,8 @@ pub fn decode_maybe_b64(value: &str) -> String {
                 let s = s.trim().to_string();
                 // Without a prefix, guard against false positives: only accept a
                 // decode that yields printable text different from the input.
-                if explicit || (!s.is_empty() && s != trimmed && s.chars().all(|c| !c.is_control())) {
+                if explicit || (!s.is_empty() && s != trimmed && s.chars().all(|c| !c.is_control()))
+                {
                     return s;
                 }
             }
@@ -819,18 +899,19 @@ pub fn parse_headers<F>(get: F) -> SubscriptionMeta
 where
     F: Fn(&str) -> Option<String>,
 {
-    let mut meta = SubscriptionMeta::default();
-    meta.title = get("profile-title")
-        .map(|s| decode_maybe_b64(&s))
-        .filter(|s| !s.is_empty());
-    meta.update_interval_hours = get("profile-update-interval")
-        .and_then(|s| s.trim().parse().ok());
-    meta.support_url = get("support-url")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    meta.web_page_url = get("profile-web-page-url")
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let mut meta = SubscriptionMeta {
+        title: get("profile-title")
+            .map(|s| decode_maybe_b64(&s))
+            .filter(|s| !s.is_empty()),
+        update_interval_hours: get("profile-update-interval").and_then(|s| s.trim().parse().ok()),
+        support_url: get("support-url")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        web_page_url: get("profile-web-page-url")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        ..Default::default()
+    };
 
     if let Some(info) = get("subscription-userinfo") {
         meta.has_userinfo = true;
@@ -839,12 +920,12 @@ where
             if let Some((k, v)) = kv.split_once('=') {
                 let v = v.trim();
                 match k.trim() {
-                    "upload"   => meta.upload_bytes   = v.parse().ok(),
+                    "upload" => meta.upload_bytes = v.parse().ok(),
                     "download" => meta.download_bytes = v.parse().ok(),
                     // 0 = unlimited / never expires -> None, so the UI hides
                     // the badge instead of showing "0 B" or 01.01.1970.
-                    "total"    => meta.total_bytes    = v.parse().ok().filter(|&x| x > 0),
-                    "expire"   => meta.expires_at_unix = v.parse().ok().filter(|&x| x > 0),
+                    "total" => meta.total_bytes = v.parse().ok().filter(|&x| x > 0),
+                    "expire" => meta.expires_at_unix = v.parse().ok().filter(|&x| x > 0),
                     _ => {}
                 }
             }
@@ -881,7 +962,10 @@ mod tests {
     fn drops_balancer_sentinel() {
         // borealisvpn-style auto-select entry: a sentinel host, not a real server.
         let uri = "vless://0eeff936-aa72-4e11-a18a-d3e996f1f37b@balancer.host:443?type=tcp&security=reality&sni=api-maps.yandex.ru&pbk=ABC&sid=DEAD&flow=xtls-rprx-vision#LTE";
-        assert!(matches!(parse_proxy_uri(uri), Err(ParseError::BalancerEntry)));
+        assert!(matches!(
+            parse_proxy_uri(uri),
+            Err(ParseError::BalancerEntry)
+        ));
         // ...and it's silently skipped during a subscription import.
         let body = format!("vless://a@h-a:443?type=tcp&security=reality#Real\n{uri}");
         assert_eq!(parse_subscription(&body).len(), 1);
@@ -919,7 +1003,10 @@ mod tests {
             "vless://a@h-a:443?type=tcp&security=reality#A\n",
         );
         let (headers, desc) = parse_body_meta(body);
-        assert_eq!(headers.get("profile-title").map(String::as_str), Some("KurtaVPN"));
+        assert_eq!(
+            headers.get("profile-title").map(String::as_str),
+            Some("KurtaVPN")
+        );
         assert_eq!(headers.get("mux-enable").map(String::as_str), Some("1"));
         assert!(headers.contains_key("subscription-userinfo"));
         // None of the #key: value lines leak into description.
@@ -952,7 +1039,8 @@ mod tests {
     #[test]
     fn parses_shadowsocks_sip002() {
         // base64("chacha20-ietf-poly1305:secretpass")
-        let creds = base64::engine::general_purpose::STANDARD.encode("chacha20-ietf-poly1305:secretpass");
+        let creds =
+            base64::engine::general_purpose::STANDARD.encode("chacha20-ietf-poly1305:secretpass");
         let uri = format!("ss://{creds}@45.144.52.226:2060#%F0%9F%87%AB%F0%9F%87%AE%20FI");
         let s = parse_shadowsocks(&uri).unwrap();
         assert_eq!(s.protocol, "shadowsocks");
@@ -965,7 +1053,8 @@ mod tests {
 
     #[test]
     fn parses_trojan() {
-        let s = parse_trojan("trojan://pass123@h.example.com:443?sni=h.example.com#Trojan").unwrap();
+        let s =
+            parse_trojan("trojan://pass123@h.example.com:443?sni=h.example.com#Trojan").unwrap();
         assert_eq!(s.protocol, "trojan");
         assert_eq!(s.host, "h.example.com");
         assert_eq!(s.port, 443);
@@ -1005,7 +1094,9 @@ mod tests {
         let m = parse_headers(|name| match name {
             "profile-title" => Some("Varmlen".into()),
             "profile-update-interval" => Some("12".into()),
-            "subscription-userinfo" => Some("upload=10; download=200; total=1099511627776; expire=1781461695".into()),
+            "subscription-userinfo" => {
+                Some("upload=10; download=200; total=1099511627776; expire=1781461695".into())
+            }
             "support-url" => Some("https://t.me/x_bot".into()),
             _ => None,
         });
@@ -1038,8 +1129,8 @@ mod tests {
         assert!(m.has_userinfo);
         assert_eq!(m.expires_at_unix, None);
         assert_eq!(m.total_bytes, None); // 0 quota = unlimited
-        // An "infinite" panel plan often just OMITS expire — the header is
-        // still authoritative, so stored expiry must be cleared by the client.
+                                         // An "infinite" panel plan often just OMITS expire — the header is
+                                         // still authoritative, so stored expiry must be cleared by the client.
         let m2 = parse_headers(|name| match name {
             "subscription-userinfo" => Some("upload=1; download=2".into()),
             _ => None,

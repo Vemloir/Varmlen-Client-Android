@@ -3,10 +3,10 @@
 The Android port reuses the entire Svelte UI, the subscription parser, and the
 xray config generator. Only the data plane is platform-specific.
 
-**Status:** builds an installable APK with the full VPN stack wired end-to-end
-in code. It has **not** been verified on a physical device yet — the on-device
-flow (VpnService consent, the tun ↔ tun2socks ↔ xray bridge, per-app, DNS) needs
-testing and will likely need a few fixes. Everything compiles and packages.
+**Status:** builds an installable arm64 APK/AAB with Xray and tun2socks verified
+inside the package. The service reports startup success/failure back to the UI.
+The 0.2.0 changes still need a device smoke test, especially on OEM Android
+variants.
 
 ## Architecture
 
@@ -39,9 +39,7 @@ android targets (`aarch64/armv7/i686/x86_64-linux-android`).
 ```bash
 source ~/varmlen-android-env.sh          # ANDROID_HOME, NDK_HOME, JAVA_HOME, PATH
 bash scripts/android-native.sh           # fetch xray-android + build tun2socks → jniLibs
-npm run tauri android build -- --debug --target aarch64 --apk
-# → src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk
-adb install -r <that apk>
+npm run tauri android build -- --target aarch64 --apk --aab
 ```
 
 (`npm run tauri android dev` runs it on a connected device/emulator with live
@@ -58,6 +56,5 @@ reload.)
   process names.
 - DNS handling + IPv6 routing under the tunnel.
 - Currently arm64-v8a only; add the other ABIs for store distribution.
-- Release: signing config + `--release` (strips the 160 MB debug Rust lib).
 - Hide desktop-only UI on Android (the "grant network permissions" / pkexec
   flow, the file-based app picker).
