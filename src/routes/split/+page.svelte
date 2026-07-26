@@ -504,7 +504,7 @@
        instead of shrinking/jumping. Matching apps fill top-to-bottom + scroll. */
     height: 52vh;
     overflow-y: auto;
-    border: 1px solid var(--border);
+    border: none;
     border-radius: var(--radius-sm);
     background: var(--bg-elev-2);
   }
@@ -526,7 +526,7 @@
     contain-intrinsic-size: auto 52px;
   }
   .picker-row + .picker-row {
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--bg);
   }
   @media (hover: hover) {
     .picker-row:hover:not(:disabled) {

@@ -698,7 +698,7 @@
   /* ---------- subscription card ---------- */
   .sub-card {
     background: var(--bg-elev);
-    border: 1px solid var(--border);
+    border: none;
     border-radius: var(--radius);
     margin-bottom: 10px;
     overflow: hidden;
@@ -739,9 +739,6 @@
     vertical-align: -1px;
     margin-right: 5px;
     flex-shrink: 0;
-  }
-  .sub-card.pinned {
-    border-color: var(--border-strong);
   }
   .sub-meta {
     font-size: 11px;
