@@ -265,7 +265,9 @@ class VarmlenVpnService : VpnService() {
         """.trimIndent()
         val hevFile = File(filesDir, "hev.yaml").apply { writeText(yaml) }
         log("tun2socks starting (native)")
-        TProxyService.TProxyStartService(hevFile.absolutePath, fd.fd)
+        if (!TProxyService.TProxyStartService(hevFile.absolutePath, fd.fd)) {
+            throw IllegalStateException("tun2socks failed to start")
+        }
 
         // Save only a configuration that reached the connected state. A failed
         // attempt must not poison later starts from the Quick Settings tile.
@@ -310,7 +312,11 @@ class VarmlenVpnService : VpnService() {
     private fun teardown() {
         stopping = true
         notifHandler.removeCallbacks(statsTick)
-        try { TProxyService.TProxyStopService() } catch (_: Throwable) {}
+        try {
+            if (!TProxyService.TProxyStopService()) {
+                log("tun2socks stop reported failure")
+            }
+        } catch (_: Throwable) {}
         try { xray?.destroy() } catch (_: Throwable) {}
         xray = null
         try { tun?.close() } catch (_: Throwable) {}
