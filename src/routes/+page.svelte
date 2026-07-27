@@ -7,7 +7,12 @@
   import { isAndroid } from "$lib/platform";
   import { placePopup, portal } from "$lib/popup";
   import FlagIcon from "$lib/components/FlagIcon.svelte";
-  import { formatJson, isJsonInput } from "$lib/subscription-json";
+  import {
+    formatJson,
+    formatLocationJson,
+    isJsonInput,
+    parseLocationJson,
+  } from "$lib/subscription-json";
 
   import type { Subscription, ServerEntry } from "$lib/subs.svelte";
 
@@ -24,6 +29,8 @@
   let jsonError = $state<string | null>(null);
   let jsonSaving = $state(false);
   let detailFor = $state<ServerEntry | null>(null);
+  let detailJsonDraft = $state("");
+  let detailJsonError = $state<string | null>(null);
   // Fixed-position coords for the "…" menu so it escapes the card's overflow:hidden.
   let menuPos = $state({ top: 0, right: 0 });
 
@@ -110,6 +117,22 @@
       jsonError = e instanceof Error ? e.message : String(e);
     } finally {
       jsonSaving = false;
+    }
+  }
+  function openDetails(server: ServerEntry): void {
+    detailFor = server;
+    detailJsonDraft = formatLocationJson(server.raw);
+    detailJsonError = null;
+  }
+  function saveLocationJson(): void {
+    if (!detailFor) return;
+    detailJsonError = null;
+    try {
+      const raw = parseLocationJson(detailJsonDraft);
+      detailFor = subs.updateServer(detailFor.id, raw);
+      detailJsonDraft = formatLocationJson(detailFor.raw);
+    } catch (error) {
+      detailJsonError = error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -377,7 +400,7 @@
               <button
                 class="srv-detail"
                 aria-label="Location details"
-                onclick={() => (detailFor = srv)}
+                onclick={() => openDetails(srv)}
               >
                 <span class="chev-hit">
                   <svg width="16" height="16" viewBox="0 0 24 24" class="chev" aria-hidden="true">
@@ -474,12 +497,31 @@
           </svg>
         </button>
       </header>
-      <dl class="info-grid">
+      <dl class="info-grid location-fields">
         {#each detailRows as [label, value] (label)}
           <dt>{label}</dt>
           <dd class="mono small">{value}</dd>
         {/each}
       </dl>
+      <label class="location-json-label" for="location-json">{t("json.locationTitle")}</label>
+      <textarea
+        id="location-json"
+        class="json-editor location-json-editor"
+        bind:value={detailJsonDraft}
+        spellcheck="false"
+      ></textarea>
+      {#if detailJsonError}
+        <div class="error">{detailJsonError}</div>
+      {/if}
+      <p class="muted location-json-hint">{t("json.locationHint")}</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick={() => (detailFor = null)}>
+          {t("common.cancel")}
+        </button>
+        <button class="btn btn-primary" onclick={saveLocationJson} disabled={!detailJsonDraft.trim()}>
+          {t("json.save")}
+        </button>
+      </div>
     </div>
   </div>
 {/if}
@@ -1134,6 +1176,8 @@
     flex-direction: column;
     gap: 12px;
     animation: slideUp 180ms cubic-bezier(0.2, 0, 0, 1);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
   }
   .modal h2 {
     margin: 0;
@@ -1178,6 +1222,20 @@
   .json-editor {
     min-height: 280px;
     flex: 1;
+  }
+  .location-json-label {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .location-json-editor {
+    min-height: 220px;
+    flex: 0 0 auto;
+  }
+  .location-json-hint {
+    line-height: 1.4;
   }
   .error {
     color: var(--danger);

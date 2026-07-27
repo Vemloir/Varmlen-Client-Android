@@ -468,7 +468,7 @@
           <div class="row-title">xray <span class="muted" style="font-weight:400">· TUN</span></div>
           <div class="row-sub muted">{coreStatus(core)}</div>
         </div>
-        <button class="btn" onclick={() => openVersions(core)} title={t("core.versionsTitle")}>
+        <button class="btn versions-btn" onclick={() => openVersions(core)} title={t("core.versionsTitle")}>
           <svg class="btn-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="1.9"
               stroke-linecap="round" />
@@ -1020,6 +1020,13 @@
   }
 
   /* The Versions button on the core row carries its own icon. */
+  .versions-btn {
+    background: var(--bg-elev-2);
+    border: none;
+  }
+  .versions-btn:hover:not(:disabled) {
+    background: var(--bg-elev-3);
+  }
   .btn-ico {
     margin-right: 6px;
     vertical-align: -2px;

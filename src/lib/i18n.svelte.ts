@@ -27,7 +27,7 @@ const EN: Dict = {
   // subscription menu
   "menu.info": "Subscription info",
   "menu.rename": "Rename",
-  "menu.json": "View JSON",
+  "menu.json": "Edit source JSON",
   "menu.pin": "Pin",
   "menu.unpin": "Unpin",
   "menu.remove": "Remove subscription",
@@ -64,6 +64,8 @@ const EN: Dict = {
   "json.edited": "Edited locally. Automatic updates are paused until you refresh from the source.",
   "json.save": "Save changes",
   "json.saving": "Saving…",
+  "json.locationTitle": "Location JSON",
+  "json.locationHint": "Saved locally. Automatic updates pause so the provider cannot overwrite this edit; Refresh restores the provider version.",
 
   // generic
   "common.close": "Close",
@@ -204,7 +206,7 @@ const RU: Dict = {
 
   "menu.info": "Информация о подписке",
   "menu.rename": "Переименовать",
-  "menu.json": "Посмотреть JSON",
+  "menu.json": "Изменить исходный JSON",
   "menu.pin": "Закрепить",
   "menu.unpin": "Открепить",
   "menu.remove": "Удалить подписку",
@@ -237,6 +239,8 @@ const RU: Dict = {
   "json.edited": "Изменён локально. Автообновление приостановлено до ручного обновления из источника.",
   "json.save": "Сохранить изменения",
   "json.saving": "Сохранение…",
+  "json.locationTitle": "JSON локации",
+  "json.locationHint": "Изменение сохраняется локально, а автообновление приостанавливается. Кнопка обновления вернёт версию провайдера.",
 
   "common.close": "Закрыть",
   "common.cancel": "Отмена",

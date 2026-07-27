@@ -126,7 +126,7 @@
     align-items: center;
     gap: 6px;
     padding: 6px 8px 6px 12px;
-    background: var(--bg-elev);
+    background: var(--bg-elev-2);
     border: none;
     border-radius: var(--radius-sm);
     font-size: 13px;
@@ -156,7 +156,7 @@
     min-width: 160px;
     max-width: calc(100vw - 24px);
     left: auto;
-    background: var(--bg-elev-2);
+    background: var(--bg-elev-3);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     box-shadow: var(--shadow);

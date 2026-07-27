@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { formatJson, isJsonInput, isRemoteSource } from "./subscription-json";
+import {
+  formatJson,
+  formatLocationJson,
+  isJsonInput,
+  isRemoteSource,
+  parseLocationJson,
+} from "./subscription-json";
 
 describe("subscription JSON helpers", () => {
   it("detects JSON objects and arrays after whitespace", () => {
@@ -19,6 +25,48 @@ describe("subscription JSON helpers", () => {
     expect(isRemoteSource("https://example.com/sub")).toBe(true);
     expect(isRemoteSource("HTTP://example.com/sub")).toBe(true);
     expect(isRemoteSource("vless://example")).toBe(false);
+  });
+
+  it("round-trips the editable location model without losing transport fields", () => {
+    const source = JSON.stringify({
+      id: "server-1",
+      protocol: "vless",
+      uuid: "16ddb21e-5342-4a82-a870-1038b01b8dbc",
+      password: null,
+      method: null,
+      host: "vpn.example.com",
+      port: 443,
+      label: "Germany | Frankfurt",
+      transport: "xhttp",
+      security: "reality",
+      sni: "gateway.icloud.com",
+      fingerprint: "chrome",
+      public_key: "public-key",
+      short_id: "deadbeef",
+      flow: null,
+      path: "/",
+      mode: "auto",
+      packet_encoding: "xudp",
+      raw_params: { spx: "/", host: "cdn.example.com" },
+    });
+
+    const parsed = parseLocationJson(formatLocationJson(JSON.parse(source)));
+    expect(parsed).toEqual(JSON.parse(source));
+  });
+
+  it("rejects location JSON that cannot produce a safe server config", () => {
+    expect(() =>
+      parseLocationJson('{"protocol":"vless","host":"","port":443,"uuid":"u"}'),
+    ).toThrow("host");
+    expect(() =>
+      parseLocationJson('{"protocol":"vless","host":"vpn.example","port":70000,"uuid":"u"}'),
+    ).toThrow("port");
+    expect(() =>
+      parseLocationJson('{"protocol":"unknown","host":"vpn.example","port":443}'),
+    ).toThrow("protocol");
+    expect(() =>
+      parseLocationJson('{"protocol":"trojan","host":"vpn.example","port":443}'),
+    ).toThrow("password");
   });
 });
 

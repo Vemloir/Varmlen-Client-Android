@@ -42,7 +42,10 @@ describe("card surface contract", () => {
       /\.trigger\[aria-expanded="true"\]\s*\{[^}]*border-top-left-radius:\s*0;/s,
     );
     expect(dropdown).toMatch(
-      /\.trigger\s*\{[^}]*background:\s*var\(--bg-elev\);[^}]*border:\s*none;/s,
+      /\.trigger\s*\{[^}]*background:\s*var\(--bg-elev-2\);[^}]*border:\s*none;/s,
+    );
+    expect(settings).toMatch(
+      /\.versions-btn\s*\{[^}]*background:\s*var\(--bg-elev-2\);[^}]*border:\s*none;/s,
     );
   });
 
