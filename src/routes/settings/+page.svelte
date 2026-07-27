@@ -762,6 +762,7 @@
     width: 100%;
     background: transparent;
     border: none;
+    border-radius: 0;
     cursor: pointer;
     color: var(--text);
     /* <button> defaults to centered text; match the other (div) rows. */
@@ -913,7 +914,7 @@
     cursor: pointer;
   }
   .row + .row {
-    border-top: none;
+    border-top: 1px solid var(--bg);
   }
   /* Sub-setting that only applies when its parent toggle is on. */
   .row.disabled {
@@ -1057,7 +1058,7 @@
     border-radius: var(--radius-sm);
     background: var(--bg-elev-2);
   }
-  .ver-list li + li { border-top: none; }
+  .ver-list li + li { border-top: 1px solid var(--bg); }
   .ver-row {
     color: var(--text);
     padding: 10px 12px;

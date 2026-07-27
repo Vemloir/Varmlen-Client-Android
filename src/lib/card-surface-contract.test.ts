@@ -6,7 +6,7 @@ const read = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
 describe("card surface contract", () => {
-  it("uses borderless card surfaces without row separators", () => {
+  it("uses borderless card surfaces with row separators", () => {
     const css = read("../app.css");
     const home = read("../routes/+page.svelte");
     const settings = read("../routes/settings/+page.svelte");
@@ -15,21 +15,34 @@ describe("card surface contract", () => {
     expect(css).toMatch(/\.card\s*\{[^}]*border:\s*none;/s);
     expect(css).toMatch(/\.list\s*\{[^}]*border:\s*none;/s);
     expect(css).toMatch(
-      /\.list > \* \+ \*\s*\{[^}]*border-top:\s*none;/s,
+      /\.list > \* \+ \*\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
     );
     expect(home).toMatch(/\.sub-card\s*\{[^}]*border:\s*none;/s);
     expect(settings).toMatch(/\.theme-tile\s*\{[^}]*border:\s*none;/s);
     expect(settings).toMatch(
-      /\.row \+ \.row\s*\{[^}]*border-top:\s*none;/s,
+      /\.row \+ \.row\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
     );
     expect(settings).toMatch(/\.ver-list\s*\{[^}]*border:\s*none;/s);
     expect(settings).toMatch(
-      /\.ver-list li \+ li\s*\{\s*border-top:\s*none;/s,
+      /\.ver-list li \+ li\s*\{\s*border-top:\s*1px solid var\(--bg\);/s,
     );
     expect(split).toMatch(/\.empty-state\s*\{[^}]*border:\s*none;/s);
     expect(split).toMatch(/\.picker\s*\{[^}]*border:\s*none;/s);
     expect(split).toMatch(
-      /\.picker-row \+ \.picker-row\s*\{[^}]*border-top:\s*none;/s,
+      /\.picker-row \+ \.picker-row\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
+    );
+  });
+
+  it("keeps the View log hover surface square without changing dropdown rounding", () => {
+    const settings = read("../routes/settings/+page.svelte");
+    const dropdown = read("./components/Dropdown.svelte");
+
+    expect(settings).toMatch(/\.log-row\s*\{[^}]*border-radius:\s*0;/s);
+    expect(dropdown).not.toMatch(
+      /\.trigger\[aria-expanded="true"\]\s*\{[^}]*border-top-left-radius:\s*0;/s,
+    );
+    expect(dropdown).toMatch(
+      /\.trigger\s*\{[^}]*background:\s*var\(--bg-elev\);[^}]*border:\s*none;/s,
     );
   });
 

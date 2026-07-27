@@ -293,7 +293,7 @@ a {
   overflow: hidden;
 }
 .list > * + * {
-  border-top: none;
+  border-top: 1px solid var(--bg);
 }
 .list-row {
   display: flex;

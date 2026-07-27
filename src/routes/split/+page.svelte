@@ -526,7 +526,7 @@
     contain-intrinsic-size: auto 52px;
   }
   .picker-row + .picker-row {
-    border-top: none;
+    border-top: 1px solid var(--bg);
   }
   @media (hover: hover) {
     .picker-row:hover:not(:disabled) {
