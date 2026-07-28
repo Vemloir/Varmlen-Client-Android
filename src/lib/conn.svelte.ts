@@ -110,7 +110,13 @@ class ConnStore {
     const generation = this.operations.begin();
     this.error = null;
     this.blockedByKillswitch = false;
-    const server = subs.selectedServerRaw();
+    let server;
+    try {
+      server = await subs.selectedServerRaw();
+    } catch (error) {
+      if (this.operations.isCurrent(generation)) this.error = msg(error);
+      return;
+    }
     if (!server) {
       this.error = t("conn.selectLocation");
       return;

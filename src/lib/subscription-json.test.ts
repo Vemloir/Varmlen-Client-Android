@@ -73,9 +73,7 @@ describe("subscription JSON helpers", () => {
     expect(JSON.parse(formatLocationJson(server as never))).toEqual(
       JSON.parse(source_json),
     );
-    expect(transportSummary(server as never)).toBe(
-      "VLESS / XHTTP / REALITY / JSON",
-    );
+    expect(transportSummary(server as never)).toBe("VLESS / XHTTP / JSON");
   });
 
   it("rejects location JSON that cannot produce a safe server config", () => {
@@ -108,9 +106,10 @@ describe("subscription JSON store contract", () => {
     expect(source).toContain("srv.raw.raw_outbound === undefined");
   });
 
-  it("supports validated JSON edits and protects them from auto-refresh", () => {
+  it("supports JSON edits while provider refresh remains authoritative", () => {
     expect(source).toContain("async updateJson(");
-    expect(source).toContain("if (s.jsonEdited) return false;");
+    expect(source).not.toContain("if (s.jsonEdited) return false;");
+    expect(source).toContain("editDraft: null");
   });
 
   it("rehydrates old cached JSON locations without downloading the URL", () => {

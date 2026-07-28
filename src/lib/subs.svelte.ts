@@ -17,6 +17,12 @@ import {
   isRemoteConfiguration,
   mergeManualConfigurations,
 } from "$lib/manual-configurations";
+import {
+  compileFieldDraft,
+  type LocationEditDraft,
+} from "$lib/location-draft";
+import { transportSummary } from "$lib/server-label";
+export { transportSummary } from "$lib/server-label";
 
 /** Ping result for a server entry. `null` = unknown / not yet measured,
  *  `"pinging"` = probe in flight, `"timeout"` = host unreachable / timed out,
@@ -29,6 +35,7 @@ export interface ServerEntry {
   name: string;
   transport: string;
   raw: VlessServer;
+  editDraft: LocationEditDraft | null;
 }
 
 export interface Subscription {
@@ -123,6 +130,7 @@ function migrateIds(subs: Subscription[]): { subs: Subscription[]; remapped: Rec
       if (srv.raw && srv.raw.source_json === undefined) srv.raw.source_json = null;
       if (srv.raw && srv.raw.raw_outbound === undefined) srv.raw.raw_outbound = null;
       if (srv.raw && srv.raw.raw_profile === undefined) srv.raw.raw_profile = null;
+      if (srv.editDraft === undefined) srv.editDraft = null;
     }
     if (sub.description === undefined) sub.description = null;
     if (sub.webPageUrl === undefined) sub.webPageUrl = null;
@@ -158,21 +166,6 @@ function load(): Persisted {
   }
 }
 
-const PROTOCOL_LABELS: Record<string, string> = {
-  vless: "VLESS",
-  trojan: "Trojan",
-  shadowsocks: "Shadowsocks",
-  vmess: "VMess",
-};
-
-export function transportSummary(s: VlessServer): string {
-  const proto = PROTOCOL_LABELS[s.protocol] ?? s.protocol.toUpperCase();
-  const parts = [proto, s.transport.toUpperCase()];
-  if (s.security && s.security !== "none") parts.push(s.security.toUpperCase());
-  if (s.source_json) parts.push("JSON");
-  return parts.join(" / ");
-}
-
 function toServerEntry(s: VlessServer): ServerEntry {
   return {
     // Random id avoids collisions when two subscriptions advertise the same
@@ -183,6 +176,7 @@ function toServerEntry(s: VlessServer): ServerEntry {
     name: stripLeadingFlag(s.label),
     transport: transportSummary(s),
     raw: s,
+    editDraft: null,
   };
 }
 
@@ -253,13 +247,28 @@ class SubsStore {
     this.persist();
   }
 
-  /** Parsed server for the current selection, or null if nothing is selected. */
-  selectedServerRaw(): VlessServer | null {
+  /** Compile the persisted edit draft for the current selection. Draft text is
+   *  authoritative: invalid edits fail instead of silently using stale data. */
+  async selectedServerRaw(): Promise<VlessServer | null> {
     const id = this.selectedServerId;
     if (!id) return null;
     for (const sub of this.list) {
       const srv = sub.servers.find((s) => s.id === id);
-      if (srv) return srv.raw;
+      if (!srv) continue;
+      const draft = srv.editDraft;
+      if (!draft) return srv.raw;
+      if (draft.kind === "fields") {
+        const compiled = compileFieldDraft(draft, srv.raw);
+        if (!compiled.ok) throw new Error(compiled.error);
+        return compiled.server;
+      }
+      const parsed = await parseSubscriptionBody(draft.source);
+      if (parsed.length !== 1) {
+        throw new Error(
+          `location JSON must contain exactly one proxy (found ${parsed.length})`,
+        );
+      }
+      return parsed[0];
     }
     return null;
   }
@@ -538,7 +547,6 @@ class SubsStore {
   private async refreshDue(): Promise<void> {
     const now = Date.now();
     const due = this.list.filter((s) => {
-      if (s.jsonEdited) return false;
       if (!s.updateIntervalHours || s.updateIntervalHours <= 0) return false;
       if (s.refreshing) return false;
       const last = Date.parse(s.importedAt);
@@ -560,6 +568,54 @@ class SubsStore {
     this.persist();
   }
 
+  /** Persist any location edit, including invalid text. When it can be parsed,
+   *  also update the row immediately; provider refresh remains authoritative. */
+  async saveServerDraft(
+    serverId: string,
+    draft: LocationEditDraft,
+  ): Promise<ServerEntry> {
+    let compiled: VlessServer | null = null;
+    if (draft.kind === "fields") {
+      const current = this.list
+        .flatMap((sub) => sub.servers)
+        .find((server) => server.id === serverId);
+      if (!current) throw new Error("location not found");
+      const result = compileFieldDraft(draft, current.raw);
+      if (result.ok) compiled = result.server;
+    } else {
+      const parsed = await parseSubscriptionBody(draft.source);
+      if (parsed.length === 1) compiled = parsed[0];
+    }
+
+    let updated: ServerEntry | null = null;
+    this.list = this.list.map((sub) => ({
+      ...sub,
+      servers: sub.servers.map((current) => {
+        if (current.id !== serverId) return current;
+        const raw = compiled
+          ? { ...compiled, id: current.raw.id }
+          : current.raw;
+        updated = {
+          ...current,
+          flag: flagFor(raw.label),
+          name: stripLeadingFlag(raw.label),
+          transport: transportSummary(raw),
+          raw,
+          editDraft: structuredClone(draft),
+        };
+        return updated;
+      }),
+    }));
+    if (!updated) throw new Error("location not found");
+    if (this.selectedServerId === serverId && compiled) {
+      this.selectedKey = serverKey(updated);
+    }
+    const { [serverId]: _stalePing, ...remainingPings } = this.pings;
+    this.pings = remainingPings;
+    this.persist();
+    return updated;
+  }
+
   /** Apply a validated location JSON edit while preserving the UI row identity.
    *  Automatic refresh pauses so a background fetch cannot silently overwrite
    *  the local edit; an explicit refresh still restores the provider version. */
@@ -575,10 +631,10 @@ class SubsStore {
         name: stripLeadingFlag(normalized.label),
         transport: transportSummary(normalized),
         raw: normalized,
+        editDraft: null,
       };
       return {
         ...sub,
-        jsonEdited: true,
         servers: sub.servers.map((server) => (server.id === serverId ? updated! : server)),
       };
     });
