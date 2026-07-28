@@ -83,12 +83,7 @@ fn target_arch() -> &'static str {
 }
 
 fn subscription_user_agent() -> String {
-    format!(
-        "Varmlen/{} ({}; {})",
-        env!("CARGO_PKG_VERSION"),
-        target_platform(),
-        target_arch()
-    )
+    format!("Varmlen ({}; {})", target_platform(), target_arch())
 }
 
 #[tauri::command]
@@ -380,11 +375,10 @@ mod tests {
 
     #[test]
     fn subscription_ua_identifies_target() {
-        let ua = subscription_user_agent();
-        assert!(ua.starts_with(concat!("Varmlen/", env!("CARGO_PKG_VERSION"), " (")));
-        assert!(ua.ends_with(')'));
-        assert!(ua.contains(target_platform()));
-        assert!(ua.contains(target_arch()));
+        assert_eq!(
+            subscription_user_agent(),
+            format!("Varmlen ({}; {})", target_platform(), target_arch())
+        );
     }
 
     #[test]

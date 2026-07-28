@@ -3,10 +3,11 @@
   import { conn } from "$lib/conn.svelte";
   import { subs } from "$lib/subs.svelte";
   import { t } from "$lib/i18n.svelte";
-  import { readClipboard } from "$lib/api";
+  import { parseSubscriptionBody, readClipboard } from "$lib/api";
   import { isAndroid } from "$lib/platform";
   import { placePopup, portal } from "$lib/popup";
   import FlagIcon from "$lib/components/FlagIcon.svelte";
+  import GroupedServerList from "$lib/components/GroupedServerList.svelte";
   import {
     formatJson,
     formatLocationJson,
@@ -124,16 +125,26 @@
     detailJsonDraft = formatLocationJson(server.raw);
     detailJsonError = null;
   }
-  function saveLocationJson(): void {
+  async function saveLocationJson(): Promise<void> {
     if (!detailFor) return;
     detailJsonError = null;
     try {
-      const raw = parseLocationJson(detailJsonDraft);
+      const raw = detailFor.raw.source_json
+        ? await parseEditedSourceLocation(detailJsonDraft)
+        : parseLocationJson(detailJsonDraft);
       detailFor = subs.updateServer(detailFor.id, raw);
       detailJsonDraft = formatLocationJson(detailFor.raw);
     } catch (error) {
       detailJsonError = error instanceof Error ? error.message : String(error);
     }
+  }
+
+  async function parseEditedSourceLocation(source: string) {
+    const servers = await parseSubscriptionBody(source);
+    if (servers.length !== 1) {
+      throw new Error(`location JSON must contain exactly one proxy (found ${servers.length})`);
+    }
+    return servers[0];
   }
 
   // Subscription headers (support / web-page URLs) are attacker-controlled, so
@@ -376,41 +387,13 @@
       {/if}
 
       {#if !sub.collapsed}
-        <ul class="server-list">
-          {#each sub.servers as srv (srv.id)}
-            {@const ping = subs.pings[srv.id]}
-            <li
-              class="srv-row"
-              class:active={subs.selectedServerId === srv.id}
-            >
-              <span class="srv-stripe"></span>
-              <button class="srv-btn" onclick={() => subs.selectServer(srv.id)}>
-                <FlagIcon flag={srv.flag ?? ""} />
-                <div class="srv-info">
-                  <div class="srv-name">{srv.name}</div>
-                  <div class="srv-tr dim">{srv.transport}</div>
-                </div>
-              </button>
-              <span class="srv-ping" aria-label="latency">
-                {#if ping === "pinging"}…
-                {:else if ping === "timeout"}{t("ping.na")}
-                {:else if typeof ping === "number"}{t("ping.ms", { n: ping })}
-                {/if}
-              </span>
-              <button
-                class="srv-detail"
-                aria-label="Location details"
-                onclick={() => openDetails(srv)}
-              >
-                <span class="chev-hit">
-                  <svg width="16" height="16" viewBox="0 0 24 24" class="chev" aria-hidden="true">
-                    <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </span>
-              </button>
-            </li>
-          {/each}
-        </ul>
+        <GroupedServerList
+          servers={sub.servers}
+          selectedServerId={subs.selectedServerId}
+          pings={subs.pings}
+          onSelect={(id) => subs.selectServer(id)}
+          onDetails={openDetails}
+        />
       {/if}
     </section>
   {/each}
@@ -518,7 +501,7 @@
         <button class="btn btn-ghost" onclick={() => (detailFor = null)}>
           {t("common.cancel")}
         </button>
-        <button class="btn btn-primary" onclick={saveLocationJson} disabled={!detailJsonDraft.trim()}>
+        <button class="btn btn-primary" onclick={() => void saveLocationJson()} disabled={!detailJsonDraft.trim()}>
           {t("json.save")}
         </button>
       </div>
@@ -1043,112 +1026,6 @@
   }
   .small {
     font-size: 11px;
-  }
-
-  /* ---------- server list ---------- */
-  .server-list {
-    list-style: none;
-    margin: 0;
-    /* no bottom padding: the last row reaches the card's rounded bottom edge,
-       which clips it (sub-card has overflow:hidden) so its highlight fills the
-       corner instead of leaving a dark gap */
-    padding: 4px 0 0;
-  }
-  .srv-row {
-    position: relative;
-    display: flex;
-    align-items: stretch;
-    background: transparent;
-    transition: background var(--transition);
-  }
-  /* Hovering anywhere on the row highlights the whole row. */
-  @media (hover: hover) {
-    .srv-row:hover {
-      background: var(--bg-elev-2);
-    }
-  }
-  .srv-btn {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 4px 10px 14px;
-    background: transparent;
-    border: none;
-    color: inherit;
-    text-align: left;
-    border-radius: 0;
-  }
-  .srv-detail {
-    flex-shrink: 0;
-    width: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: none;
-    border-radius: 0;
-    color: var(--text-dim);
-  }
-  .chev-hit {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  /* Hovering the arrow itself just makes it brighter — no separate backdrop. */
-  @media (hover: hover) {
-    .srv-detail:hover {
-      color: var(--text);
-    }
-  }
-  .srv-stripe {
-    position: absolute;
-    left: 0;
-    top: 4px;
-    bottom: 4px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
-    background: transparent;
-    transition: background var(--transition);
-  }
-  .srv-row.active .srv-stripe {
-    background: var(--accent);
-  }
-  .srv-row.active {
-    background: var(--accent-faint);
-  }
-  .srv-info {
-    flex: 1;
-    min-width: 0;
-  }
-  .srv-name {
-    font-weight: 600;
-    font-size: 14px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .srv-tr {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-top: 2px;
-  }
-  .chev {
-    color: inherit;
-    flex-shrink: 0;
-  }
-  /* Latency text sits between the server name+transport block and the
-     details chevron — Happ-style: muted, right-aligned, vertically centered. */
-  .srv-ping {
-    align-self: center;
-    font-variant-numeric: tabular-nums;
-    font-size: 12px;
-    min-width: 44px;
-    text-align: right;
-    padding-right: 4px;
-    color: var(--muted, #888);
   }
 
   .empty {

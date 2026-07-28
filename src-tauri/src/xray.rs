@@ -81,6 +81,59 @@ impl TunMode {
     }
 }
 
+/// Reject configurations that the normalized model would otherwise silently
+/// reinterpret. JSON-backed locations keep their exact outbound, so any real
+/// proxy protocol supported by the parser can pass through unchanged.
+pub fn validate_server(server: &VlessServer) -> Result<(), String> {
+    if let Some(raw_outbound) = server.raw_outbound.as_ref() {
+        let protocol = raw_outbound
+            .get("protocol")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "JSON location has no outbound protocol".to_string())?
+            .to_ascii_lowercase();
+        if matches!(
+            protocol.as_str(),
+            "freedom" | "blackhole" | "dns" | "loopback" | "block" | "direct"
+        ) {
+            return Err(format!(
+                "unsupported proxy protocol in JSON location: {protocol}"
+            ));
+        }
+        return Ok(());
+    }
+
+    let protocol = server.protocol.to_ascii_lowercase();
+    if !matches!(
+        protocol.as_str(),
+        "vless" | "vmess" | "trojan" | "shadowsocks"
+    ) {
+        return Err(format!("unsupported protocol: {}", server.protocol));
+    }
+
+    let transport = server.transport.to_ascii_lowercase();
+    if !matches!(
+        transport.as_str(),
+        "" | "raw"
+            | "tcp"
+            | "xhttp"
+            | "splithttp"
+            | "ws"
+            | "websocket"
+            | "grpc"
+            | "gun"
+            | "httpupgrade"
+            | "http"
+            | "h2"
+            | "h3"
+            | "kcp"
+            | "mkcp"
+    ) {
+        return Err(format!("unsupported transport: {}", server.transport));
+    }
+
+    Ok(())
+}
+
 /// Map our `transport` field to xray's `streamSettings.network`, normalising the
 /// various aliases subscriptions use. `splithttp` is the old name for `xhttp`;
 /// `raw` is the new name for `tcp`; `h2` is `http`. Unknown → tcp.
@@ -166,9 +219,22 @@ fn build_stream_settings(s: &VlessServer) -> Value {
     let path = s.path.clone().unwrap_or_else(|| "/".into());
     match network {
         "xhttp" => {
-            let mut xs = serde_json::Map::new();
-            xs.insert("path".into(), json!(path));
-            xs.insert("mode".into(), json!(s.mode.clone().unwrap_or_else(|| "auto".into())));
+            let mut xs = s
+                .raw_params
+                .get("extra")
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            if let Some(explicit_path) = &s.path {
+                xs.insert("path".into(), json!(explicit_path));
+            } else {
+                xs.entry("path").or_insert_with(|| json!(path));
+            }
+            if let Some(explicit_mode) = &s.mode {
+                xs.insert("mode".into(), json!(explicit_mode));
+            } else {
+                xs.entry("mode").or_insert_with(|| json!("auto"));
+            }
             if let Some(host) = host_hdr {
                 xs.insert("host".into(), json!(host));
             }
@@ -256,6 +322,30 @@ fn build_stream_settings(s: &VlessServer) -> Value {
 /// The parsed model (`VlessServer`) carries every field; only the JSON shape
 /// differs (vnext for vless/vmess, servers for trojan/shadowsocks).
 fn build_proxy_outbound(s: &VlessServer) -> Value {
+    if let Some(Value::Object(mut outbound)) = s.raw_outbound.clone() {
+        // The provider owns only the proxy protocol/transport details. Chaining
+        // and source-binding fields could bypass Varmlen's routing policy.
+        outbound.remove("sendThrough");
+        outbound.remove("proxySettings");
+        outbound.insert("tag".into(), json!("proxy"));
+
+        let stream = outbound
+            .entry("streamSettings")
+            .or_insert_with(|| json!({}));
+        if !stream.is_object() {
+            *stream = json!({});
+        }
+        let stream = stream.as_object_mut().expect("object inserted above");
+        let sockopt = stream.entry("sockopt").or_insert_with(|| json!({}));
+        if !sockopt.is_object() {
+            *sockopt = json!({});
+        }
+        let sockopt = sockopt.as_object_mut().expect("object inserted above");
+        sockopt.remove("dialerProxy");
+        sockopt.insert("mark".into(), json!(XRAY_DIAL_MARK));
+        return Value::Object(outbound);
+    }
+
     let stream = build_stream_settings(s);
     match s.protocol.as_str() {
         "vmess" => json!({
@@ -555,6 +645,7 @@ pub fn generate_xray_config(
     mode: String,
     allow_lan: bool,
 ) -> Result<String, String> {
+    validate_server(&server)?;
     let cfg = build_xray_config(
         &server,
         &split,
@@ -569,7 +660,7 @@ pub fn generate_xray_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subscription::parse_proxy_uri;
+    use crate::subscription::{parse_proxy_uri, parse_subscription};
     use base64::Engine;
 
     fn split() -> SplitInput {
@@ -611,6 +702,57 @@ mod tests {
     }
 
     #[test]
+    fn json_location_reuses_provider_outbound_but_not_provider_policy() {
+        let body = r#"{
+          "remarks": "Germany",
+          "dns": {"servers": ["https://resolver.invalid/dns-query"]},
+          "routing": {"rules": [{"outboundTag": "provider-direct"}]},
+          "outbounds": [{
+            "tag": "provider-proxy",
+            "protocol": "vless",
+            "settings": {
+              "vnext": [{
+                "address": "de.example.com",
+                "port": 443,
+                "users": [{"id": "uuid"}]
+              }]
+            },
+            "streamSettings": {
+              "network": "xhttp",
+              "security": "none",
+              "xhttpSettings": {
+                "path": "/",
+                "mode": "packet-up",
+                "xmux": {"hKeepAlivePeriod": 15}
+              }
+            }
+          }]
+        }"#;
+        let server = parse_subscription(body).remove(0);
+        let cfg = build_xray_config(
+            &server,
+            &split(),
+            "tun",
+            TunMode::XrayNative,
+            false,
+            "warning",
+        );
+        let proxy = &cfg["outbounds"][0];
+        assert_eq!(proxy["tag"], "proxy");
+        assert_eq!(
+            proxy["streamSettings"]["xhttpSettings"]["xmux"]["hKeepAlivePeriod"],
+            15
+        );
+        assert_eq!(proxy["streamSettings"]["sockopt"]["mark"], XRAY_DIAL_MARK);
+        assert_eq!(cfg["dns"]["servers"][0], "https://1.1.1.1/dns-query");
+        assert!(cfg["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|rule| rule["outboundTag"] != "provider-direct"));
+    }
+
+    #[test]
     fn tcp_reality_vision_keeps_flow() {
         let s = parse_proxy_uri(
             "vless://uuid-1@1.2.3.4:443?type=tcp&security=reality&flow=xtls-rprx-vision&sni=icloud.com&pbk=K&sid=ab&fp=chrome#X",
@@ -647,6 +789,34 @@ mod tests {
             stream_for("vless://u@1.2.3.4:443?type=splithttp&security=reality&pbk=K&path=%2Fx#S");
         assert_eq!(ss["network"], "xhttp");
         assert_eq!(ss["xhttpSettings"]["path"], "/x");
+    }
+
+    #[test]
+    fn proxen_xhttp_extra_preserves_mode_and_xmux() {
+        let ss = stream_for(concat!(
+            "vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K",
+            "&extra=%7B%22mode%22%3A%22packet-up%22%2C%22xmux%22%3A%7B",
+            "%22maxConcurrency%22%3A1%2C%22hKeepAlivePeriod%22%3A30%7D%7D#P"
+        ));
+        assert_eq!(ss["xhttpSettings"]["mode"], "packet-up");
+        assert_eq!(ss["xhttpSettings"]["xmux"]["maxConcurrency"], 1);
+        assert_eq!(ss["xhttpSettings"]["xmux"]["hKeepAlivePeriod"], 30);
+    }
+
+    #[test]
+    fn unsupported_normalized_protocol_and_transport_are_rejected() {
+        let mut server =
+            parse_proxy_uri("vless://u@1.2.3.4:443?type=tcp&security=reality&pbk=K#X").unwrap();
+        server.protocol = "unknown".into();
+        assert!(validate_server(&server)
+            .unwrap_err()
+            .contains("unsupported protocol"));
+
+        server.protocol = "vless".into();
+        server.transport = "unknown-transport".into();
+        assert!(validate_server(&server)
+            .unwrap_err()
+            .contains("unsupported transport"));
     }
 
     #[test]

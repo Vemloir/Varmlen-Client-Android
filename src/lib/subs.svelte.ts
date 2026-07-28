@@ -1,6 +1,7 @@
 import { browser } from "$app/environment";
 import {
   fetchSubscription,
+  parseSubscriptionBody,
   flagFor,
   stripLeadingFlag,
   formatBytes,
@@ -69,7 +70,16 @@ interface Persisted {
 
 /** Stable identity of a server entry (random `id` changes on every parse). */
 function serverKey(srv: ServerEntry): string {
-  return srv.raw ? `${srv.raw.host}:${srv.raw.port}` : srv.id;
+  return srv.raw
+    ? [
+        srv.raw.protocol,
+        srv.raw.host,
+        srv.raw.port,
+        srv.raw.uuid,
+        srv.raw.password ?? "",
+        srv.raw.method ?? "",
+      ].join("\u0000")
+    : srv.id;
 }
 
 const KEY = "varmlen.subs";
@@ -103,6 +113,11 @@ function migrateIds(subs: Subscription[]): { subs: Subscription[]; remapped: Rec
       // Re-derive the flag from the original label so entries imported before
       // we preferred the label's own flag emoji pick up the correct one.
       if (srv.raw?.label) srv.flag = flagFor(srv.raw.label);
+      // JSON metadata was added after 0.2.0. Normalize old persisted entries so
+      // the editor and transport badge can distinguish them safely; the next
+      // normal subscription refresh fills the exact provider JSON/outbound.
+      if (srv.raw && srv.raw.source_json === undefined) srv.raw.source_json = null;
+      if (srv.raw && srv.raw.raw_outbound === undefined) srv.raw.raw_outbound = null;
     }
     if (sub.description === undefined) sub.description = null;
     if (sub.webPageUrl === undefined) sub.webPageUrl = null;
@@ -145,10 +160,11 @@ const PROTOCOL_LABELS: Record<string, string> = {
   vmess: "VMess",
 };
 
-function transportSummary(s: VlessServer): string {
+export function transportSummary(s: VlessServer): string {
   const proto = PROTOCOL_LABELS[s.protocol] ?? s.protocol.toUpperCase();
   const parts = [proto, s.transport.toUpperCase()];
   if (s.security && s.security !== "none") parts.push(s.security.toUpperCase());
+  if (s.source_json) parts.push("JSON");
   return parts.join(" / ");
 }
 
@@ -459,8 +475,43 @@ class SubsStore {
     if (this.autoRefreshStarted) return;
     this.autoRefreshStarted = true;
     const check = () => void this.refreshDue();
-    check();
+    void this.rehydratePersistedJson().finally(check);
     this.autoRefreshTimer = setInterval(check, 5 * 60 * 1000);
+  }
+
+  /** Reparse JSON already cached by 0.2.0 with the new lossless parser. This is
+   *  deliberately local-only: it fixes old IP:port labels immediately without
+   *  fetching the subscription URL or overwriting a user's local JSON edit. */
+  private async rehydratePersistedJson(): Promise<void> {
+    const stale = this.list.filter(
+      (sub) =>
+        sub.sourceJson &&
+        !sub.jsonEdited &&
+        sub.servers.some(
+          (server) =>
+            server.raw.source_json == null || server.raw.raw_outbound == null,
+        ),
+    );
+    let changed = false;
+    for (const sub of stale) {
+      if (!sub.sourceJson) continue;
+      try {
+        const parsed = await parseSubscriptionBody(sub.sourceJson);
+        if (parsed.length === 0) continue;
+        this.list = this.list.map((current) =>
+          current.id === sub.id
+            ? { ...current, servers: parsed.map(toServerEntry) }
+            : current,
+        );
+        changed = true;
+      } catch (error) {
+        console.error("cached JSON migration failed:", error);
+      }
+    }
+    if (changed) {
+      this.reconcileSelection();
+      this.prunePings();
+    }
   }
 
   /** Refresh every subscription whose update interval has elapsed. */

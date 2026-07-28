@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1
+
+- Fixed disconnect so the UI waits for the Android VPN service to tear down
+  tun2socks, Xray, and the TUN before reporting success.
+- Use a stable Android Varmlen subscription user agent without an app version.
+- Preserve provider location names, editable source JSON, and the exact Xray
+  proxy outbound instead of showing JSON locations as `IP:port`.
+- Preserve Proxen XHTTP `extra`, mode, and XMUX settings.
+- Group primary and backup variants under one expandable location.
+- Accept Xray JSON outbounds for VMess, Trojan, Shadowsocks, Hysteria,
+  WireGuard, HTTP, and SOCKS in addition to VLESS.
+- Reparse JSON already stored by 0.2.0 locally, without downloading the
+  subscription again.
+
 ## 0.2.0
 
 ### Corrected Android reissue

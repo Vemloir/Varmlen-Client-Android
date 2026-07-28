@@ -41,7 +41,9 @@ function optionalString(object: JsonObject, name: string): string | null {
 
 /** Pretty JSON shown in the location detail editor. */
 export function formatLocationJson(server: VlessServer): string {
-  return JSON.stringify(server, null, 2);
+  return server.source_json
+    ? formatJson(server.source_json)
+    : JSON.stringify(server, null, 2);
 }
 
 /** Parse the editable location model into the exact structure consumed by the
@@ -106,5 +108,7 @@ export function parseLocationJson(source: string): VlessServer {
     mode: optionalString(object, "mode"),
     packet_encoding: optionalString(object, "packet_encoding"),
     raw_params,
+    source_json: null,
+    raw_outbound: null,
   };
 }

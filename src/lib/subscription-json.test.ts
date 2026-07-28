@@ -8,6 +8,7 @@ import {
   isRemoteSource,
   parseLocationJson,
 } from "./subscription-json";
+import { transportSummary } from "./subs.svelte";
 
 describe("subscription JSON helpers", () => {
   it("detects JSON objects and arrays after whitespace", () => {
@@ -48,10 +49,32 @@ describe("subscription JSON helpers", () => {
       mode: "auto",
       packet_encoding: "xudp",
       raw_params: { spx: "/", host: "cdn.example.com" },
+      source_json: null,
+      raw_outbound: null,
     });
 
     const parsed = parseLocationJson(formatLocationJson(JSON.parse(source)));
     expect(parsed).toEqual(JSON.parse(source));
+  });
+
+  it("shows the provider JSON for a JSON-backed location", () => {
+    const source_json = JSON.stringify({
+      remarks: "Germany",
+      outbounds: [{ protocol: "vless", settings: { vnext: [] } }],
+    });
+    const server = {
+      protocol: "vless",
+      transport: "xhttp",
+      security: "reality",
+      source_json,
+    };
+
+    expect(JSON.parse(formatLocationJson(server as never))).toEqual(
+      JSON.parse(source_json),
+    );
+    expect(transportSummary(server as never)).toBe(
+      "VLESS / XHTTP / REALITY / JSON",
+    );
   });
 
   it("rejects location JSON that cannot produce a safe server config", () => {
@@ -80,10 +103,17 @@ describe("subscription JSON store contract", () => {
     expect(source).toContain("sourceJson: string | null;");
     expect(source).toContain("jsonEdited: boolean;");
     expect(source).toContain("sourceJson: result.source_json");
+    expect(source).toContain("srv.raw.source_json === undefined");
+    expect(source).toContain("srv.raw.raw_outbound === undefined");
   });
 
   it("supports validated JSON edits and protects them from auto-refresh", () => {
     expect(source).toContain("async updateJson(");
     expect(source).toContain("if (s.jsonEdited) return false;");
+  });
+
+  it("rehydrates old cached JSON locations without downloading the URL", () => {
+    expect(source).toContain("parseSubscriptionBody(sub.sourceJson)");
+    expect(source).toContain("void this.rehydratePersistedJson()");
   });
 });

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::CoreKind;
 use crate::split::SplitInput;
 use crate::subscription::VlessServer;
-use crate::xray::{build_xray_config, TunMode};
+use crate::xray::{build_xray_config, validate_server, TunMode};
 
 /// Returned to the frontend; shape unchanged from the old socket protocol so
 /// `api.ts` keeps working.
@@ -481,6 +481,7 @@ pub async fn vpn_connect(
     // tun + tun2socks + bundled xray live in the Kotlin VpnPlugin; the kill
     // switch / routing are the OS's job there.
     let level = log_level.unwrap_or_else(|| "warn".to_string());
+    validate_server(&server)?;
     #[cfg(target_os = "android")]
     {
         let _ = killswitch;
@@ -935,6 +936,7 @@ pub async fn proxy_get_ping(
     server: VlessServer,
     timeout_ms: Option<u32>,
 ) -> Result<u32, String> {
+    validate_server(&server)?;
     let ms = timeout_ms.unwrap_or(5000) as u64;
     let port = free_local_port()?;
     let cfg = serde_json::to_string(&crate::xray::build_ping_config(&server, port))

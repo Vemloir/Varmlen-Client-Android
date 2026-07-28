@@ -23,6 +23,7 @@ const EN: Dict = {
   "home.empty": "No subscriptions yet. Tap + in the top-right corner.",
   "home.autoUpdate": "auto-update {h}h",
   "home.expires": "Expires: {date}",
+  "home.variants": "{n} variants",
 
   // subscription menu
   "menu.info": "Subscription info",
@@ -203,6 +204,7 @@ const RU: Dict = {
   "home.empty": "Пока нет подписок. Нажмите + в правом верхнем углу.",
   "home.autoUpdate": "автообновление {h}ч",
   "home.expires": "Истекает: {date}",
+  "home.variants": "вариантов: {n}",
 
   "menu.info": "Информация о подписке",
   "menu.rename": "Переименовать",

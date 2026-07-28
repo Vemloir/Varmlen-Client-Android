@@ -117,7 +117,14 @@ class VarmlenVpnService : VpnService() {
         }
 
         fun stop(ctx: Context) {
-            ctx.stopService(Intent(ctx, VarmlenVpnService::class.java))
+            stop(ctx, null)
+        }
+
+        fun stop(ctx: Context, requestId: String?) {
+            val intent = Intent(ctx, VarmlenVpnService::class.java)
+                .setAction(ACTION_DISCONNECT)
+            if (requestId != null) intent.putExtra(EXTRA_REQUEST_ID, requestId)
+            ctx.startService(intent)
         }
     }
 
@@ -136,7 +143,7 @@ class VarmlenVpnService : VpnService() {
         when (intent?.action) {
             ACTION_DISCONNECT -> {
                 log("disconnect")
-                stopAll()
+                stopAll(requestId = intent.getStringExtra(EXTRA_REQUEST_ID))
                 return START_NOT_STICKY
             }
             ACTION_CONNECT -> {
@@ -323,12 +330,23 @@ class VarmlenVpnService : VpnService() {
         tun = null
     }
 
-    private fun stopAll(error: String? = null, requestId: String? = null) {
+    @Volatile private var stopAllInProgress = false
+
+    @Synchronized
+    private fun stopAll(
+        error: String? = null,
+        requestId: String? = null,
+        requestStopSelf: Boolean = true,
+    ) {
+        if (stopAllInProgress) return
+        stopAllInProgress = true
         setWant(this, false)
-        broadcastState(false, error, requestId)
         teardown()
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
-        stopSelf()
+        // Confirm only after every data-plane component is down. The plugin
+        // keeps disconnect() pending until it receives this request ID.
+        broadcastState(false, error, requestId)
+        if (requestStopSelf) stopSelf()
     }
 
     override fun onRevoke() {
@@ -339,7 +357,7 @@ class VarmlenVpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        stopAll()
+        stopAll(requestStopSelf = false)
         super.onDestroy()
     }
 

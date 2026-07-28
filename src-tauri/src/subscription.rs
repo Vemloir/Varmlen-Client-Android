@@ -97,6 +97,14 @@ pub struct VlessServer {
     pub packet_encoding: Option<String>,
     #[serde(default)]
     pub raw_params: HashMap<String, String>,
+    /// The provider's actual JSON object for this location. This is absent for
+    /// URI/Base64 locations and is shown verbatim (pretty-printed) by the UI.
+    #[serde(default)]
+    pub source_json: Option<String>,
+    /// Exact proxy outbound extracted from `source_json`. Config generation
+    /// reuses only this object; provider routing/DNS/inbounds are never adopted.
+    #[serde(default)]
+    pub raw_outbound: Option<serde_json::Value>,
 }
 
 impl VlessServer {
@@ -121,6 +129,8 @@ impl VlessServer {
             mode: None,
             packet_encoding: None,
             raw_params: HashMap::new(),
+            source_json: None,
+            raw_outbound: None,
         }
     }
 }
@@ -284,9 +294,7 @@ pub fn parse_json_subscription(body: &str) -> (Option<String>, Vec<VlessServer>)
     };
     let name = json_str_any(&v, &["remarks", "name", "ps", "title", "Profile-Title"]);
     let mut out = Vec::new();
-    collect_json_servers(&v, &mut out, 0);
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|s| seen.insert(s.id.clone()));
+    collect_json_servers(&v, &mut out, 0, None);
     // A single-server config has no per-server label worth showing (the outbound
     // tag is usually just "proxy"), so use the config's own name for it.
     if out.len() == 1 {
@@ -311,17 +319,29 @@ fn json_str_any(v: &serde_json::Value, keys: &[&str]) -> Option<String> {
 }
 
 fn is_proxy_protocol(p: &str) -> bool {
-    matches!(p, "vless" | "vmess" | "trojan" | "shadowsocks")
+    matches!(
+        p,
+        "vless" | "vmess" | "trojan" | "shadowsocks" | "hysteria" | "wireguard" | "http" | "socks"
+    )
 }
 
-fn collect_json_servers(v: &serde_json::Value, out: &mut Vec<VlessServer>, depth: u8) {
+fn collect_json_servers(
+    v: &serde_json::Value,
+    out: &mut Vec<VlessServer>,
+    depth: u8,
+    location_source: Option<&serde_json::Value>,
+) {
     if depth > 6 {
         return;
     }
     match v {
         serde_json::Value::Array(arr) => {
             for el in arr {
-                collect_json_servers(el, out, depth + 1);
+                // At a location-list boundary, each JSON object is its own
+                // editable source. Inside a full config, keep the parent config
+                // while traversing its `outbounds` array.
+                let source = location_source.or_else(|| el.is_object().then_some(el));
+                collect_json_servers(el, out, depth + 1, source);
             }
         }
         serde_json::Value::String(s) => {
@@ -340,22 +360,28 @@ fn collect_json_servers(v: &serde_json::Value, out: &mut Vec<VlessServer>, depth
                 .map(is_proxy_protocol)
                 .unwrap_or(false)
             {
-                if let Some(s) = parse_outbound(v) {
+                if let Some(mut s) = parse_outbound(v) {
+                    let source = location_source.unwrap_or(v);
+                    if let Some(name) = json_str_any(source, &["remarks", "name", "ps", "title"]) {
+                        s.label = name;
+                    }
+                    s.source_json = serde_json::to_string(source).ok();
+                    s.raw_outbound = Some(v.clone());
                     out.push(s);
                 }
                 return;
             }
-            // Otherwise recurse into the common container keys.
-            for key in [
-                "outbounds",
-                "servers",
-                "links",
-                "proxies",
-                "configs",
-                "list",
-            ] {
+            // A full Xray config is the location source for every proxy
+            // outbound it contains. Utility outbounds are filtered above.
+            if let Some(child) = obj.get("outbounds") {
+                let source = location_source.unwrap_or(v);
+                collect_json_servers(child, out, depth + 1, Some(source));
+            }
+            // Generic wrappers contain a list of independent locations, so
+            // reset the source and let each child object become its own.
+            for key in ["servers", "links", "proxies", "configs", "list"] {
                 if let Some(child) = obj.get(key) {
-                    collect_json_servers(child, out, depth + 1);
+                    collect_json_servers(child, out, depth + 1, None);
                 }
             }
         }
@@ -376,6 +402,11 @@ fn json_port(v: Option<&serde_json::Value>) -> Option<u16> {
         serde_json::Value::String(st) => st.parse().ok(),
         _ => None,
     }
+}
+
+fn endpoint_host_port(endpoint: &str) -> Option<(String, u16)> {
+    let parsed = Url::parse(&format!("tcp://{endpoint}")).ok()?;
+    Some((parsed.host_str()?.to_string(), parsed.port()?))
 }
 
 /// Map an xray streamSettings `network` back to our transport name (the inverse
@@ -442,6 +473,39 @@ fn parse_outbound(ob: &serde_json::Value) -> Option<VlessServer> {
             let mut s = VlessServer::base("shadowsocks", host.clone(), port, label(&host, port));
             s.method = json_str(srv, "method");
             s.password = json_str(srv, "password");
+            s
+        }
+        "hysteria" => {
+            let settings = settings?;
+            let host = json_str(settings, "address")?;
+            let port = json_port(settings.get("port"))?;
+            let mut s = VlessServer::base("hysteria", host.clone(), port, label(&host, port));
+            s.uuid = stream
+                .and_then(|value| value.get("hysteriaSettings"))
+                .and_then(|value| json_str(value, "auth"))
+                .or_else(|| json_str(settings, "auth"))
+                .unwrap_or_default();
+            s
+        }
+        "wireguard" => {
+            let settings = settings?;
+            let peer = settings.get("peers")?.as_array()?.first()?;
+            let endpoint = json_str(peer, "endpoint")?;
+            let (host, port) = endpoint_host_port(&endpoint)?;
+            let mut s = VlessServer::base("wireguard", host.clone(), port, label(&host, port));
+            s.uuid = json_str(settings, "secretKey").unwrap_or_default();
+            s.transport = "wireguard".into();
+            s
+        }
+        "http" | "socks" => {
+            let srv = settings?.get("servers")?.as_array()?.first()?;
+            let host = json_str(srv, "address")?;
+            let port = json_port(srv.get("port"))?;
+            let mut s = VlessServer::base(protocol, host.clone(), port, label(&host, port));
+            if let Some(user) = srv.get("users").and_then(|users| users.as_array()?.first()) {
+                s.uuid = json_str_any(user, &["user", "username"]).unwrap_or_default();
+                s.password = json_str_any(user, &["pass", "password"]);
+            }
             s
         }
         _ => return None,
@@ -571,6 +635,17 @@ pub fn parse_vless(uri: &str) -> Result<VlessServer, ParseError> {
         .query_pairs()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
+    if params.get("type").map(String::as_str) == Some("xhttp") {
+        if let Some(extra) = params.get("extra") {
+            let value: serde_json::Value = serde_json::from_str(extra)
+                .map_err(|e| ParseError::InvalidUri(format!("xhttp extra JSON: {e}")))?;
+            if !value.is_object() {
+                return Err(ParseError::InvalidUri(
+                    "xhttp extra JSON must be an object".into(),
+                ));
+            }
+        }
+    }
 
     let mut s = VlessServer::base(
         "vless",
@@ -1017,6 +1092,145 @@ mod tests {
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].host, "de.example.com");
         assert_eq!(servers[0].label, "Germany");
+    }
+
+    #[test]
+    fn json_location_keeps_exact_source_and_proxy_outbound() {
+        let body = r#"[{
+          "remarks": "Germany | Frankfurt",
+          "dns": {"servers": ["https://resolver.invalid/dns-query"]},
+          "outbounds": [{
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": {
+              "vnext": [{
+                "address": "de.example.com",
+                "port": 443,
+                "users": [{ "id": "3f7e7d8c-1234-5678-9abc-def012345678" }]
+              }]
+            },
+            "streamSettings": {
+              "network": "xhttp",
+              "security": "reality",
+              "xhttpSettings": {
+                "path": "/",
+                "mode": "packet-up",
+                "xmux": {"hKeepAlivePeriod": 15}
+              }
+            }
+          }, {
+            "tag": "direct",
+            "protocol": "freedom"
+          }]
+        }]"#;
+        let root: serde_json::Value = serde_json::from_str(body).unwrap();
+        let servers = parse_subscription(body);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                servers[0].source_json.as_deref().expect("source JSON")
+            )
+            .unwrap(),
+            root[0]
+        );
+        assert_eq!(
+            servers[0]
+                .raw_outbound
+                .as_ref()
+                .and_then(|outbound| outbound.get("protocol")),
+            Some(&serde_json::json!("vless"))
+        );
+        assert!(servers[0]
+            .raw_outbound
+            .as_ref()
+            .and_then(|outbound| outbound.get("dns"))
+            .is_none());
+        assert_eq!(servers[0].label, "Germany | Frankfurt");
+    }
+
+    #[test]
+    fn json_locations_sharing_an_endpoint_are_not_collapsed() {
+        let body = r#"[
+          {
+            "remarks": "Frankfurt primary",
+            "outbounds": [{
+              "protocol": "vless",
+              "settings": {"vnext": [{
+                "address": "shared.example.com",
+                "port": 443,
+                "users": [{"id": "11111111-1111-1111-1111-111111111111"}]
+              }]}
+            }]
+          },
+          {
+            "remarks": "Frankfurt backup",
+            "outbounds": [{
+              "protocol": "vless",
+              "settings": {"vnext": [{
+                "address": "shared.example.com",
+                "port": 443,
+                "users": [{"id": "22222222-2222-2222-2222-222222222222"}]
+              }]}
+            }]
+          }
+        ]"#;
+
+        let servers = parse_subscription(body);
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0].label, "Frankfurt primary");
+        assert_eq!(servers[1].label, "Frankfurt backup");
+    }
+
+    #[test]
+    fn parses_additional_xray_json_outbound_protocols() {
+        let body = r#"[
+          {
+            "remarks": "Hysteria",
+            "outbounds": [{
+              "protocol": "hysteria",
+              "settings": {"address": "hy.example.com", "port": 443, "version": 2},
+              "streamSettings": {"network": "hysteria", "security": "tls"}
+            }]
+          },
+          {
+            "remarks": "WireGuard",
+            "outbounds": [{
+              "protocol": "wireguard",
+              "settings": {
+                "secretKey": "secret",
+                "address": ["10.0.0.2/32"],
+                "peers": [{"publicKey": "public", "endpoint": "wg.example.com:2408"}]
+              }
+            }]
+          },
+          {
+            "remarks": "HTTP proxy",
+            "outbounds": [{
+              "protocol": "http",
+              "settings": {"servers": [{"address": "http.example.com", "port": 8443}]}
+            }]
+          },
+          {
+            "remarks": "SOCKS proxy",
+            "outbounds": [{
+              "protocol": "socks",
+              "settings": {"servers": [{"address": "socks.example.com", "port": 1080}]}
+            }]
+          }
+        ]"#;
+        let servers = parse_subscription(body);
+        assert_eq!(
+            servers
+                .iter()
+                .map(|server| server.protocol.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hysteria", "wireguard", "http", "socks"]
+        );
+        assert_eq!(servers[0].host, "hy.example.com");
+        assert_eq!(servers[1].host, "wg.example.com");
+        assert_eq!(servers[1].port, 2408);
+        assert_eq!(servers[2].label, "HTTP proxy");
+        assert!(servers.iter().all(|server| server.raw_outbound.is_some()));
     }
 
     #[test]

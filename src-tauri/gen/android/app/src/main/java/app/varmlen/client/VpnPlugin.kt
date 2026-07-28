@@ -59,6 +59,8 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
     private var pendingArgs: ConnectArgs? = null
     private data class PendingConnect(val id: String, val invoke: Invoke)
     private var pendingConnect: PendingConnect? = null
+    private data class PendingDisconnect(val id: String, val invoke: Invoke)
+    private var pendingDisconnect: PendingDisconnect? = null
     private val connectTimeouts = Handler(Looper.getMainLooper())
 
     // Bridges the VpnService's (other-process) state broadcast to a JS event, so
@@ -71,11 +73,48 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
             val data = JSObject()
             data.put("running", running)
             trigger("vpnState", data)
-            val pending = pendingConnect
-            if (requestId != null && pending?.id == requestId) {
-                pendingConnect = null
-                if (running) pending.invoke.resolve()
-                else pending.invoke.reject(error ?: "VPN service failed to start")
+            val connect = pendingConnect
+            when (
+                connect?.let {
+                    vpnRequestOutcome(
+                        VpnRequestKind.CONNECT,
+                        it.id,
+                        requestId,
+                        running,
+                    )
+                }
+            ) {
+                VpnRequestOutcome.RESOLVE -> {
+                    pendingConnect = null
+                    connect.invoke.resolve()
+                }
+                VpnRequestOutcome.REJECT -> {
+                    pendingConnect = null
+                    connect.invoke.reject(error ?: "VPN service failed to start")
+                }
+                else -> Unit
+            }
+
+            val disconnect = pendingDisconnect
+            when (
+                disconnect?.let {
+                    vpnRequestOutcome(
+                        VpnRequestKind.DISCONNECT,
+                        it.id,
+                        requestId,
+                        running,
+                    )
+                }
+            ) {
+                VpnRequestOutcome.RESOLVE -> {
+                    pendingDisconnect = null
+                    disconnect.invoke.resolve()
+                }
+                VpnRequestOutcome.REJECT -> {
+                    pendingDisconnect = null
+                    disconnect.invoke.reject(error ?: "VPN service failed to stop")
+                }
+                else -> Unit
             }
         }
     }
@@ -119,8 +158,25 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun disconnect(invoke: Invoke) {
-        VarmlenVpnService.stop(activity)
-        invoke.resolve()
+        pendingConnect?.invoke?.reject("VPN connection request cancelled by disconnect")
+        pendingConnect = null
+        pendingDisconnect?.invoke?.reject("Superseded by a newer VPN disconnect request")
+        val requestId = UUID.randomUUID().toString()
+        pendingDisconnect = PendingDisconnect(requestId, invoke)
+        try {
+            VarmlenVpnService.stop(activity, requestId)
+        } catch (error: Throwable) {
+            pendingDisconnect = null
+            invoke.reject(error.message ?: "Could not stop VPN service")
+            return
+        }
+        connectTimeouts.postDelayed({
+            val pending = pendingDisconnect
+            if (pending?.id == requestId) {
+                pendingDisconnect = null
+                pending.invoke.reject("VPN service did not confirm shutdown within 15 seconds")
+            }
+        }, 15_000)
     }
 
     @Command
@@ -287,6 +343,8 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     private fun beginConnect(invoke: Invoke, args: ConnectArgs) {
+        pendingDisconnect?.invoke?.reject("Superseded by a newer VPN connection request")
+        pendingDisconnect = null
         pendingConnect?.invoke?.reject("Superseded by a newer VPN connection request")
         val requestId = UUID.randomUUID().toString()
         pendingConnect = PendingConnect(requestId, invoke)

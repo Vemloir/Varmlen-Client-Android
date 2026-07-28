@@ -21,6 +21,10 @@ export interface VlessServer {
   mode: string | null;
   packet_encoding: string | null;
   raw_params: Record<string, string>;
+  /** Provider JSON object that produced this location, or null for share links. */
+  source_json: string | null;
+  /** Exact provider proxy outbound retained for safe config generation. */
+  raw_outbound: unknown | null;
 }
 
 export interface SubscriptionMeta {
