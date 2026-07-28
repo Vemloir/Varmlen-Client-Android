@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.6
+
+- Publish the current corrected Android client as a matching pre-release for
+  the Linux 0.2.6 cycle.
+- Keep per-app split tunneling on Android's native `VpnService`; the
+  Linux-only Proxy-mode process limitation does not apply to Android.
+- Include the corrected location-editor bounds, modal lifecycle, touch actions,
+  location states, parallel latency checks, and log containment from the final
+  0.2.5 source state.
+
 ## 0.2.5
 
 - Add editable location details: exact source JSON for JSON profiles and
