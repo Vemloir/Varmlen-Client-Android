@@ -478,6 +478,23 @@
           ariaLabel={t("settings.subscriptionUa")}
         />
       </div>
+      <label class="row">
+        <div class="row-text">
+          <div class="row-title">{t("settings.subscriptionAutoUpdate")}</div>
+          <div class="row-sub muted">{t("settings.subscriptionAutoUpdateSub")}</div>
+        </div>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={settings.subscriptionAutoUpdate}
+            onchange={(e) =>
+              settings.setSubscriptionAutoUpdate(
+                (e.currentTarget as HTMLInputElement).checked,
+              )}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
     </div>
   </section>
 

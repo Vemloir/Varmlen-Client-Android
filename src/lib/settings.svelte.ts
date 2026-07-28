@@ -22,6 +22,7 @@ interface Persisted {
   logLevel: LogLevel;
   /** Identity advertised only while importing/refreshing subscriptions. */
   subscriptionUserAgent: SubscriptionUserAgent;
+  subscriptionAutoUpdate: boolean;
 }
 
 const KEY = "varmlen.settings";
@@ -33,6 +34,7 @@ const DEFAULTS: Persisted = {
   closeToTray: true,
   logLevel: "warn",
   subscriptionUserAgent: "varmlen",
+  subscriptionAutoUpdate: true,
 };
 
 const LOG_LEVELS: LogLevel[] = ["debug", "warn", "error"];
@@ -55,6 +57,8 @@ function load(): Persisted {
       subscriptionUserAgent: normalizeSubscriptionUserAgent(
         parsed.subscriptionUserAgent,
       ),
+      subscriptionAutoUpdate:
+        parsed.subscriptionAutoUpdate ?? DEFAULTS.subscriptionAutoUpdate,
     };
   } catch {
     return DEFAULTS;
@@ -73,6 +77,7 @@ class SettingsStore {
   subscriptionUserAgent = $state<SubscriptionUserAgent>(
     _initialSettings.subscriptionUserAgent,
   );
+  subscriptionAutoUpdate = $state(_initialSettings.subscriptionAutoUpdate);
 
   private persist(): void {
     if (!browser) return;
@@ -86,6 +91,7 @@ class SettingsStore {
         closeToTray: this.closeToTray,
         logLevel: this.logLevel,
         subscriptionUserAgent: this.subscriptionUserAgent,
+        subscriptionAutoUpdate: this.subscriptionAutoUpdate,
       }),
     );
   }
@@ -98,6 +104,10 @@ class SettingsStore {
   setLogLevel(v: LogLevel): void { this.logLevel = v; this.persist(); }
   setSubscriptionUserAgent(v: SubscriptionUserAgent): void {
     this.subscriptionUserAgent = normalizeSubscriptionUserAgent(v);
+    this.persist();
+  }
+  setSubscriptionAutoUpdate(v: boolean): void {
+    this.subscriptionAutoUpdate = v;
     this.persist();
   }
 }
