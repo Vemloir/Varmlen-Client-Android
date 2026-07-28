@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { nextFutureRefresh } from "./subscription-refresh";
+import {
+  nextFutureRefresh,
+  nextRefreshBatch,
+} from "./subscription-refresh";
 
 const read = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
@@ -35,6 +38,35 @@ describe("subscription refresh scheduling", () => {
       nextFutureRefresh("2026-07-28T10:00:00Z", 0, Date.now()),
     ).toThrow("invalid subscription refresh schedule");
   });
+
+  it("groups only the earliest future subscription boundary", () => {
+    const now = Date.parse("2026-07-28T10:20:00Z");
+    expect(
+      nextRefreshBatch(
+        [
+          {
+            id: "hourly-a",
+            lastSuccessIso: "2026-07-28T10:00:00Z",
+            intervalHours: 1,
+          },
+          {
+            id: "later",
+            lastSuccessIso: "2026-07-28T10:00:00Z",
+            intervalHours: 2,
+          },
+          {
+            id: "hourly-b",
+            lastSuccessIso: "2026-07-28T09:00:00Z",
+            intervalHours: 1,
+          },
+        ],
+        now,
+      ),
+    ).toEqual({
+      at: Date.parse("2026-07-28T11:00:00Z"),
+      ids: ["hourly-a", "hourly-b"],
+    });
+  });
 });
 
 describe("subscription refresh setting contract", () => {
@@ -47,5 +79,18 @@ describe("subscription refresh setting contract", () => {
     expect(store).toContain("setSubscriptionAutoUpdate");
     expect(page).toContain('t("settings.subscriptionAutoUpdate")');
     expect(page).toContain("settings.setSubscriptionAutoUpdate");
+  });
+
+  it("uses one cancellable future timer and never refreshes on mount", () => {
+    const store = read("./subs.svelte.ts");
+    const layout = read("../routes/+layout.svelte");
+
+    expect(store).toContain("nextRefreshBatch");
+    expect(store).toContain("setTimeout");
+    expect(store).toContain("stopAutoRefresh");
+    expect(store).not.toContain("setInterval(check");
+    expect(store).not.toContain(".finally(check)");
+    expect(layout).toContain("settings.subscriptionAutoUpdate");
+    expect(layout).toContain("subs.stopAutoRefresh()");
   });
 });

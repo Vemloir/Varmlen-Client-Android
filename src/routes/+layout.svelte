@@ -84,9 +84,16 @@
     return () => clearInterval(id);
   });
 
-  // Auto-refresh subscriptions on their server-advertised interval (the UI
-  // shows "auto-update Nh"); checks on launch and periodically thereafter.
-  onMount(() => subs.startAutoRefresh());
+  // Schedule only the next future provider boundary. Opening the application
+  // never triggers a subscription request, and disabling the setting cancels
+  // the pending timer immediately.
+  $effect(() => {
+    if (!settings.subscriptionAutoUpdate) {
+      subs.stopAutoRefresh();
+      return;
+    }
+    return subs.startAutoRefresh();
+  });
 
   // Tray "Connect / Disconnect" menu item routes back here (the connect logic
   // — current server + split config — lives in the frontend).

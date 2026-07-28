@@ -22,6 +22,7 @@ import {
   type LocationEditDraft,
 } from "$lib/location-draft";
 import { transportSummary } from "$lib/server-label";
+import { nextRefreshBatch } from "$lib/subscription-refresh";
 export { transportSummary } from "$lib/server-label";
 
 /** Ping result for a server entry. `null` = unknown / not yet measured,
@@ -61,7 +62,7 @@ export interface Subscription {
   webPageUrl: string | null;
   /** Original JSON returned by a JSON subscription or pasted by the user. */
   sourceJson: string | null;
-  /** Locally edited remote JSON is not overwritten by background refreshes. */
+  /** Whether the subscription JSON currently differs from its remote source. */
   jsonEdited: boolean;
   servers: ServerEntry[];
   collapsed: boolean;
@@ -200,7 +201,8 @@ class SubsStore {
   importing = $state(false);
 
   private autoRefreshStarted = false;
-  private autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private autoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private persistedJsonRehydrated = false;
 
   constructor() {
     // Re-resolve / auto-pick a location from the persisted state on startup.
@@ -217,6 +219,7 @@ class SubsStore {
         selectedKey: this.selectedKey,
       }),
     );
+    this.rescheduleAutoRefresh();
   }
 
   selectServer(id: string): void {
@@ -394,7 +397,7 @@ class SubsStore {
     }
   }
 
-  async refresh(subId: string): Promise<void> {
+  async refresh(subId: string, reschedule = true): Promise<void> {
     const idx = this.list.findIndex((s) => s.id === subId);
     if (idx < 0) return;
     const sub = this.list[idx];
@@ -458,6 +461,8 @@ class SubsStore {
       this.list = this.list.map((s) =>
         s.id === subId ? { ...s, refreshing: false } : s,
       );
+    } finally {
+      if (reschedule) this.rescheduleAutoRefresh();
     }
   }
 
@@ -495,17 +500,64 @@ class SubsStore {
     this.prunePings();
   }
 
-  /** Start the background auto-refresh loop: each subscription is re-fetched
-   *  once its server-advertised interval has elapsed since the last update
-   *  (`importedAt` is bumped on every successful refresh, so it survives
-   *  restarts). Safe to call once on app start — checks immediately, then every
-   *  few minutes so long-running sessions pick up due refreshes. Idempotent. */
-  startAutoRefresh(): void {
-    if (this.autoRefreshStarted) return;
+  /** Start exact future-boundary scheduling without fetching on application
+   *  mount. Missed cycles are skipped by nextRefreshBatch. */
+  startAutoRefresh(): () => void {
+    if (this.autoRefreshStarted) return () => this.stopAutoRefresh();
     this.autoRefreshStarted = true;
-    const check = () => void this.refreshDue();
-    void this.rehydratePersistedJson().finally(check);
-    this.autoRefreshTimer = setInterval(check, 5 * 60 * 1000);
+    if (!this.persistedJsonRehydrated) {
+      this.persistedJsonRehydrated = true;
+      void this.rehydratePersistedJson().finally(() =>
+        this.rescheduleAutoRefresh(),
+      );
+    } else {
+      this.rescheduleAutoRefresh();
+    }
+    return () => this.stopAutoRefresh();
+  }
+
+  stopAutoRefresh(): void {
+    this.autoRefreshStarted = false;
+    if (this.autoRefreshTimer !== null) clearTimeout(this.autoRefreshTimer);
+    this.autoRefreshTimer = null;
+  }
+
+  /** Cancel the old timer and schedule exactly the earliest future boundary. */
+  rescheduleAutoRefresh(): void {
+    if (this.autoRefreshTimer !== null) clearTimeout(this.autoRefreshTimer);
+    this.autoRefreshTimer = null;
+    if (!this.autoRefreshStarted || !settings.subscriptionAutoUpdate) return;
+
+    const batch = nextRefreshBatch(
+      this.list.map((sub) => ({
+        id: sub.id,
+        lastSuccessIso: sub.importedAt,
+        intervalHours: sub.updateIntervalHours,
+      })),
+      Date.now(),
+    );
+    if (!batch) return;
+
+    // Browsers clamp larger timeouts; wake once at the clamp and schedule the
+    // remaining span without performing a premature refresh.
+    const maxDelay = 2_147_000_000;
+    const delay = Math.min(Math.max(0, batch.at - Date.now()), maxDelay);
+    this.autoRefreshTimer = setTimeout(() => {
+      this.autoRefreshTimer = null;
+      if (Date.now() + 1_000 < batch.at) {
+        this.rescheduleAutoRefresh();
+        return;
+      }
+      void this.refreshAutoBatch(batch.ids);
+    }, delay);
+  }
+
+  private async refreshAutoBatch(ids: string[]): Promise<void> {
+    for (const id of ids) {
+      if (!this.autoRefreshStarted || !settings.subscriptionAutoUpdate) break;
+      await this.refresh(id, false);
+    }
+    this.rescheduleAutoRefresh();
   }
 
   /** Reparse JSON already cached by 0.2.0 with the new lossless parser. This is
@@ -540,22 +592,6 @@ class SubsStore {
     if (changed) {
       this.reconcileSelection();
       this.prunePings();
-    }
-  }
-
-  /** Refresh every subscription whose update interval has elapsed. */
-  private async refreshDue(): Promise<void> {
-    const now = Date.now();
-    const due = this.list.filter((s) => {
-      if (!s.updateIntervalHours || s.updateIntervalHours <= 0) return false;
-      if (s.refreshing) return false;
-      const last = Date.parse(s.importedAt);
-      if (Number.isNaN(last)) return true; // unknown last-update → refresh now
-      return now - last >= s.updateIntervalHours * 3_600_000;
-    });
-    // Sequential so we don't hammer the panel when several are due at once.
-    for (const s of due) {
-      await this.refresh(s.id);
     }
   }
 
