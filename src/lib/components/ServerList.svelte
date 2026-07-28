@@ -22,7 +22,6 @@
   {#each servers as server (server.id)}
     {@const ping = pings[server.id]}
     <li class="srv-row" class:active={selectedServerId === server.id}>
-      <span class="srv-stripe"></span>
       <button class="srv-btn" onclick={() => onSelect(server.id)}>
         <FlagIcon flag={server.flag ?? ""} />
         <div class="srv-info">
@@ -54,6 +53,17 @@
     background: transparent;
     transition: background var(--transition);
   }
+  .srv-row + .srv-row::before {
+    content: "";
+    position: absolute;
+    z-index: 1;
+    top: 0;
+    left: 54px;
+    right: 12px;
+    border-top: 1px solid var(--border-strong);
+    opacity: 0.65;
+    pointer-events: none;
+  }
   .srv-row:hover { background: var(--bg-elev-2); }
   .srv-btn {
     flex: 1;
@@ -80,17 +90,6 @@
     color: var(--text-dim);
   }
   .srv-detail:hover { color: var(--text); }
-  .srv-stripe {
-    position: absolute;
-    left: 0;
-    top: 4px;
-    bottom: 4px;
-    width: 3px;
-    border-radius: 0 3px 3px 0;
-    background: transparent;
-    transition: background var(--transition);
-  }
-  .srv-row.active .srv-stripe { background: var(--accent); }
   .srv-row.active { background: var(--accent-faint); }
   .srv-info { flex: 1; min-width: 0; }
   .srv-name {
@@ -117,4 +116,3 @@
     color: var(--muted, #888);
   }
 </style>
-

@@ -616,36 +616,6 @@ class SubsStore {
     return updated;
   }
 
-  /** Apply a validated location JSON edit while preserving the UI row identity.
-   *  Automatic refresh pauses so a background fetch cannot silently overwrite
-   *  the local edit; an explicit refresh still restores the provider version. */
-  updateServer(serverId: string, raw: VlessServer): ServerEntry {
-    let updated: ServerEntry | null = null;
-    this.list = this.list.map((sub) => {
-      const current = sub.servers.find((server) => server.id === serverId);
-      if (!current) return sub;
-      const normalized = { ...raw, id: current.raw.id };
-      updated = {
-        ...current,
-        flag: flagFor(normalized.label),
-        name: stripLeadingFlag(normalized.label),
-        transport: transportSummary(normalized),
-        raw: normalized,
-        editDraft: null,
-      };
-      return {
-        ...sub,
-        servers: sub.servers.map((server) => (server.id === serverId ? updated! : server)),
-      };
-    });
-    if (!updated) throw new Error("location not found");
-    if (this.selectedServerId === serverId) this.selectedKey = serverKey(updated);
-    const { [serverId]: _stalePing, ...remainingPings } = this.pings;
-    this.pings = remainingPings;
-    this.persist();
-    return updated;
-  }
-
   // Ephemeral per-server ping state. Not persisted, and never measured
   // automatically — the user triggers pings explicitly via the ping button.
   pings = $state<Record<string, PingState>>({});

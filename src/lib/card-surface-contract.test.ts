@@ -71,4 +71,22 @@ describe("card surface contract", () => {
     expect(home).toContain('t("menu.json")');
     expect(home).toContain('class="json-editor"');
   });
+
+  it("uses separated location rows, background-only selection, and source-specific editors", () => {
+    const list = read("./components/ServerList.svelte");
+    const flag = read("./components/FlagIcon.svelte");
+    const editor = read("./components/LocationEditor.svelte");
+    const home = read("../routes/+page.svelte");
+
+    expect(list).toMatch(/\.srv-row \+ \.srv-row::before/);
+    expect(list).not.toContain("srv-stripe");
+    expect(flag.match(/class="globe-arc"/g)).toHaveLength(4);
+    expect(flag).toContain('class="globe-outline"');
+    expect(editor).toContain('{#if draft.kind === "json"}');
+    expect(editor).toContain("{:else}");
+    expect(editor).toContain("rawParams");
+    expect(home).toContain('import LocationEditor from "$lib/components/LocationEditor.svelte";');
+    expect(home).not.toContain("detailRows");
+    expect(home).not.toContain("formatLocationJson");
+  });
 });

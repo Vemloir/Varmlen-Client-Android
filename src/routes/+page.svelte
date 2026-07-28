@@ -3,17 +3,17 @@
   import { conn } from "$lib/conn.svelte";
   import { subs } from "$lib/subs.svelte";
   import { t } from "$lib/i18n.svelte";
-  import { parseSubscriptionBody, readClipboard } from "$lib/api";
+  import { readClipboard } from "$lib/api";
   import { isAndroid } from "$lib/platform";
   import { placePopup, portal } from "$lib/popup";
   import FlagIcon from "$lib/components/FlagIcon.svelte";
+  import LocationEditor from "$lib/components/LocationEditor.svelte";
   import ServerList from "$lib/components/ServerList.svelte";
   import {
     formatJson,
-    formatLocationJson,
     isJsonInput,
-    parseLocationJson,
   } from "$lib/subscription-json";
+  import type { LocationEditDraft } from "$lib/location-draft";
 
   import type { Subscription, ServerEntry } from "$lib/subs.svelte";
 
@@ -30,8 +30,6 @@
   let jsonError = $state<string | null>(null);
   let jsonSaving = $state(false);
   let detailFor = $state<ServerEntry | null>(null);
-  let detailJsonDraft = $state("");
-  let detailJsonError = $state<string | null>(null);
   // Fixed-position coords for the "…" menu so it escapes the card's overflow:hidden.
   let menuPos = $state({ top: 0, right: 0 });
 
@@ -65,27 +63,6 @@
       window.removeEventListener("resize", close);
       document.removeEventListener("pointerdown", onDown, true);
     };
-  });
-
-  /** The parsed vless:// fields, as label/value rows for the detail modal. */
-  const detailRows = $derived.by(() => {
-    const s = detailFor?.raw;
-    if (!s) return [] as Array<[string, string]>;
-    const rows: Array<[string, string | null]> = [
-      ["Address", `${s.host}:${s.port}`],
-      ["UUID", s.uuid],
-      ["Transport", s.transport],
-      ["Security", s.security],
-      ["SNI", s.sni],
-      ["Fingerprint", s.fingerprint],
-      ["Public key (pbk)", s.public_key],
-      ["Short ID (sid)", s.short_id],
-      ["Flow", s.flow],
-      ["Path", s.path],
-      ["Mode", s.mode],
-      ["Packet encoding", s.packet_encoding],
-    ];
-    return rows.filter(([, v]) => v != null && v !== "") as Array<[string, string]>;
   });
 
   function openInfo(sub: Subscription) {
@@ -122,29 +99,11 @@
   }
   function openDetails(server: ServerEntry): void {
     detailFor = server;
-    detailJsonDraft = formatLocationJson(server.raw);
-    detailJsonError = null;
   }
-  async function saveLocationJson(): Promise<void> {
+  async function saveLocationDraft(draft: LocationEditDraft): Promise<void> {
     if (!detailFor) return;
-    detailJsonError = null;
-    try {
-      const raw = detailFor.raw.source_json
-        ? await parseEditedSourceLocation(detailJsonDraft)
-        : parseLocationJson(detailJsonDraft);
-      detailFor = subs.updateServer(detailFor.id, raw);
-      detailJsonDraft = formatLocationJson(detailFor.raw);
-    } catch (error) {
-      detailJsonError = error instanceof Error ? error.message : String(error);
-    }
-  }
-
-  async function parseEditedSourceLocation(source: string) {
-    const servers = await parseSubscriptionBody(source);
-    if (servers.length !== 1) {
-      throw new Error(`location JSON must contain exactly one proxy (found ${servers.length})`);
-    }
-    return servers[0];
+    await subs.saveServerDraft(detailFor.id, draft);
+    detailFor = null;
   }
 
   // Subscription headers (support / web-page URLs) are attacker-controlled, so
@@ -480,31 +439,11 @@
           </svg>
         </button>
       </header>
-      <dl class="info-grid location-fields">
-        {#each detailRows as [label, value] (label)}
-          <dt>{label}</dt>
-          <dd class="mono small">{value}</dd>
-        {/each}
-      </dl>
-      <label class="location-json-label" for="location-json">{t("json.locationTitle")}</label>
-      <textarea
-        id="location-json"
-        class="json-editor location-json-editor"
-        bind:value={detailJsonDraft}
-        spellcheck="false"
-      ></textarea>
-      {#if detailJsonError}
-        <div class="error">{detailJsonError}</div>
-      {/if}
-      <p class="muted location-json-hint">{t("json.locationHint")}</p>
-      <div class="modal-actions">
-        <button class="btn btn-ghost" onclick={() => (detailFor = null)}>
-          {t("common.cancel")}
-        </button>
-        <button class="btn btn-primary" onclick={() => void saveLocationJson()} disabled={!detailJsonDraft.trim()}>
-          {t("json.save")}
-        </button>
-      </div>
+      <LocationEditor
+        server={detailFor}
+        onSave={saveLocationDraft}
+        onCancel={() => (detailFor = null)}
+      />
     </div>
   </div>
 {/if}
@@ -1099,20 +1038,6 @@
   .json-editor {
     min-height: 280px;
     flex: 1;
-  }
-  .location-json-label {
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-  .location-json-editor {
-    min-height: 220px;
-    flex: 0 0 auto;
-  }
-  .location-json-hint {
-    line-height: 1.4;
   }
   .error {
     color: var(--danger);
