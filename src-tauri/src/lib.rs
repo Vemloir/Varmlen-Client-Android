@@ -82,12 +82,25 @@ fn target_arch() -> &'static str {
     }
 }
 
-fn subscription_user_agent() -> String {
-    format!("Varmlen ({}; {})", target_platform(), target_arch())
+fn subscription_headers(choice: Option<&str>) -> Result<(String, String), String> {
+    let brand = match choice.unwrap_or("varmlen") {
+        "varmlen" => "Varmlen",
+        "happ" => "Happ",
+        "incy" => "INCY",
+        "v2raytun" => "v2rayTun",
+        _ => return Err("unsupported subscription User-Agent".into()),
+    };
+    Ok((
+        format!("{brand} ({}; {})", target_platform(), target_arch()),
+        target_platform().to_ascii_lowercase(),
+    ))
 }
 
 #[tauri::command]
-async fn fetch_subscription(url: String) -> Result<ImportResult, String> {
+async fn fetch_subscription(
+    url: String,
+    subscription_user_agent: Option<String>,
+) -> Result<ImportResult, String> {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return Err("empty URL".to_string());
@@ -149,8 +162,9 @@ async fn fetch_subscription(url: String) -> Result<ImportResult, String> {
         return Err("refusing to fetch a loopback/private address".to_string());
     }
 
+    let (user_agent, device_os) = subscription_headers(subscription_user_agent.as_deref())?;
     let client = reqwest::Client::builder()
-        .user_agent(subscription_user_agent())
+        .user_agent(user_agent)
         .timeout(Duration::from_secs(15))
         // Validate every redirect hop too, so a 30x can't escape the guard.
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
@@ -172,6 +186,7 @@ async fn fetch_subscription(url: String) -> Result<ImportResult, String> {
 
     let resp = client
         .get(trimmed)
+        .header("X-Device-OS", device_os)
         .send()
         .await
         .map_err(|e| format!("request failed: {e}"))?;
@@ -374,11 +389,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn subscription_ua_identifies_target() {
+    fn subscription_ua_choices_are_bounded_and_platform_specific() {
+        for (choice, brand) in [
+            ("varmlen", "Varmlen"),
+            ("happ", "Happ"),
+            ("incy", "INCY"),
+            ("v2raytun", "v2rayTun"),
+        ] {
+            let (ua, os) = subscription_headers(Some(choice)).expect("known UA");
+            assert_eq!(
+                ua,
+                format!("{brand} ({}; {})", target_platform(), target_arch())
+            );
+            assert_eq!(os, target_platform().to_ascii_lowercase());
+        }
+
         assert_eq!(
-            subscription_user_agent(),
+            subscription_headers(None).expect("default").0,
             format!("Varmlen ({}; {})", target_platform(), target_arch())
         );
+        assert!(subscription_headers(Some("header\r\ninjection")).is_err());
     }
 
     #[test]

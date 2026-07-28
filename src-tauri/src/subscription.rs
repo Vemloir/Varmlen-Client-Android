@@ -105,6 +105,10 @@ pub struct VlessServer {
     /// reuses only this object; provider routing/DNS/inbounds are never adopted.
     #[serde(default)]
     pub raw_outbound: Option<serde_json::Value>,
+    /// Complete Xray location profile. A profile may contain several proxy
+    /// outbounds plus a balancer/observatory, but is still one UI location.
+    #[serde(default)]
+    pub raw_profile: Option<serde_json::Value>,
 }
 
 impl VlessServer {
@@ -131,6 +135,7 @@ impl VlessServer {
             raw_params: HashMap::new(),
             source_json: None,
             raw_outbound: None,
+            raw_profile: None,
         }
     }
 }
@@ -353,6 +358,42 @@ fn collect_json_servers(
             }
         }
         serde_json::Value::Object(obj) => {
+            // A complete Xray profile is ONE logical location. Its internal
+            // proxy outbounds are alternatives/chains selected by routing and
+            // balancers, not separate countries to expose in the UI.
+            if let Some(proxy_outbounds) = obj
+                .get("outbounds")
+                .and_then(|value| value.as_array())
+                .map(|outbounds| {
+                    outbounds
+                        .iter()
+                        .filter(|outbound| {
+                            outbound
+                                .get("protocol")
+                                .and_then(|protocol| protocol.as_str())
+                                .map(is_proxy_protocol)
+                                .unwrap_or(false)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .filter(|outbounds| !outbounds.is_empty())
+            {
+                if let Some(mut server) = proxy_outbounds
+                    .iter()
+                    .find_map(|outbound| parse_outbound(outbound))
+                {
+                    let source = location_source.unwrap_or(v);
+                    if let Some(name) = json_str_any(source, &["remarks", "name", "ps", "title"]) {
+                        server.label = name;
+                    }
+                    server.source_json = serde_json::to_string(source).ok();
+                    server.raw_outbound = Some((*proxy_outbounds[0]).clone());
+                    server.raw_profile = Some(v.clone());
+                    out.push(server);
+                }
+                return;
+            }
+
             // A proxy outbound: { "protocol": "vless", "settings": …, "streamSettings": … }.
             if obj
                 .get("protocol")
@@ -409,6 +450,17 @@ fn endpoint_host_port(endpoint: &str) -> Option<(String, u16)> {
     Some((parsed.host_str()?.to_string(), parsed.port()?))
 }
 
+fn direct_or_first<'a>(
+    settings: &'a serde_json::Value,
+    array_key: &str,
+) -> Option<&'a serde_json::Value> {
+    if settings.get("address").is_some() {
+        Some(settings)
+    } else {
+        settings.get(array_key)?.as_array()?.first()
+    }
+}
+
 /// Map an xray streamSettings `network` back to our transport name (the inverse
 /// of `xray::xray_network`).
 fn normalize_network(net: &str) -> String {
@@ -438,10 +490,14 @@ fn parse_outbound(ob: &serde_json::Value) -> Option<VlessServer> {
 
     let mut s = match protocol {
         "vless" | "vmess" => {
-            let vnext = settings?.get("vnext")?.as_array()?.first()?;
-            let host = json_str(vnext, "address")?;
-            let port = json_port(vnext.get("port"))?;
-            let user = vnext.get("users")?.as_array()?.first()?;
+            let settings = settings?;
+            let endpoint = direct_or_first(settings, "vnext")?;
+            let host = json_str(endpoint, "address")?;
+            let port = json_port(endpoint.get("port"))?;
+            let user = endpoint
+                .get("users")
+                .and_then(|users| users.as_array()?.first())
+                .unwrap_or(endpoint);
             let mut s = VlessServer::base(protocol, host.clone(), port, label(&host, port));
             s.uuid = json_str(user, "id")?;
             s.flow = json_str(user, "flow");
@@ -456,7 +512,7 @@ fn parse_outbound(ob: &serde_json::Value) -> Option<VlessServer> {
             s
         }
         "trojan" => {
-            let srv = settings?.get("servers")?.as_array()?.first()?;
+            let srv = direct_or_first(settings?, "servers")?;
             let host = json_str(srv, "address")?;
             let port = json_port(srv.get("port"))?;
             let pw = json_str(srv, "password")?;
@@ -467,7 +523,7 @@ fn parse_outbound(ob: &serde_json::Value) -> Option<VlessServer> {
             s
         }
         "shadowsocks" => {
-            let srv = settings?.get("servers")?.as_array()?.first()?;
+            let srv = direct_or_first(settings?, "servers")?;
             let host = json_str(srv, "address")?;
             let port = json_port(srv.get("port"))?;
             let mut s = VlessServer::base("shadowsocks", host.clone(), port, label(&host, port));
@@ -498,13 +554,16 @@ fn parse_outbound(ob: &serde_json::Value) -> Option<VlessServer> {
             s
         }
         "http" | "socks" => {
-            let srv = settings?.get("servers")?.as_array()?.first()?;
+            let srv = direct_or_first(settings?, "servers")?;
             let host = json_str(srv, "address")?;
             let port = json_port(srv.get("port"))?;
             let mut s = VlessServer::base(protocol, host.clone(), port, label(&host, port));
             if let Some(user) = srv.get("users").and_then(|users| users.as_array()?.first()) {
                 s.uuid = json_str_any(user, &["user", "username"]).unwrap_or_default();
                 s.password = json_str_any(user, &["pass", "password"]);
+            } else {
+                s.uuid = json_str_any(srv, &["user", "username"]).unwrap_or_default();
+                s.password = json_str_any(srv, &["pass", "password"]);
             }
             s
         }
@@ -515,6 +574,34 @@ fn parse_outbound(ob: &serde_json::Value) -> Option<VlessServer> {
         return None;
     }
     Some(s)
+}
+
+/// Every remote endpoint a logical location can dial. Full Xray profiles may
+/// contain several proxy outbounds behind one balancer; Linux must pin all of
+/// them outside the TUN, not only the representative endpoint shown in the UI.
+#[allow(dead_code)]
+pub fn server_endpoints(server: &VlessServer) -> Vec<(String, u16)> {
+    let mut endpoints = std::collections::BTreeSet::new();
+    if let Some(profile) = server.raw_profile.as_ref() {
+        if let Some(outbounds) = profile
+            .get("outbounds")
+            .and_then(serde_json::Value::as_array)
+        {
+            for outbound in outbounds {
+                if let Some(parsed) = parse_outbound(outbound) {
+                    endpoints.insert((parsed.host, parsed.port));
+                }
+            }
+        }
+    } else if let Some(outbound) = server.raw_outbound.as_ref() {
+        if let Some(parsed) = parse_outbound(outbound) {
+            endpoints.insert((parsed.host, parsed.port));
+        }
+    }
+    if endpoints.is_empty() {
+        endpoints.insert((server.host.clone(), server.port));
+    }
+    endpoints.into_iter().collect()
 }
 
 fn apply_stream(s: &mut VlessServer, stream: Option<&serde_json::Value>) {
@@ -1019,6 +1106,151 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn multi_outbound_profile(name: &str) -> serde_json::Value {
+        let proxy = |tag: &str, address: &str, port: u16, network: &str| {
+            let transport_key = match network {
+                "grpc" => "grpcSettings",
+                "xhttp" => "xhttpSettings",
+                _ => "rawSettings",
+            };
+            serde_json::json!({
+                "tag": tag,
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [{
+                        "address": address,
+                        "port": port,
+                        "users": [{"id": "00000000-0000-0000-0000-000000000001"}]
+                    }]
+                },
+                "streamSettings": {
+                    "network": network,
+                    "security": "reality",
+                    transport_key: {}
+                }
+            })
+        };
+        serde_json::json!({
+            "remarks": name,
+            "dns": {"servers": ["8.8.8.8"]},
+            "inbounds": [{"tag": "provider-in", "protocol": "socks", "port": 1080}],
+            "outbounds": [
+                proxy("proxy", "edge-a.example", 6436, "raw"),
+                proxy("proxy-2", "edge-b.example", 6436, "raw"),
+                proxy("proxy-3", "edge-b.example", 6437, "grpc"),
+                proxy("proxy-4", "edge-b.example", 443, "xhttp"),
+                proxy("proxy-5", "edge-c.example", 6436, "raw"),
+                proxy("proxy-6", "edge-c.example", 6437, "grpc"),
+                proxy("proxy-7", "edge-c.example", 443, "xhttp"),
+                {"tag": "direct", "protocol": "freedom"},
+                {"tag": "block", "protocol": "blackhole"}
+            ],
+            "routing": {
+                "balancers": [{
+                    "tag": "estonia-balancer",
+                    "selector": ["proxy"],
+                    "strategy": {"type": "leastPing"},
+                    "fallbackTag": "proxy"
+                }],
+                "rules": [
+                    {"type": "field", "protocol": ["bittorrent"], "outboundTag": "direct"},
+                    {"type": "field", "network": "tcp,udp", "balancerTag": "estonia-balancer"}
+                ]
+            },
+            "burstObservatory": {
+                "subjectSelector": ["proxy"],
+                "pingConfig": {
+                    "destination": "https://example.com/generate_204",
+                    "interval": "1m",
+                    "timeout": "5s",
+                    "sampling": 3
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn full_multi_outbound_profile_is_one_logical_location() {
+        let profile = multi_outbound_profile("🇪🇪 Эстония");
+        let servers = parse_subscription(&profile.to_string());
+
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].label, "🇪🇪 Эстония");
+        let raw_profile = servers[0].raw_profile.as_ref().expect("raw profile");
+        assert_eq!(raw_profile["outbounds"].as_array().unwrap().len(), 9);
+        assert_eq!(
+            raw_profile["routing"]["balancers"][0]["tag"],
+            "estonia-balancer"
+        );
+        assert!(raw_profile.get("burstObservatory").is_some());
+    }
+
+    #[test]
+    fn full_profile_exposes_every_unique_remote_endpoint() {
+        let servers = parse_subscription(&multi_outbound_profile("Estonia").to_string());
+
+        assert_eq!(
+            server_endpoints(&servers[0]),
+            vec![
+                ("edge-a.example".into(), 6436),
+                ("edge-b.example".into(), 443),
+                ("edge-b.example".into(), 6436),
+                ("edge-b.example".into(), 6437),
+                ("edge-c.example".into(), 443),
+                ("edge-c.example".into(), 6436),
+                ("edge-c.example".into(), 6437),
+            ]
+        );
+    }
+
+    #[test]
+    fn array_of_full_profiles_keeps_one_location_per_profile() {
+        let body = serde_json::json!([
+            multi_outbound_profile("Estonia"),
+            multi_outbound_profile("Germany")
+        ]);
+        let servers = parse_subscription(&body.to_string());
+
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0].label, "Estonia");
+        assert_eq!(servers[1].label, "Germany");
+        assert!(servers.iter().all(|server| server.raw_profile.is_some()));
+    }
+
+    #[test]
+    fn parses_current_xray_json_shape_for_every_proxy_protocol() {
+        let profiles = serde_json::json!([
+            {"remarks":"VLESS","outbounds":[{"tag":"proxy","protocol":"vless","settings":{"address":"vless.example","port":443,"id":"id","encryption":"none"}}]},
+            {"remarks":"VMess","outbounds":[{"tag":"proxy","protocol":"vmess","settings":{"address":"vmess.example","port":443,"id":"id","security":"auto"}}]},
+            {"remarks":"Trojan","outbounds":[{"tag":"proxy","protocol":"trojan","settings":{"address":"trojan.example","port":443,"password":"secret"}}]},
+            {"remarks":"Shadowsocks","outbounds":[{"tag":"proxy","protocol":"shadowsocks","settings":{"address":"ss.example","port":8388,"method":"2022-blake3-aes-256-gcm","password":"secret"}}]},
+            {"remarks":"Hysteria","outbounds":[{"tag":"proxy","protocol":"hysteria","settings":{"version":2,"address":"hy.example","port":443}}]},
+            {"remarks":"WireGuard","outbounds":[{"tag":"proxy","protocol":"wireguard","settings":{"secretKey":"secret","address":["10.0.0.2/32"],"peers":[{"publicKey":"public","endpoint":"wg.example:2408"}]}}]},
+            {"remarks":"HTTP","outbounds":[{"tag":"proxy","protocol":"http","settings":{"address":"http.example","port":3128,"user":"u","pass":"p"}}]},
+            {"remarks":"SOCKS","outbounds":[{"tag":"proxy","protocol":"socks","settings":{"address":"socks.example","port":1080,"user":"u","pass":"p"}}]}
+        ]);
+
+        let servers = parse_subscription(&profiles.to_string());
+        assert_eq!(servers.len(), 8);
+        assert_eq!(
+            servers
+                .iter()
+                .map(|server| (server.protocol.as_str(), server.host.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("vless", "vless.example"),
+                ("vmess", "vmess.example"),
+                ("trojan", "trojan.example"),
+                ("shadowsocks", "ss.example"),
+                ("hysteria", "hy.example"),
+                ("wireguard", "wg.example"),
+                ("http", "http.example"),
+                ("socks", "socks.example"),
+            ]
+        );
+        assert!(servers.iter().all(|server| server.raw_profile.is_some()));
+    }
 
     #[test]
     fn parses_full_vless_reality_xhttp() {

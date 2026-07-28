@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.2
+
+- Preserve complete multi-outbound Xray profiles as one logical location,
+  including provider balancers and observatories.
+- Add selectable Varmlen, Happ, INCY, and v2rayTun subscription User-Agents
+  with an Android header and no app-version device churn.
+- Keep provider JSON lossless and editable while retaining Varmlen's own DNS
+  and Android app split-tunnel policy.
+- Support Xray JSON outbounds for VLESS, VMess, Trojan, Shadowsocks, Hysteria,
+  WireGuard, HTTP, and SOCKS; omit forbidden WireGuard stream settings.
+- Stop grouping similarly named locations. Migrate local Configuration N cards
+  into one flat Configuration/Configurations card without a network request.
+- Make repeated disconnect requests idempotent and acknowledge them even when
+  teardown is already in progress, fixing a power button that could appear stuck.
+
 ## 0.2.1
 
 - Fixed disconnect so the UI waits for the Android VPN service to tear down

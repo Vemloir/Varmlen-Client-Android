@@ -13,6 +13,10 @@ import {
 } from "$lib/api";
 import { settings, type PingMethod } from "$lib/settings.svelte";
 import { isRemoteSource } from "$lib/subscription-json";
+import {
+  isRemoteConfiguration,
+  mergeManualConfigurations,
+} from "$lib/manual-configurations";
 
 /** Ping result for a server entry. `null` = unknown / not yet measured,
  *  `"pinging"` = probe in flight, `"timeout"` = host unreachable / timed out,
@@ -118,6 +122,7 @@ function migrateIds(subs: Subscription[]): { subs: Subscription[]; remapped: Rec
       // normal subscription refresh fills the exact provider JSON/outbound.
       if (srv.raw && srv.raw.source_json === undefined) srv.raw.source_json = null;
       if (srv.raw && srv.raw.raw_outbound === undefined) srv.raw.raw_outbound = null;
+      if (srv.raw && srv.raw.raw_profile === undefined) srv.raw.raw_profile = null;
     }
     if (sub.description === undefined) sub.description = null;
     if (sub.webPageUrl === undefined) sub.webPageUrl = null;
@@ -126,7 +131,7 @@ function migrateIds(subs: Subscription[]): { subs: Subscription[]; remapped: Rec
     if (sub.pinned === undefined) sub.pinned = false;
     if (sub.refreshing) sub.refreshing = false;
   }
-  return { subs, remapped };
+  return { subs: mergeManualConfigurations(subs), remapped };
 }
 
 function load(): Persisted {
@@ -313,8 +318,8 @@ class SubsStore {
     return used;
   }
 
-  /** Next "Configuration N" / "Subscription N" for an unnamed import. */
-  nextAutoName(kind: "Configuration" | "Subscription"): string {
+  /** Next "Subscription N" for an unnamed remote import. */
+  nextAutoName(kind: "Subscription"): string {
     const re = new RegExp(`^${kind} (\\d+)$`);
     let max = 0;
     for (const s of this.list) {
@@ -333,7 +338,10 @@ class SubsStore {
     if (!trimmed) throw new Error("empty url");
     this.importing = true;
     try {
-      const result = await fetchSubscription(trimmed);
+      const result = await fetchSubscription(
+        trimmed,
+        settings.subscriptionUserAgent,
+      );
       if (result.servers.length === 0) {
         throw new Error("no servers found in this subscription");
       }
@@ -342,12 +350,16 @@ class SubsStore {
       const usedBytes =
         (result.meta.upload_bytes ?? 0) + (result.meta.download_bytes ?? 0);
 
-      const isUrl = /^https?:\/\//i.test(trimmed);
+      const isUrl = isRemoteConfiguration(trimmed);
       const sub: Subscription = {
         id: crypto.randomUUID(),
         name:
           deriveSubName(result) ??
-          this.nextAutoName(isUrl ? "Subscription" : "Configuration"),
+          (isUrl
+            ? this.nextAutoName("Subscription")
+            : servers.length === 1
+              ? "Configuration"
+              : "Configurations"),
         description: result.description,
         url: trimmed,
         importedAt: new Date().toISOString(),
@@ -363,7 +375,9 @@ class SubsStore {
         collapsed: false,
         pinned: false,
       };
-      this.list = [...this.list, sub];
+      this.list = isUrl
+        ? [...this.list, sub]
+        : mergeManualConfigurations([...this.list, sub]);
       // Auto-select the first location if none is chosen yet.
       this.reconcileSelection();
     } finally {
@@ -380,7 +394,10 @@ class SubsStore {
       s.id === subId ? { ...s, refreshing: true } : s,
     );
     try {
-      const result = await fetchSubscription(sub.url);
+      const result = await fetchSubscription(
+        sub.url,
+        settings.subscriptionUserAgent,
+      );
       if (result.servers.length === 0) {
         this.list = this.list.map((s) =>
           s.id === subId ? { ...s, refreshing: false } : s,
@@ -443,7 +460,10 @@ class SubsStore {
     const trimmed = source.trim();
     if (!trimmed) throw new Error("empty JSON");
 
-    const result = await fetchSubscription(trimmed);
+    const result = await fetchSubscription(
+      trimmed,
+      settings.subscriptionUserAgent,
+    );
     if (!result.source_json || result.servers.length === 0) {
       throw new Error("no servers found in the JSON");
     }

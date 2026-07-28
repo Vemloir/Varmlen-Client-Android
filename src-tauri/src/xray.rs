@@ -25,6 +25,18 @@ use serde_json::{json, Value};
 use crate::split::SplitInput;
 use crate::subscription::VlessServer;
 
+const PROXY_PROTOCOLS: &[&str] = &[
+    "http",
+    "socks",
+    "shadowsocks",
+    "vmess",
+    "vless",
+    "trojan",
+    "hysteria",
+    "wireguard",
+];
+const RESERVED_OUTBOUND_TAGS: &[&str] = &["direct", "dns-out", "block"];
+
 /// Local SOCKS port xray listens on in `Tun2socks`/proxy mode.
 pub const XRAY_SOCKS_PORT: u16 = 2081;
 
@@ -81,23 +93,253 @@ impl TunMode {
     }
 }
 
+#[derive(Debug, Clone)]
+enum ProxyTarget {
+    Outbound(String),
+    Balancer(String),
+}
+
+impl ProxyTarget {
+    fn apply(&self, rule: &mut Value) {
+        let object = rule.as_object_mut().expect("routing rule object");
+        match self {
+            Self::Outbound(tag) => {
+                object.insert("outboundTag".into(), json!(tag));
+            }
+            Self::Balancer(tag) => {
+                object.insert("balancerTag".into(), json!(tag));
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct OutboundPlan {
+    proxies: Vec<Value>,
+    target: ProxyTarget,
+    balancers: Option<Value>,
+    observatory: Option<Value>,
+    burst_observatory: Option<Value>,
+}
+
+fn is_proxy_protocol(protocol: &str) -> bool {
+    PROXY_PROTOCOLS.contains(&protocol)
+}
+
+fn sanitize_raw_outbound(outbound: &Value, preserve_tag_and_chains: bool) -> Result<Value, String> {
+    let mut object = outbound
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "JSON proxy outbound must be an object".to_string())?;
+    let protocol = object
+        .get("protocol")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "JSON proxy outbound has no protocol".to_string())?
+        .to_ascii_lowercase();
+    if !is_proxy_protocol(&protocol) {
+        return Err(format!("unsupported proxy protocol in JSON: {protocol}"));
+    }
+
+    object.remove("sendThrough");
+    if !preserve_tag_and_chains {
+        object.remove("proxySettings");
+        object.insert("tag".into(), json!("proxy"));
+    }
+
+    // Xray explicitly forbids streamSettings on WireGuard outbounds. Linux
+    // bypasses its endpoint through the helper's per-server physical route;
+    // Android excludes Varmlen's own package from VpnService capture.
+    if protocol == "wireguard" {
+        object.remove("streamSettings");
+        return Ok(Value::Object(object));
+    }
+
+    let stream = object.entry("streamSettings").or_insert_with(|| json!({}));
+    if !stream.is_object() {
+        *stream = json!({});
+    }
+    let stream = stream.as_object_mut().expect("object inserted above");
+    let sockopt = stream.entry("sockopt").or_insert_with(|| json!({}));
+    if !sockopt.is_object() {
+        *sockopt = json!({});
+    }
+    let sockopt = sockopt.as_object_mut().expect("object inserted above");
+    if !preserve_tag_and_chains {
+        sockopt.remove("dialerProxy");
+    }
+    sockopt.insert("mark".into(), json!(XRAY_DIAL_MARK));
+    Ok(Value::Object(object))
+}
+
+fn provider_proxy_outbounds(profile: &Value) -> Result<Vec<Value>, String> {
+    let outbounds = profile
+        .get("outbounds")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Xray profile has no outbounds array".to_string())?;
+    let mut proxies = Vec::new();
+    let mut tags = std::collections::HashSet::new();
+    for (index, outbound) in outbounds.iter().enumerate() {
+        let protocol = outbound
+            .get("protocol")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !is_proxy_protocol(&protocol) {
+            continue;
+        }
+        let mut outbound = sanitize_raw_outbound(outbound, true)?;
+        let object = outbound.as_object_mut().expect("sanitized object");
+        let tag = object
+            .get("tag")
+            .and_then(Value::as_str)
+            .filter(|tag| !tag.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                if index == 0 {
+                    "proxy".into()
+                } else {
+                    format!("proxy-{}", index + 1)
+                }
+            });
+        if RESERVED_OUTBOUND_TAGS.contains(&tag.as_str()) || !tags.insert(tag.clone()) {
+            return Err(format!("unsafe or duplicate proxy outbound tag: {tag}"));
+        }
+        object.insert("tag".into(), json!(tag));
+        proxies.push(outbound);
+    }
+    if proxies.is_empty() {
+        return Err("Xray profile has no supported proxy outbounds".into());
+    }
+    Ok(proxies)
+}
+
+fn profile_plan(server: &VlessServer) -> Result<Option<OutboundPlan>, String> {
+    let Some(profile) = server.raw_profile.as_ref() else {
+        return Ok(None);
+    };
+    let proxies = provider_proxy_outbounds(profile)?;
+    let routing = profile.get("routing").and_then(Value::as_object);
+    let balancers = routing
+        .and_then(|routing| routing.get("balancers"))
+        .filter(|balancers| balancers.as_array().is_some_and(|items| !items.is_empty()))
+        .cloned();
+    let composite = proxies.len() > 1
+        || balancers.is_some()
+        || profile.get("observatory").is_some()
+        || profile.get("burstObservatory").is_some();
+    if !composite {
+        return Ok(None);
+    }
+
+    let proxy_tags = proxies
+        .iter()
+        .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<std::collections::HashSet<_>>();
+    let balancer_tags = balancers
+        .as_ref()
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|balancer| balancer.get("tag").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<std::collections::HashSet<_>>();
+
+    if let Some(items) = balancers.as_ref().and_then(Value::as_array) {
+        for balancer in items {
+            let tag = balancer
+                .get("tag")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "profile balancer has no tag".to_string())?;
+            let selectors = balancer
+                .get("selector")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("profile balancer {tag} has no selectors"))?;
+            if selectors.iter().filter_map(Value::as_str).any(|selector| {
+                proxy_tags
+                    .iter()
+                    .any(|proxy_tag| proxy_tag.starts_with(selector))
+            }) {
+                continue;
+            }
+            return Err(format!(
+                "profile balancer {tag} does not select a proxy outbound"
+            ));
+        }
+    }
+
+    let provider_rules = routing
+        .and_then(|routing| routing.get("rules"))
+        .and_then(Value::as_array);
+    let target = provider_rules
+        .into_iter()
+        .flatten()
+        .rev()
+        .find_map(|rule| {
+            rule.get("balancerTag")
+                .and_then(Value::as_str)
+                .filter(|tag| balancer_tags.contains(*tag))
+                .map(|tag| ProxyTarget::Balancer(tag.to_string()))
+                .or_else(|| {
+                    rule.get("outboundTag")
+                        .and_then(Value::as_str)
+                        .filter(|tag| proxy_tags.contains(*tag))
+                        .map(|tag| ProxyTarget::Outbound(tag.to_string()))
+                })
+        })
+        .or_else(|| {
+            balancer_tags
+                .iter()
+                .next()
+                .map(|tag| ProxyTarget::Balancer(tag.clone()))
+        })
+        .unwrap_or_else(|| {
+            ProxyTarget::Outbound(
+                proxies[0]["tag"]
+                    .as_str()
+                    .expect("proxy tag inserted")
+                    .to_string(),
+            )
+        });
+
+    Ok(Some(OutboundPlan {
+        proxies,
+        target,
+        balancers,
+        observatory: profile.get("observatory").cloned(),
+        burst_observatory: profile.get("burstObservatory").cloned(),
+    }))
+}
+
+fn outbound_plan(server: &VlessServer) -> Result<OutboundPlan, String> {
+    if let Some(plan) = profile_plan(server)? {
+        return Ok(plan);
+    }
+    Ok(OutboundPlan {
+        proxies: vec![build_proxy_outbound(server)],
+        target: ProxyTarget::Outbound("proxy".into()),
+        balancers: None,
+        observatory: None,
+        burst_observatory: None,
+    })
+}
+
 /// Reject configurations that the normalized model would otherwise silently
 /// reinterpret. JSON-backed locations keep their exact outbound, so any real
 /// proxy protocol supported by the parser can pass through unchanged.
 pub fn validate_server(server: &VlessServer) -> Result<(), String> {
+    if server.raw_profile.is_some() {
+        outbound_plan(server)?;
+        return Ok(());
+    }
     if let Some(raw_outbound) = server.raw_outbound.as_ref() {
         let protocol = raw_outbound
             .get("protocol")
             .and_then(Value::as_str)
             .ok_or_else(|| "JSON location has no outbound protocol".to_string())?
             .to_ascii_lowercase();
-        if matches!(
-            protocol.as_str(),
-            "freedom" | "blackhole" | "dns" | "loopback" | "block" | "direct"
-        ) {
-            return Err(format!(
-                "unsupported proxy protocol in JSON location: {protocol}"
-            ));
+        if !is_proxy_protocol(&protocol) {
+            return Err(format!("unsupported proxy protocol in JSON: {protocol}"));
         }
         return Ok(());
     }
@@ -257,11 +499,7 @@ fn build_stream_settings(s: &VlessServer) -> Value {
             stream.insert("httpupgradeSettings".into(), Value::Object(hu));
         }
         "grpc" => {
-            let svc = s
-                .raw_params
-                .get("serviceName")
-                .cloned()
-                .unwrap_or_default();
+            let svc = s.raw_params.get("serviceName").cloned().unwrap_or_default();
             let multi = matches!(s.mode.as_deref(), Some("multi") | Some("gun"));
             let mut g = serde_json::Map::new();
             g.insert("serviceName".into(), json!(svc));
@@ -293,22 +531,21 @@ fn build_stream_settings(s: &VlessServer) -> Value {
             }
             stream.insert("kcpSettings".into(), Value::Object(k));
         }
-        "tcp"
+        "tcp" if s.raw_params.get("headerType").map(String::as_str) == Some("http") => {
             // TCP with HTTP header obfuscation (headerType=http) needs a
             // tcpSettings.header so xray frames requests as fake HTTP.
-            if s.raw_params.get("headerType").map(String::as_str) == Some("http") => {
-                let mut req = serde_json::Map::new();
-                if let Some(host) = host_hdr {
-                    req.insert("headers".into(), json!({ "Host": split_list(&host) }));
-                }
-                if s.path.is_some() {
-                    req.insert("path".into(), json!(split_list(&path)));
-                }
-                stream.insert(
-                    "tcpSettings".into(),
-                    json!({ "header": { "type": "http", "request": Value::Object(req) } }),
-                );
+            let mut req = serde_json::Map::new();
+            if let Some(host) = host_hdr {
+                req.insert("headers".into(), json!({ "Host": split_list(&host) }));
             }
+            if s.path.is_some() {
+                req.insert("path".into(), json!(split_list(&path)));
+            }
+            stream.insert(
+                "tcpSettings".into(),
+                json!({ "header": { "type": "http", "request": Value::Object(req) } }),
+            );
+        }
         _ => {}
     }
 
@@ -322,28 +559,9 @@ fn build_stream_settings(s: &VlessServer) -> Value {
 /// The parsed model (`VlessServer`) carries every field; only the JSON shape
 /// differs (vnext for vless/vmess, servers for trojan/shadowsocks).
 fn build_proxy_outbound(s: &VlessServer) -> Value {
-    if let Some(Value::Object(mut outbound)) = s.raw_outbound.clone() {
-        // The provider owns only the proxy protocol/transport details. Chaining
-        // and source-binding fields could bypass Varmlen's routing policy.
-        outbound.remove("sendThrough");
-        outbound.remove("proxySettings");
-        outbound.insert("tag".into(), json!("proxy"));
-
-        let stream = outbound
-            .entry("streamSettings")
-            .or_insert_with(|| json!({}));
-        if !stream.is_object() {
-            *stream = json!({});
-        }
-        let stream = stream.as_object_mut().expect("object inserted above");
-        let sockopt = stream.entry("sockopt").or_insert_with(|| json!({}));
-        if !sockopt.is_object() {
-            *sockopt = json!({});
-        }
-        let sockopt = sockopt.as_object_mut().expect("object inserted above");
-        sockopt.remove("dialerProxy");
-        sockopt.insert("mark".into(), json!(XRAY_DIAL_MARK));
-        return Value::Object(outbound);
+    if let Some(outbound) = s.raw_outbound.as_ref() {
+        return sanitize_raw_outbound(outbound, false)
+            .expect("raw outbound was validated before config generation");
     }
 
     let stream = build_stream_settings(s);
@@ -489,22 +707,27 @@ fn build_route_rules(
     allow_lan: bool,
     inbound_tag: &str,
     tun: TunMode,
+    proxy_target: &ProxyTarget,
 ) -> Vec<Value> {
     let apps_selective = split.apps_selective();
     let sites_selective = split.sites_selective();
     let android = matches!(tun, TunMode::Tun2socks);
-    let apps_out = if apps_selective { "proxy" } else { "direct" };
-    let sites_out = if sites_selective { "proxy" } else { "direct" };
-    let default_out = if android {
+    let apps_use_proxy = apps_selective;
+    let sites_use_proxy = sites_selective;
+    let default_uses_proxy = if android {
         if sites_selective {
-            "direct"
+            false
         } else {
-            "proxy"
+            true
         }
-    } else if apps_selective && sites_selective {
-        "direct"
+    } else if apps_selective {
+        // Selective apps mode = ONLY the listed apps use the VPN; everything else
+        // (e.g. a game that isn't in the list) stays DIRECT. The apps choice owns
+        // the default. (Previously this defaulted to "proxy" unless the sites mode
+        // was ALSO selective, so non-listed apps wrongly went through the VPN.)
+        false
     } else {
-        "proxy"
+        true
     };
 
     let mut rules = vec![
@@ -522,7 +745,13 @@ fn build_route_rules(
     //    wouldn't match anyway.
     if !android {
         for app in split.enabled_apps() {
-            rules.push(json!({ "type": "field", "process": [app], "outboundTag": apps_out }));
+            let mut rule = json!({ "type": "field", "process": [app] });
+            if apps_use_proxy {
+                proxy_target.apply(&mut rule);
+            } else {
+                rule["outboundTag"] = json!("direct");
+            }
+            rules.push(rule);
         }
     }
 
@@ -538,7 +767,13 @@ fn build_route_rules(
         })
         .collect();
     if !domains.is_empty() {
-        rules.push(json!({ "type": "field", "domain": domains, "outboundTag": sites_out }));
+        let mut rule = json!({ "type": "field", "domain": domains });
+        if sites_use_proxy {
+            proxy_target.apply(&mut rule);
+        } else {
+            rule["outboundTag"] = json!("direct");
+        }
+        rules.push(rule);
     }
 
     // 5. Force the DNS module's own DoH upstream (1.1.1.1) through the tunnel —
@@ -546,10 +781,18 @@ fn build_route_rules(
     //    rules: the internal resolver connection has no source process, so it
     //    falls through to here, while user traffic that matched an exclusion
     //    above is unaffected.
-    rules.push(json!({ "type": "field", "ip": ["1.1.1.1"], "outboundTag": "proxy" }));
+    let mut doh_rule = json!({ "type": "field", "ip": ["1.1.1.1"] });
+    proxy_target.apply(&mut doh_rule);
+    rules.push(doh_rule);
 
     // 6. Everything else.
-    rules.push(json!({ "type": "field", "network": "tcp,udp", "outboundTag": default_out }));
+    let mut default_rule = json!({ "type": "field", "network": "tcp,udp" });
+    if default_uses_proxy {
+        proxy_target.apply(&mut default_rule);
+    } else {
+        default_rule["outboundTag"] = json!("direct");
+    }
+    rules.push(default_rule);
     rules
 }
 
@@ -577,46 +820,83 @@ pub fn build_xray_config(
     log_level: &str,
 ) -> Value {
     let loglevel = xray_loglevel(log_level);
+    let OutboundPlan {
+        mut proxies,
+        target,
+        balancers,
+        observatory,
+        burst_observatory,
+    } = outbound_plan(server).expect("server was validated before config generation");
+    proxies.push(direct_outbound());
+    proxies.push(json!({ "tag": "dns-out", "protocol": "dns" }));
+    proxies.push(json!({ "tag": "block", "protocol": "blackhole" }));
+
     if mode == "proxy" {
         // Local SOCKS only — apps opt in by pointing at it. No tun, no split.
-        return json!({
+        let mut doh_rule = json!({ "type": "field", "ip": ["1.1.1.1"] });
+        target.apply(&mut doh_rule);
+        let mut default_rule = json!({ "type": "field", "network": "tcp,udp" });
+        target.apply(&mut default_rule);
+        let mut routing = json!({ "rules": [doh_rule, default_rule] });
+        if let Some(balancers) = balancers {
+            routing["balancers"] = balancers;
+        }
+        let mut config = json!({
             "log": { "loglevel": loglevel },
             "dns": build_dns(),
             "inbounds": build_inbounds(TunMode::Tun2socks),
-            "outbounds": [
-                build_proxy_outbound(server),
-                direct_outbound(),
-                { "tag": "dns-out", "protocol": "dns" },
-                { "tag": "block", "protocol": "blackhole" }
-            ],
-            "routing": { "rules": [
-                { "type": "field", "ip": ["1.1.1.1"], "outboundTag": "proxy" },
-                { "type": "field", "network": "tcp,udp", "outboundTag": "proxy" }
-            ] }
+            "outbounds": proxies,
+            "routing": routing
         });
+        if let Some(observatory) = observatory {
+            config["observatory"] = observatory;
+        }
+        if let Some(burst_observatory) = burst_observatory {
+            config["burstObservatory"] = burst_observatory;
+        }
+        return config;
     }
 
-    json!({
+    let rules = build_route_rules(split, allow_lan, tun.inbound_tag(), tun, &target);
+    let mut routing = json!({ "rules": rules });
+    if let Some(balancers) = balancers {
+        routing["balancers"] = balancers;
+    }
+    let mut config = json!({
         "log": { "loglevel": loglevel },
         "dns": build_dns(),
         "inbounds": build_inbounds(tun),
-        "outbounds": [
-            build_proxy_outbound(server),
-            direct_outbound(),
-            { "tag": "dns-out", "protocol": "dns" },
-            { "tag": "block", "protocol": "blackhole" }
-        ],
-        "routing": { "rules": build_route_rules(split, allow_lan, tun.inbound_tag(), tun) }
-    })
+        "outbounds": proxies,
+        "routing": routing
+    });
+    if let Some(observatory) = observatory {
+        config["observatory"] = observatory;
+    }
+    if let Some(burst_observatory) = burst_observatory {
+        config["burstObservatory"] = burst_observatory;
+    }
+    config
 }
 
-/// Minimal config for a per-server via-proxy latency probe: a local SOCKS
-/// inbound on `socks_port` whose only outbound is the server. No tun, no split,
-/// no DNS. The proxy outbound still carries `sockopt.mark` (via
-/// `build_stream_settings`), so the probe's dial escapes the tun even while the
-/// main tunnel is up — giving a clean measurement either way.
+/// Minimal per-location latency configuration. The temporary Xray only exposes
+/// a loopback SOCKS port and sends every request through the measured server.
+/// `build_proxy_outbound` keeps the 0x2024 mark that escapes the active TUN.
 pub fn build_ping_config(server: &VlessServer, socks_port: u16) -> Value {
-    json!({
+    let OutboundPlan {
+        mut proxies,
+        target,
+        balancers,
+        observatory,
+        burst_observatory,
+    } = outbound_plan(server).expect("server was validated before ping config generation");
+    proxies.push(json!({ "tag": "direct", "protocol": "freedom" }));
+    let mut default_rule = json!({ "type": "field", "network": "tcp,udp" });
+    target.apply(&mut default_rule);
+    let mut routing = json!({ "rules": [default_rule] });
+    if let Some(balancers) = balancers {
+        routing["balancers"] = balancers;
+    }
+    let mut config = json!({
         "log": { "loglevel": "warning" },
         "inbounds": [{
             "tag": "socks-in",
@@ -625,14 +905,16 @@ pub fn build_ping_config(server: &VlessServer, socks_port: u16) -> Value {
             "protocol": "socks",
             "settings": { "udp": false, "auth": "noauth" }
         }],
-        "outbounds": [
-            build_proxy_outbound(server),
-            { "tag": "direct", "protocol": "freedom" }
-        ],
-        "routing": { "rules": [
-            { "type": "field", "network": "tcp,udp", "outboundTag": "proxy" }
-        ] }
-    })
+        "outbounds": proxies,
+        "routing": routing
+    });
+    if let Some(observatory) = observatory {
+        config["observatory"] = observatory;
+    }
+    if let Some(burst_observatory) = burst_observatory {
+        config["burstObservatory"] = burst_observatory;
+    }
+    config
 }
 
 // --- Tauri command ----------------------------------------------------------
@@ -673,6 +955,139 @@ mod tests {
             .unwrap()
             .iter()
             .find(|r| r.get(key).is_some())
+    }
+
+    fn estonia_profile_server() -> VlessServer {
+        let proxy = |tag: &str, address: &str, port: u16, network: &str| {
+            json!({
+                "tag": tag,
+                "protocol": "vless",
+                "settings": {
+                    "address": address,
+                    "port": port,
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "encryption": "none"
+                },
+                "streamSettings": {
+                    "network": network,
+                    "security": "reality",
+                    "realitySettings": {
+                        "serverName": "example.com",
+                        "publicKey": "public",
+                        "shortId": "01"
+                    }
+                }
+            })
+        };
+        let profile = json!({
+            "remarks": "Estonia",
+            "dns": {"servers": ["8.8.8.8"]},
+            "inbounds": [{"tag": "provider-in", "protocol": "socks", "port": 1080}],
+            "outbounds": [
+                proxy("proxy", "edge-a.example", 6436, "raw"),
+                proxy("proxy-2", "edge-b.example", 6436, "raw"),
+                proxy("proxy-3", "edge-b.example", 6437, "grpc"),
+                proxy("proxy-4", "edge-b.example", 443, "xhttp"),
+                proxy("proxy-5", "edge-c.example", 6436, "raw"),
+                proxy("proxy-6", "edge-c.example", 6437, "grpc"),
+                proxy("proxy-7", "edge-c.example", 443, "xhttp"),
+                {"tag": "direct", "protocol": "freedom"},
+                {"tag": "block", "protocol": "blackhole"}
+            ],
+            "routing": {
+                "balancers": [{
+                    "tag": "estonia-balancer",
+                    "selector": ["proxy"],
+                    "strategy": {"type": "leastPing"},
+                    "fallbackTag": "proxy"
+                }],
+                "rules": [
+                    {"type": "field", "protocol": ["bittorrent"], "outboundTag": "direct"},
+                    {"type": "field", "network": "tcp,udp", "balancerTag": "estonia-balancer"}
+                ]
+            },
+            "burstObservatory": {
+                "subjectSelector": ["proxy"],
+                "pingConfig": {
+                    "destination": "https://example.com/generate_204",
+                    "interval": "1m",
+                    "timeout": "5s",
+                    "sampling": 3
+                }
+            }
+        });
+        parse_subscription(&profile.to_string()).remove(0)
+    }
+
+    #[test]
+    fn multi_outbound_profile_keeps_balancer_and_varmlen_policy() {
+        let server = estonia_profile_server();
+        let cfg = build_xray_config(
+            &server,
+            &split(),
+            "tun",
+            TunMode::XrayNative,
+            false,
+            "warning",
+        );
+
+        let proxy_outbounds = cfg["outbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|outbound| outbound["protocol"] == "vless")
+            .collect::<Vec<_>>();
+        assert_eq!(proxy_outbounds.len(), 7);
+        assert!(proxy_outbounds
+            .iter()
+            .all(|outbound| outbound["streamSettings"]["sockopt"]["mark"] == XRAY_DIAL_MARK));
+        assert_eq!(cfg["routing"]["balancers"][0]["tag"], "estonia-balancer");
+        assert_eq!(
+            cfg["routing"]["rules"].as_array().unwrap().last().unwrap()["balancerTag"],
+            "estonia-balancer"
+        );
+        let doh_rule = cfg["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|rule| rule["ip"] == json!(["1.1.1.1"]))
+            .unwrap();
+        assert_eq!(doh_rule["balancerTag"], "estonia-balancer");
+        assert!(cfg.get("burstObservatory").is_some());
+        assert_eq!(cfg["dns"]["servers"][0], "https://1.1.1.1/dns-query");
+        assert!(cfg["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|inbound| inbound["tag"] != "provider-in"));
+    }
+
+    #[test]
+    fn wireguard_profile_is_not_given_forbidden_stream_settings() {
+        let profile = json!({
+            "remarks": "WireGuard",
+            "outbounds": [{
+                "tag": "proxy",
+                "protocol": "wireguard",
+                "settings": {
+                    "secretKey": "secret",
+                    "address": ["10.0.0.2/32"],
+                    "peers": [{"publicKey": "public", "endpoint": "wg.example:2408"}]
+                }
+            }]
+        });
+        let server = parse_subscription(&profile.to_string()).remove(0);
+        let cfg = build_xray_config(
+            &server,
+            &split(),
+            "tun",
+            TunMode::XrayNative,
+            false,
+            "warning",
+        );
+
+        assert_eq!(cfg["outbounds"][0]["protocol"], "wireguard");
+        assert!(cfg["outbounds"][0].get("streamSettings").is_none());
     }
 
     #[test]
@@ -906,22 +1321,41 @@ mod tests {
     }
 
     #[test]
-    fn dns_routes_through_proxy_no_leak() {
-        // Anti-leak: resolver is DoH (not a plaintext/localhost server), :53 is
-        // hijacked into the DNS module, and the DoH upstream is forced to proxy.
+    fn ping_config_uses_requested_loopback_port_and_marked_proxy() {
         let s =
             parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
-        let cfg = build_xray_config(&s, &split(), "tun", TunMode::Tun2socks, true, "warning");
+        let cfg = build_ping_config(&s, 32_000);
+        assert_eq!(cfg["inbounds"][0]["listen"], "127.0.0.1");
+        assert_eq!(cfg["inbounds"][0]["port"], 32_000);
+        assert_eq!(cfg["outbounds"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            cfg["outbounds"][0]["streamSettings"]["sockopt"]["mark"],
+            XRAY_DIAL_MARK
+        );
+        assert_eq!(cfg["routing"]["rules"][0]["outboundTag"], "proxy");
+    }
+
+    #[test]
+    fn dns_routes_through_proxy_no_leak() {
+        // Anti-leak: resolver is DoH, classic DNS arriving through the data
+        // inbound is handled by dns-out, and no extra loopback listener exists.
+        let s =
+            parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
+        let cfg = build_xray_config(&s, &split(), "tun", TunMode::XrayNative, true, "warning");
         assert_eq!(cfg["dns"]["servers"][0], "https://1.1.1.1/dns-query");
+        let inbounds = cfg["inbounds"].as_array().unwrap();
+        assert_eq!(inbounds.len(), 1);
+        assert!(inbounds.iter().all(|inbound| {
+            inbound["tag"] != "dns-in" && inbound["protocol"] != "dokodemo-door"
+        }));
         let serialized = serde_json::to_string(&cfg).unwrap();
-        assert!(!serialized.contains("localhost") && !serialized.contains("\"local\""));
-        assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 1);
-        assert!(!serialized.contains("dns-in"));
-        assert!(!serialized.contains("dokodemo-door"));
         assert!(!serialized.contains("5353"));
-        let dns_hijack = rule_for(&cfg, "inboundTag").unwrap();
-        assert_eq!(dns_hijack["inboundTag"][0], "socks-in");
-        assert_eq!(dns_hijack["port"], 53);
+        let dns_hijack = cfg["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|rule| rule["inboundTag"][0] == "tun-in" && rule["port"].as_u64() == Some(53))
+            .expect("TUN DNS routing rule");
         assert_eq!(dns_hijack["outboundTag"], "dns-out");
         // DoH upstream pinned to proxy.
         let doh_rule = cfg["routing"]["rules"]

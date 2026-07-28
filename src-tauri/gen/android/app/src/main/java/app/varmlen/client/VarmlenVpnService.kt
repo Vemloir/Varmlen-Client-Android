@@ -191,6 +191,11 @@ class VarmlenVpnService : VpnService() {
         apps: Array<String>, appsAllow: Boolean, logLevel: String,
         requestId: String?
     ) {
+        // A reconnect may reach this same Service instance before Android has
+        // delivered onDestroy() for an earlier stop. Never carry the previous
+        // idempotency guard into the new data plane or its next Disconnect
+        // action would be ignored forever.
+        stopAllInProgress = false
         log("startAll socksPort=$socksPort dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel")
         val xrayBin = File(applicationInfo.nativeLibraryDir, "libxray.so")
         require(xrayBin.isFile && xrayBin.canExecute()) {
@@ -338,7 +343,16 @@ class VarmlenVpnService : VpnService() {
         requestId: String? = null,
         requestStopSelf: Boolean = true,
     ) {
-        if (stopAllInProgress) return
+        if (stopAllInProgress) {
+            // Teardown is already complete or in progress. A newer explicit
+            // disconnect still needs a matching acknowledgement; silently
+            // returning here leaves the Rust command pending for 15 seconds and
+            // makes the power button appear broken.
+            setWant(this, false)
+            broadcastState(false, error, requestId)
+            if (requestStopSelf) stopSelf()
+            return
+        }
         stopAllInProgress = true
         setWant(this, false)
         teardown()

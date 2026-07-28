@@ -1,6 +1,7 @@
 <script lang="ts">
   import { theme } from "$lib/theme.svelte";
   import { settings, type VpnMode, type PingMethod, type LogLevel } from "$lib/settings.svelte";
+  import type { SubscriptionUserAgent } from "$lib/subscription-user-agent";
   import { i18n, t, LANGUAGES, type Lang } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
   import { capsGranted, grantCaps, autostartStatus, setAutostart, vpnLog, clearVpnLog, writeClipboard, notificationsEnabled, openNotificationSettings, openVpnSettings } from "$lib/api";
@@ -178,6 +179,13 @@
     { value: "tcp", label: t("ping.tcp") },
     { value: "proxy", label: t("ping.proxy") },
   ]);
+
+  const subscriptionUaOptions = [
+    { value: "varmlen", label: "Varmlen" },
+    { value: "happ", label: "Happ" },
+    { value: "incy", label: "INCY" },
+    { value: "v2raytun", label: "v2rayTun" },
+  ];
 
   // Refresh the core's status when Settings opens (cheap GitHub check).
   $effect(() => {
@@ -455,6 +463,19 @@
           options={pingOptions}
           onChange={(v) => settings.setPingMethod(v as PingMethod)}
           ariaLabel={t("settings.pingMethod")}
+        />
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-title">{t("settings.subscriptionUa")}</div>
+          <div class="row-sub muted">{t("settings.subscriptionUaSub")}</div>
+        </div>
+        <Dropdown
+          value={settings.subscriptionUserAgent}
+          options={subscriptionUaOptions}
+          onChange={(v) =>
+            settings.setSubscriptionUserAgent(v as SubscriptionUserAgent)}
+          ariaLabel={t("settings.subscriptionUa")}
         />
       </div>
     </div>

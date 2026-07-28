@@ -51,6 +51,7 @@ describe("subscription JSON helpers", () => {
       raw_params: { spx: "/", host: "cdn.example.com" },
       source_json: null,
       raw_outbound: null,
+      raw_profile: null,
     });
 
     const parsed = parseLocationJson(formatLocationJson(JSON.parse(source)));

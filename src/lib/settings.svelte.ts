@@ -1,4 +1,8 @@
 import { browser } from "$app/environment";
+import {
+  normalizeSubscriptionUserAgent,
+  type SubscriptionUserAgent,
+} from "./subscription-user-agent";
 
 export type VpnMode = "tun" | "proxy";
 /** How server latency is measured. `tcp` = raw TCP connect to the endpoint
@@ -16,6 +20,8 @@ interface Persisted {
   closeToTray: boolean;
   /** Verbosity of the VPN log (xray + tun2socks). */
   logLevel: LogLevel;
+  /** Identity advertised only while importing/refreshing subscriptions. */
+  subscriptionUserAgent: SubscriptionUserAgent;
 }
 
 const KEY = "varmlen.settings";
@@ -26,6 +32,7 @@ const DEFAULTS: Persisted = {
   pingMethod: "tcp",
   closeToTray: true,
   logLevel: "warn",
+  subscriptionUserAgent: "varmlen",
 };
 
 const LOG_LEVELS: LogLevel[] = ["debug", "warn", "error"];
@@ -45,6 +52,9 @@ function load(): Persisted {
       logLevel: LOG_LEVELS.includes(parsed.logLevel as LogLevel)
         ? (parsed.logLevel as LogLevel)
         : DEFAULTS.logLevel,
+      subscriptionUserAgent: normalizeSubscriptionUserAgent(
+        parsed.subscriptionUserAgent,
+      ),
     };
   } catch {
     return DEFAULTS;
@@ -60,6 +70,9 @@ class SettingsStore {
   pingMethod = $state<PingMethod>(_initialSettings.pingMethod);
   closeToTray = $state(_initialSettings.closeToTray);
   logLevel = $state<LogLevel>(_initialSettings.logLevel);
+  subscriptionUserAgent = $state<SubscriptionUserAgent>(
+    _initialSettings.subscriptionUserAgent,
+  );
 
   private persist(): void {
     if (!browser) return;
@@ -72,6 +85,7 @@ class SettingsStore {
         pingMethod: this.pingMethod,
         closeToTray: this.closeToTray,
         logLevel: this.logLevel,
+        subscriptionUserAgent: this.subscriptionUserAgent,
       }),
     );
   }
@@ -82,6 +96,10 @@ class SettingsStore {
   setPingMethod(v: PingMethod): void { this.pingMethod = v; this.persist(); }
   setCloseToTray(v: boolean): void { this.closeToTray = v; this.persist(); }
   setLogLevel(v: LogLevel): void { this.logLevel = v; this.persist(); }
+  setSubscriptionUserAgent(v: SubscriptionUserAgent): void {
+    this.subscriptionUserAgent = normalizeSubscriptionUserAgent(v);
+    this.persist();
+  }
 }
 
 export const settings = new SettingsStore();

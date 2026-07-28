@@ -1,6 +1,6 @@
 {
   "name": "varmlen",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Varmlen — open-source xray-core client with per-app and per-domain split tunneling.",
   "type": "module",
   "scripts": {

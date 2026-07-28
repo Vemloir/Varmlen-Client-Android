@@ -7,7 +7,7 @@
   import { isAndroid } from "$lib/platform";
   import { placePopup, portal } from "$lib/popup";
   import FlagIcon from "$lib/components/FlagIcon.svelte";
-  import GroupedServerList from "$lib/components/GroupedServerList.svelte";
+  import ServerList from "$lib/components/ServerList.svelte";
   import {
     formatJson,
     formatLocationJson,
@@ -387,7 +387,7 @@
       {/if}
 
       {#if !sub.collapsed}
-        <GroupedServerList
+        <ServerList
           servers={sub.servers}
           selectedServerId={subs.selectedServerId}
           pings={subs.pings}

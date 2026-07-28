@@ -25,7 +25,15 @@ export interface VlessServer {
   source_json: string | null;
   /** Exact provider proxy outbound retained for safe config generation. */
   raw_outbound: unknown | null;
+  /** Complete multi-outbound Xray profile retained as one logical location. */
+  raw_profile: unknown | null;
 }
+
+export type SubscriptionUserAgent =
+  | "varmlen"
+  | "happ"
+  | "incy"
+  | "v2raytun";
 
 export interface SubscriptionMeta {
   title: string | null;
@@ -56,8 +64,14 @@ export function parseSubscriptionBody(body: string): Promise<VlessServer[]> {
   return invoke<VlessServer[]>("parse_subscription_body", { body });
 }
 
-export function fetchSubscription(url: string): Promise<ImportResult> {
-  return invoke<ImportResult>("fetch_subscription", { url });
+export function fetchSubscription(
+  url: string,
+  subscriptionUserAgent: SubscriptionUserAgent = "varmlen",
+): Promise<ImportResult> {
+  return invoke<ImportResult>("fetch_subscription", {
+    url,
+    subscriptionUserAgent,
+  });
 }
 
 

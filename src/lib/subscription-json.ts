@@ -15,7 +15,16 @@ export function isRemoteSource(value: string): boolean {
 
 type JsonObject = Record<string, unknown>;
 
-const LOCATION_PROTOCOLS = new Set(["vless", "vmess", "trojan", "shadowsocks"]);
+const LOCATION_PROTOCOLS = new Set([
+  "vless",
+  "vmess",
+  "trojan",
+  "shadowsocks",
+  "hysteria",
+  "wireguard",
+  "http",
+  "socks",
+]);
 
 function objectValue(value: unknown, name: string): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -59,7 +68,9 @@ export function parseLocationJson(source: string): VlessServer {
   const object = objectValue(parsed, "location");
   const protocol = requiredString(object, "protocol").toLowerCase();
   if (!LOCATION_PROTOCOLS.has(protocol)) {
-    throw new Error("protocol must be vless, vmess, trojan or shadowsocks");
+    throw new Error(
+      "protocol must be vless, vmess, trojan, shadowsocks, hysteria, wireguard, http or socks",
+    );
   }
   const host = requiredString(object, "host");
   const port = object.port;
@@ -110,5 +121,6 @@ export function parseLocationJson(source: string): VlessServer {
     raw_params,
     source_json: null,
     raw_outbound: null,
+    raw_profile: null,
   };
 }
