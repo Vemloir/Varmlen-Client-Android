@@ -58,10 +58,9 @@
     position: absolute;
     z-index: 1;
     top: 0;
-    left: 54px;
-    right: 12px;
-    border-top: 1px solid var(--border-strong);
-    opacity: 0.65;
+    left: 0;
+    right: 0;
+    border-top: 1px solid var(--bg);
     pointer-events: none;
   }
   .srv-row:hover { background: var(--bg-elev-2); }

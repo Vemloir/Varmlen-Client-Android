@@ -10,6 +10,10 @@
   replace local location edits.
 - Add location dividers and a neutral globe for entries without a country flag,
   and remove the selected-location stripe.
+- Make location dividers span the full card width using the page background
+  color.
+- Pretty-print valid location JSON in the editor and make reopening the same
+  location toggle its details closed.
 - Simplify protocol labels: show only Hysteria or Hysteria2 for those protocols
   and omit redundant REALITY suffixes.
 

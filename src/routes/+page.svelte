@@ -98,7 +98,7 @@
     }
   }
   function openDetails(server: ServerEntry): void {
-    detailFor = server;
+    detailFor = detailFor?.id === server.id ? null : server;
   }
   async function saveLocationDraft(draft: LocationEditDraft): Promise<void> {
     if (!detailFor) return;

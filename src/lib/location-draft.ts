@@ -45,9 +45,17 @@ function optional(value: string): string | null {
   return trimmed ? trimmed : null;
 }
 
+function formatJsonForEditing(source: string): string {
+  try {
+    return JSON.stringify(JSON.parse(source), null, 2);
+  } catch {
+    return source;
+  }
+}
+
 export function createLocationDraft(server: VlessServer): LocationEditDraft {
   if (server.source_json !== null) {
-    return { kind: "json", source: server.source_json };
+    return { kind: "json", source: formatJsonForEditing(server.source_json) };
   }
   return {
     kind: "fields",

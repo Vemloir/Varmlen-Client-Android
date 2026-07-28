@@ -45,8 +45,22 @@ describe("location edit drafts", () => {
     ]);
   });
 
-  it("keeps the exact source for a JSON location", () => {
-    const source = '{ "outbounds": [] }';
+  it("pretty-prints valid source JSON for editing", () => {
+    const source = '{"outbounds":[{"protocol":"vless"}]}';
+    expect(createLocationDraft({ ...base, source_json: source })).toEqual({
+      kind: "json",
+      source: `{
+  "outbounds": [
+    {
+      "protocol": "vless"
+    }
+  ]
+}`,
+    });
+  });
+
+  it("keeps malformed source text editable instead of discarding it", () => {
+    const source = '{"outbounds": [';
     expect(createLocationDraft({ ...base, source_json: source })).toEqual({
       kind: "json",
       source,

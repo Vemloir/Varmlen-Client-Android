@@ -79,6 +79,9 @@ describe("card surface contract", () => {
     const home = read("../routes/+page.svelte");
 
     expect(list).toMatch(/\.srv-row \+ \.srv-row::before/);
+    expect(list).toMatch(/\.srv-row \+ \.srv-row::before\s*\{[^}]*left:\s*0;[^}]*right:\s*0;/s);
+    expect(list).toMatch(/\.srv-row \+ \.srv-row::before\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s);
+    expect(list).not.toMatch(/\.srv-row \+ \.srv-row::before\s*\{[^}]*opacity:/s);
     expect(list).not.toContain("srv-stripe");
     expect(flag.match(/class="globe-arc"/g)).toHaveLength(4);
     expect(flag).toContain('class="globe-outline"');
@@ -86,6 +89,7 @@ describe("card surface contract", () => {
     expect(editor).toContain("{:else}");
     expect(editor).toContain("rawParams");
     expect(home).toContain('import LocationEditor from "$lib/components/LocationEditor.svelte";');
+    expect(home).toContain("detailFor?.id === server.id ? null : server");
     expect(home).not.toContain("detailRows");
     expect(home).not.toContain("formatLocationJson");
   });
