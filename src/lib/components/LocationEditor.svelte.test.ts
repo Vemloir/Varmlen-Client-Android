@@ -50,6 +50,23 @@ describe("Android location editor actions", () => {
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
+  it("releases a JSON textarea before cancelling the editor", async () => {
+    const onCancel = vi.fn();
+    const view = render(LocationEditor, {
+      server: serverWith({ kind: "json", source: "{}" }),
+      onSave: vi.fn(),
+      onCancel,
+    });
+    const textarea = view.getByRole("textbox");
+    textarea.focus();
+    expect(document.activeElement).toBe(textarea);
+
+    await fireEvent.click(view.getByRole("button", { name: "Cancel" }));
+
+    expect(document.activeElement).not.toBe(textarea);
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
   it("saves a reactive draft without a DataCloneError", async () => {
     const onSave = vi.fn().mockResolvedValue(undefined);
     const view = render(LocationEditor, {

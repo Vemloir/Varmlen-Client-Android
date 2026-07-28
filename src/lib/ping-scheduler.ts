@@ -1,6 +1,9 @@
-import type { PingMethod } from "$lib/settings.svelte";
-
-/** Proxy probes may fan one UI location out to several concrete outbounds. */
-export function pingWorkerLimit(method: PingMethod): number {
-  return method === "proxy" ? 2 : 32;
+/** Start every location immediately. The backend already keeps all concrete
+ *  outbounds of one composite JSON location inside one temporary Xray process,
+ *  so serialising locations here only multiplies the total wait time. */
+export async function runPingsInParallel<T>(
+  locations: readonly T[],
+  ping: (location: T) => Promise<void>,
+): Promise<void> {
+  await Promise.all(locations.map((location) => ping(location)));
 }

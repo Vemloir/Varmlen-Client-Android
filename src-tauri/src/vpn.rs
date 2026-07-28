@@ -16,6 +16,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use futures_util::future::join_all;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::core::CoreKind;
@@ -965,6 +966,20 @@ async fn probe_proxy_port(port: u16, timeout: Duration) -> Result<u32, String> {
     Ok(started.elapsed().as_millis().min(u32::MAX as u128) as u32)
 }
 
+async fn first_success<T, E, I, F>(futures: I) -> Option<T>
+where
+    I: IntoIterator<Item = F>,
+    F: std::future::Future<Output = Result<T, E>>,
+{
+    let mut pending = futures.into_iter().collect::<FuturesUnordered<_>>();
+    while let Some(result) = pending.next().await {
+        if let Ok(value) = result {
+            return Some(value);
+        }
+    }
+    None
+}
+
 /// Per-location via-proxy latency: spin one throwaway xray and time an HTTP HEAD
 /// through every concrete outbound represented by the location. Composite JSON
 /// locations (such as Proxen Estonia) are provider balancers; measuring only
@@ -1049,18 +1064,14 @@ pub async fn proxy_get_ping(
         if remaining.is_zero() {
             return Err("proxy ping timed out before probing".to_string());
         }
-        let results = join_all(
+        first_success(
             ports
                 .iter()
                 .copied()
                 .map(|port| probe_proxy_port(port, remaining)),
         )
-        .await;
-        results
-            .into_iter()
-            .filter_map(Result::ok)
-            .min()
-            .ok_or_else(|| "all proxy variants failed the latency probe".to_string())
+        .await
+        .ok_or_else(|| "all proxy variants failed the latency probe".to_string())
     }
     .await;
 
@@ -1072,7 +1083,9 @@ pub async fn proxy_get_ping(
 
 #[cfg(test)]
 mod ping_tests {
-    use super::{build_proxy_ping_request, PROXY_PING_URL};
+    use std::time::Duration;
+
+    use super::{build_proxy_ping_request, first_success, PROXY_PING_URL};
 
     #[test]
     fn proxy_ping_matches_xray_health_check_request() {
@@ -1085,5 +1098,21 @@ mod ping_tests {
             request.url().as_str(),
             "http://www.gstatic.com/generate_204"
         );
+    }
+
+    #[tokio::test]
+    async fn composite_ping_returns_without_waiting_for_slower_variants() {
+        let probes = [(200_u64, Err("slow")), (5, Ok(37_u32))].into_iter().map(
+            |(delay_ms, result)| async move {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                result
+            },
+        );
+
+        let result = tokio::time::timeout(Duration::from_millis(100), first_success(probes))
+            .await
+            .expect("fast successful path should finish before the slow path");
+
+        assert_eq!(result, Some(37));
     }
 }

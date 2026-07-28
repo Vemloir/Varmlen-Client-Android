@@ -17,7 +17,9 @@ function hysteriaLabel(server: VlessServer): string {
 
 export function transportSummary(server: VlessServer): string {
   if (server.protocol.toLowerCase() === "hysteria") {
-    return hysteriaLabel(server);
+    return [hysteriaLabel(server), server.source_json ? "JSON" : null]
+      .filter(Boolean)
+      .join(" / ");
   }
   const protocol =
     PROTOCOL_LABELS[server.protocol] ?? server.protocol.toUpperCase();

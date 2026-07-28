@@ -100,9 +100,14 @@
     }
   }
   function openDetails(server: ServerEntry): void {
+    (document.activeElement as HTMLElement | null)?.blur?.();
     detailFor = server;
   }
   function closeDetails(): void {
+    // Explicitly release WebView's native textarea/input session before the
+    // editor DOM disappears. Otherwise a JSON editor can leave a stale Android
+    // IME target that swallows close/save clicks in the next modal.
+    (document.activeElement as HTMLElement | null)?.blur?.();
     detailFor = null;
   }
   async function saveLocationDraft(draft: LocationEditDraft): Promise<void> {

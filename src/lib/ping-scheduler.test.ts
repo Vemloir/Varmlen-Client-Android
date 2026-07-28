@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { pingWorkerLimit } from "./ping-scheduler";
+import { runPingsInParallel } from "./ping-scheduler";
 
 describe("ping scheduler", () => {
-  it("limits composite proxy probes to two Xray processes at a time", () => {
-    expect(pingWorkerLimit("proxy")).toBe(2);
-    expect(pingWorkerLimit("tcp")).toBe(32);
+  it("starts every location without waiting for an earlier location", async () => {
+    const started: number[] = [];
+    const releases: Array<() => void> = [];
+    const pending = runPingsInParallel([1, 2, 3, 4], async (location) => {
+      started.push(location);
+      await new Promise<void>((resolve) => releases.push(resolve));
+    });
+
+    await Promise.resolve();
+    expect(started).toEqual([1, 2, 3, 4]);
+
+    for (const release of releases) release();
+    await pending;
   });
 });

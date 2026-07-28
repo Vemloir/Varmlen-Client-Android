@@ -54,8 +54,9 @@ describe("location protocol labels", () => {
     expect(
       transportSummary({
         ...hysteria,
+        source_json: "{}",
         raw_outbound: { protocol: "hysteria", settings: { version: 2 } },
       }),
-    ).toBe("Hysteria2");
+    ).toBe("Hysteria2 / JSON");
   });
 });

@@ -35,6 +35,19 @@
     return structuredClone($state.snapshot(value));
   }
 
+  function releaseEditorFocus(): void {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) active.blur();
+  }
+
+  function cancel(): void {
+    // Android WebView can retain the native textarea editing session after its
+    // DOM node is removed. That stale IME session consumes later modal taps:
+    // the button still receives :active feedback, but no click is dispatched.
+    releaseEditorFocus();
+    onCancel();
+  }
+
   $effect.pre(() => {
     if (loadedServerId === server.id) return;
     loadedServerId = server.id;
@@ -112,6 +125,7 @@
   }
 
   async function save(): Promise<void> {
+    releaseEditorFocus();
     saving = true;
     saveError = null;
     try {
@@ -248,7 +262,7 @@
 {/if}
 
 <div class="modal-actions">
-  <button type="button" class="btn btn-ghost" onclick={onCancel} disabled={saving}>
+  <button type="button" class="btn btn-ghost" onclick={cancel} disabled={saving}>
     {t("common.cancel")}
   </button>
   <button type="button" class="btn btn-primary" onclick={() => void save()} disabled={saving}>
