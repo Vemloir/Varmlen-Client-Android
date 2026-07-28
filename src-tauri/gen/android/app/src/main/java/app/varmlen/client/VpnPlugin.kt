@@ -52,6 +52,21 @@ class ConnectArgs {
     var logLevel: String = "warn"
 }
 
+@InvokeArg
+class SubscriptionRefreshItemArgs {
+    var id: String = ""
+    var url: String = ""
+    var userAgent: String = "varmlen"
+    var intervalHours: Int = 0
+    var lastSuccessAt: Long = 0
+    var nextUpdateAt: Long = 0
+}
+
+@InvokeArg
+class SyncSubscriptionRefreshArgs {
+    var schedules: Array<SubscriptionRefreshItemArgs> = arrayOf()
+}
+
 /** Tauri bridge: the Rust `vpn_connect`/`vpn_disconnect` commands call into this
  *  on Android to drive the VpnService (with the system consent dialog). */
 @TauriPlugin
@@ -198,6 +213,75 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
     fun clearLog(invoke: Invoke) {
         try { java.io.File(activity.filesDir, VarmlenVpnService.LOG_FILE).writeText("") } catch (_: Throwable) {}
         invoke.resolve()
+    }
+
+    /** Persist exact one-shot schedules in WorkManager. This bridge never
+     * starts the VPN service or an Activity. */
+    @Command
+    fun syncSubscriptionRefresh(invoke: Invoke) {
+        val args = invoke.parseArgs(SyncSubscriptionRefreshArgs::class.java)
+        Thread {
+            try {
+                val schedules = args.schedules.map {
+                    SubscriptionRefreshSchedule(
+                        id = it.id,
+                        url = it.url,
+                        userAgent = it.userAgent,
+                        intervalHours = it.intervalHours,
+                        lastSuccessAt = it.lastSuccessAt,
+                        nextUpdateAt = it.nextUpdateAt,
+                    )
+                }
+                SubscriptionRefreshScheduler.sync(activity.applicationContext, schedules)
+                invoke.resolve()
+            } catch (error: Throwable) {
+                invoke.reject(
+                    boundedSubscriptionRefreshError(
+                        error.message ?: "Could not schedule subscription refresh",
+                    ),
+                )
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
+    @Command
+    fun cancelSubscriptionRefresh(invoke: Invoke) {
+        try {
+            SubscriptionRefreshScheduler.cancelAll(activity.applicationContext)
+            invoke.resolve()
+        } catch (error: Throwable) {
+            invoke.reject(
+                boundedSubscriptionRefreshError(
+                    error.message ?: "Could not cancel subscription refresh",
+                ),
+            )
+        }
+    }
+
+    @Command
+    fun drainSubscriptionRefreshes(invoke: Invoke) {
+        Thread {
+            try {
+                val results = JSArray()
+                SubscriptionRefreshStore(activity.applicationContext).drain().forEach { response ->
+                    val headers = JSObject()
+                    response.headers.forEach { (name, value) -> headers.put(name, value) }
+                    results.put(JSObject().apply {
+                        put("id", response.id)
+                        put("body", response.body)
+                        put("headers", headers)
+                        put("refreshedAt", response.refreshedAt)
+                    })
+                }
+                invoke.resolve(JSObject().apply { put("results", results) })
+            } catch (error: Throwable) {
+                invoke.reject(
+                    boundedSubscriptionRefreshError(
+                        error.message ?: "Could not read subscription refreshes",
+                    ),
+                )
+            }
+        }.apply { isDaemon = true; start() }
     }
 
     /** Read the system clipboard (Android blocks navigator.clipboard in WebView). */

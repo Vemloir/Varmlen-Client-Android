@@ -54,6 +54,7 @@ class ConnStore {
   }
   /** Signature of the config last applied, to avoid redundant reconnects. */
   private lastSig: string | null = null;
+  private lastProviderRefreshRevision = 0;
   /** When we last reached "connected". A status poll right after connecting can
    *  falsely read "not running" (Android registers the service a beat late, and
    *  the VPN-consent dialog resumes the activity mid-connect), so refresh() must
@@ -78,8 +79,13 @@ class ConnStore {
   /** Called reactively when config (location / split / mode / settings)
    *  changes: while connected, debounce-reconnect with the new config so the
    *  change takes effect live. The killswitch (if on) holds across the gap. */
-  onConfigChanged(): void {
+  onConfigChanged(providerRefreshRevision = 0): void {
     const sig = this.configSig();
+    if (providerRefreshRevision !== this.lastProviderRefreshRevision) {
+      this.lastProviderRefreshRevision = providerRefreshRevision;
+      this.lastSig = sig;
+      return;
+    }
     if (this.lastSig === null) {
       this.lastSig = sig; // baseline on first run, no reconnect
       return;

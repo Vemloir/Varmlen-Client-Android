@@ -7,6 +7,8 @@ use serde::Serialize;
 use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
+use crate::{StagedSubscriptionResponse, SubscriptionRefreshScheduleInput};
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConnectArgs {
@@ -105,6 +107,48 @@ pub fn clear_log<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     vpn.0
         .run_mobile_plugin::<serde_json::Value>("clearLog", ())
         .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+struct SyncSubscriptionRefreshArgs {
+    schedules: Vec<SubscriptionRefreshScheduleInput>,
+}
+
+#[derive(serde::Deserialize)]
+struct DrainSubscriptionRefreshResponse {
+    results: Vec<StagedSubscriptionResponse>,
+}
+
+pub fn sync_subscription_refresh<R: Runtime>(
+    app: &AppHandle<R>,
+    schedules: Vec<SubscriptionRefreshScheduleInput>,
+) -> Result<(), String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>(
+            "syncSubscriptionRefresh",
+            SyncSubscriptionRefreshArgs { schedules },
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+pub fn cancel_subscription_refresh<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>("cancelSubscriptionRefresh", ())
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+pub fn drain_subscription_refreshes<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Vec<StagedSubscriptionResponse>, String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<DrainSubscriptionRefreshResponse>("drainSubscriptionRefreshes", ())
+        .map(|response| response.results)
         .map_err(|e| e.to_string())
 }
 

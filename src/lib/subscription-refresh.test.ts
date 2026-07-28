@@ -93,4 +93,26 @@ describe("subscription refresh setting contract", () => {
     expect(layout).toContain("settings.subscriptionAutoUpdate");
     expect(layout).toContain("subs.stopAutoRefresh()");
   });
+
+  it("delegates closed-app Android refreshes without touching the VPN service", () => {
+    const api = read("./api.ts");
+    const store = read("./subs.svelte.ts");
+    const connection = read("./conn.svelte.ts");
+    const layout = read("../routes/+layout.svelte");
+    const worker = read(
+      "../../src-tauri/gen/android/app/src/main/java/app/varmlen/client/SubscriptionRefreshWorker.kt",
+    );
+
+    expect(api).toContain("syncSubscriptionRefresh");
+    expect(api).toContain("drainSubscriptionRefreshes");
+    expect(store).toContain("applyStagedRefreshes");
+    expect(store).toContain("providerRefreshRevision");
+    expect(connection).toContain("lastProviderRefreshRevision");
+    expect(layout).toContain("drainNativeSubscriptionRefreshes");
+    expect(layout).toContain("syncSubscriptionRefresh(schedules)");
+    expect(worker).toContain("CoroutineWorker");
+    expect(worker).toContain('setRequestProperty("X-Device-OS", "android")');
+    expect(worker).not.toContain("VarmlenVpnService");
+    expect(worker).not.toContain("startActivity");
+  });
 });

@@ -81,6 +81,38 @@ export function fetchSubscription(
   });
 }
 
+export interface SubscriptionRefreshSchedule {
+  id: string;
+  url: string;
+  userAgent: SubscriptionUserAgent;
+  intervalHours: number;
+  lastSuccessAt: number;
+  nextUpdateAt: number;
+}
+
+export interface StagedSubscriptionResponse {
+  id: string;
+  body: string;
+  headers: Record<string, string>;
+  refreshedAt: number;
+}
+
+export function syncSubscriptionRefresh(
+  schedules: SubscriptionRefreshSchedule[],
+): Promise<void> {
+  return invoke<void>("sync_subscription_refresh", { schedules });
+}
+
+export function cancelSubscriptionRefresh(): Promise<void> {
+  return invoke<void>("cancel_subscription_refresh");
+}
+
+export function drainSubscriptionRefreshes(): Promise<
+  StagedSubscriptionResponse[]
+> {
+  return invoke<StagedSubscriptionResponse[]>("drain_subscription_refreshes");
+}
+
 
 export interface InstalledApp {
   /** Binary / process name used to match the running app. */

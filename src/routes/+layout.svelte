@@ -9,7 +9,15 @@
   import { subs } from "$lib/subs.svelte";
   import { split } from "$lib/split.svelte";
   import { settings } from "$lib/settings.svelte";
-  import { readLegacyStorage, setTrayStatus, setCloseToTray, setStatusBar } from "$lib/api";
+  import {
+    cancelSubscriptionRefresh,
+    drainSubscriptionRefreshes,
+    readLegacyStorage,
+    setTrayStatus,
+    setCloseToTray,
+    setStatusBar,
+    syncSubscriptionRefresh,
+  } from "$lib/api";
   import { listen } from "@tauri-apps/api/event";
   import { theme } from "$lib/theme.svelte";
   import { isAndroid } from "$lib/platform";
@@ -88,11 +96,65 @@
   // never triggers a subscription request, and disabling the setting cancels
   // the pending timer immediately.
   $effect(() => {
+    if (isAndroid) {
+      subs.stopAutoRefresh();
+      return;
+    }
     if (!settings.subscriptionAutoUpdate) {
       subs.stopAutoRefresh();
       return;
     }
     return subs.startAutoRefresh();
+  });
+
+  let drainingSubscriptionRefreshes = false;
+  async function drainNativeSubscriptionRefreshes(): Promise<void> {
+    if (!isAndroid || drainingSubscriptionRefreshes) return;
+    drainingSubscriptionRefreshes = true;
+    try {
+      await subs.applyStagedRefreshes(await drainSubscriptionRefreshes());
+    } catch (error) {
+      console.error("could not drain Android subscription refreshes:", error);
+    } finally {
+      drainingSubscriptionRefreshes = false;
+    }
+  }
+
+  // Android WorkManager owns network timing even with a closed WebView. While
+  // the UI is alive, this cheap local drain keeps newly staged results visible.
+  onMount(() => {
+    if (!isAndroid) return;
+    void drainNativeSubscriptionRefreshes();
+    const id = setInterval(() => void drainNativeSubscriptionRefreshes(), 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void drainNativeSubscriptionRefreshes();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  });
+
+  // Keep persisted native work aligned with subscriptions, selected UA and the
+  // global switch. Sync only schedules future work; it never fetches on mount.
+  $effect(() => {
+    if (!isAndroid) return;
+    const enabled = settings.subscriptionAutoUpdate;
+    const schedules = subs.backgroundRefreshSchedules(
+      settings.subscriptionUserAgent,
+    );
+    if (enabled) {
+      void syncSubscriptionRefresh(schedules).catch((error) =>
+        console.error("could not schedule Android subscription refresh:", error),
+      );
+    } else {
+      void cancelSubscriptionRefresh().catch((error) =>
+        console.error("could not cancel Android subscription refresh:", error),
+      );
+    }
   });
 
   // Tray "Connect / Disconnect" menu item routes back here (the connect logic
@@ -124,7 +186,7 @@
     void split.sitesMode;
     void split.apps;
     void split.sites;
-    conn.onConfigChanged();
+    conn.onConfigChanged(subs.providerRefreshRevision);
   });
 
   // Android: match the system-bar icon colour to the theme (light theme → dark

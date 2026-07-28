@@ -39,6 +39,70 @@ fn parse_subscription_response(
     Ok(subscription::parse_subscription_response(&body, &headers))
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubscriptionRefreshScheduleInput {
+    id: String,
+    url: String,
+    user_agent: String,
+    interval_hours: u32,
+    last_success_at: i64,
+    next_update_at: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StagedSubscriptionResponse {
+    id: String,
+    body: String,
+    headers: HashMap<String, String>,
+    refreshed_at: i64,
+}
+
+#[tauri::command]
+fn sync_subscription_refresh(
+    app: tauri::AppHandle,
+    schedules: Vec<SubscriptionRefreshScheduleInput>,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return mobile_vpn::sync_subscription_refresh(&app, schedules);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, schedules);
+        Err("subscription background refresh is Android-only".to_string())
+    }
+}
+
+#[tauri::command]
+fn cancel_subscription_refresh(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return mobile_vpn::cancel_subscription_refresh(&app);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Err("subscription background refresh is Android-only".to_string())
+    }
+}
+
+#[tauri::command]
+fn drain_subscription_refreshes(
+    app: tauri::AppHandle,
+) -> Result<Vec<StagedSubscriptionResponse>, String> {
+    #[cfg(target_os = "android")]
+    {
+        return mobile_vpn::drain_subscription_refreshes(&app);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(Vec::new())
+    }
+}
+
 /// Fetch and parse a subscription. Returns servers + server-side metadata
 /// (title, update interval, traffic counters, expiry, support URL).
 ///
@@ -298,6 +362,9 @@ pub fn run() {
             parse_subscription_body,
             parse_subscription_response,
             fetch_subscription,
+            sync_subscription_refresh,
+            cancel_subscription_refresh,
+            drain_subscription_refreshes,
             apps::list_installed_apps,
             apps::pick_file,
             apps::app_from_file,

@@ -2,6 +2,7 @@ import { browser } from "$app/environment";
 import {
   fetchSubscription,
   parseSubscriptionBody,
+  parseSubscriptionResponse,
   flagFor,
   stripLeadingFlag,
   formatBytes,
@@ -9,6 +10,8 @@ import {
   tcpPingHost,
   proxyGetPing,
   type ImportResult,
+  type StagedSubscriptionResponse,
+  type SubscriptionRefreshSchedule,
   type VlessServer,
 } from "$lib/api";
 import { settings, type PingMethod } from "$lib/settings.svelte";
@@ -22,7 +25,10 @@ import {
   type LocationEditDraft,
 } from "$lib/location-draft";
 import { transportSummary } from "$lib/server-label";
-import { nextRefreshBatch } from "$lib/subscription-refresh";
+import {
+  nextFutureRefresh,
+  nextRefreshBatch,
+} from "$lib/subscription-refresh";
 export { transportSummary } from "$lib/server-label";
 
 /** Ping result for a server entry. `null` = unknown / not yet measured,
@@ -199,6 +205,9 @@ class SubsStore {
   selectedServerId = $state<string | null>(_initialSubs.selectedServerId);
   selectedKey = $state<string | null>(_initialSubs.selectedKey);
   importing = $state(false);
+  /** Increments when provider data is applied. ConnStore uses it to absorb the
+   * new config without reconnecting an already-running tunnel. */
+  providerRefreshRevision = $state(0);
 
   private autoRefreshStarted = false;
   private autoRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -416,46 +425,7 @@ class SubsStore {
         );
         return;
       }
-      // A present Subscription-Userinfo header is AUTHORITATIVE: an absent
-      // key means "no quota / never expires" and must CLEAR the stored value
-      // (e.g. a plan upgraded to unlimited previously kept showing the old
-      // expiry forever). Only when the header is missing entirely do we keep
-      // what we knew.
-      const info = result.meta.has_userinfo;
-      const totalBytes = info ? (result.meta.total_bytes ?? 0) : sub.totalBytes;
-      const usedBytes = info
-        ? (result.meta.upload_bytes ?? 0) + (result.meta.download_bytes ?? 0)
-        : sub.usedBytes;
-      const freshServers = result.servers.map(toServerEntry);
-      this.list = this.list.map((s) =>
-        s.id === subId
-          ? {
-              ...s,
-              name: result.meta.title ?? s.name,
-              description: result.description ?? s.description,
-              servers: freshServers,
-              updateIntervalHours:
-                result.meta.update_interval_hours ?? s.updateIntervalHours,
-              usedBytes,
-              totalBytes,
-              expiresAtUnix: info
-                ? (result.meta.expires_at_unix ?? null)
-                : s.expiresAtUnix,
-              supportUrl: result.meta.support_url,
-              webPageUrl: result.meta.web_page_url,
-              sourceJson: result.source_json,
-              jsonEdited: false,
-              importedAt: new Date().toISOString(),
-              refreshing: false,
-            }
-          : s,
-      );
-      // The server IDs were just regenerated — re-resolve the selection from its
-      // stable key so the chosen location stays chosen.
-      this.reconcileSelection();
-      // The old server IDs were just dropped (new ones are random) — drop their
-      // now-dead ping entries.
-      this.prunePings();
+      this.applyProviderResult(subId, result, new Date().toISOString());
     } catch (e) {
       console.error("refresh failed:", e);
       this.list = this.list.map((s) =>
@@ -464,6 +434,109 @@ class SubsStore {
     } finally {
       if (reschedule) this.rescheduleAutoRefresh();
     }
+  }
+
+  /** Schedules passed to WorkManager. Only real remote subscriptions with a
+   * provider interval participate; pasted/manual configurations never do. */
+  backgroundRefreshSchedules(
+    userAgent: SubscriptionRefreshSchedule["userAgent"],
+    now = Date.now(),
+  ): SubscriptionRefreshSchedule[] {
+    return this.list.flatMap((sub) => {
+      if (
+        !isRemoteSource(sub.url) ||
+        !sub.updateIntervalHours ||
+        sub.updateIntervalHours <= 0
+      ) {
+        return [];
+      }
+      try {
+        return [{
+          id: sub.id,
+          url: sub.url,
+          userAgent,
+          intervalHours: sub.updateIntervalHours,
+          lastSuccessAt: Date.parse(sub.importedAt),
+          nextUpdateAt: nextFutureRefresh(
+            sub.importedAt,
+            sub.updateIntervalHours,
+            now,
+          ),
+        }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  /** Parse and apply responses fetched while the WebView was closed. No network
+   * request is made here; stale results older than current state are ignored. */
+  async applyStagedRefreshes(
+    responses: StagedSubscriptionResponse[],
+  ): Promise<void> {
+    for (const response of responses) {
+      const sub = this.list.find((item) => item.id === response.id);
+      if (!sub || response.refreshedAt <= Date.parse(sub.importedAt)) continue;
+      try {
+        const result = await parseSubscriptionResponse(
+          response.body,
+          response.headers,
+        );
+        if (result.servers.length === 0) continue;
+        this.applyProviderResult(
+          response.id,
+          result,
+          new Date(response.refreshedAt).toISOString(),
+        );
+      } catch (error) {
+        console.error("staged subscription refresh failed:", error);
+      }
+    }
+  }
+
+  private applyProviderResult(
+    subId: string,
+    result: ImportResult,
+    importedAt: string,
+  ): void {
+    const previous = this.list.find((sub) => sub.id === subId);
+    if (!previous || result.servers.length === 0) return;
+    // A present Subscription-Userinfo header is authoritative. Missing quota
+    // or expiry values therefore clear old finite-plan data.
+    const info = result.meta.has_userinfo;
+    const totalBytes = info
+      ? (result.meta.total_bytes ?? 0)
+      : previous.totalBytes;
+    const usedBytes = info
+      ? (result.meta.upload_bytes ?? 0) + (result.meta.download_bytes ?? 0)
+      : previous.usedBytes;
+    const freshServers = result.servers.map(toServerEntry);
+    this.list = this.list.map((sub) =>
+      sub.id === subId
+        ? {
+            ...sub,
+            name: result.meta.title ?? sub.name,
+            description: result.description ?? sub.description,
+            servers: freshServers,
+            updateIntervalHours:
+              result.meta.update_interval_hours ?? sub.updateIntervalHours,
+            usedBytes,
+            totalBytes,
+            expiresAtUnix: info
+              ? (result.meta.expires_at_unix ?? null)
+              : sub.expiresAtUnix,
+            supportUrl: result.meta.support_url,
+            webPageUrl: result.meta.web_page_url,
+            sourceJson: result.source_json,
+            jsonEdited: false,
+            importedAt,
+            refreshing: false,
+          }
+        : sub,
+    );
+    this.reconcileSelection();
+    this.prunePings();
+    this.providerRefreshRevision += 1;
   }
 
   /** Validate and atomically apply edited subscription JSON. Remote sources keep
