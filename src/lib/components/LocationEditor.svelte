@@ -1,11 +1,19 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import {
+    getLocationEditorOptions,
+    type EditorChoice,
+    type LocationEditorOptions,
+  } from "$lib/api";
   import { t } from "$lib/i18n.svelte";
+  import { includeCurrentOption } from "$lib/location-editor-options";
   import {
     createLocationDraft,
     type LocationEditDraft,
     type LocationField,
   } from "$lib/location-draft";
   import type { ServerEntry } from "$lib/subs.svelte";
+  import Dropdown from "./Dropdown.svelte";
 
   let {
     server,
@@ -26,6 +34,21 @@
   });
   let saving = $state(false);
   let saveError = $state<string | null>(null);
+  let options = $state<LocationEditorOptions | null>(null);
+
+  onMount(() => {
+    let active = true;
+    void getLocationEditorOptions()
+      .then((value) => {
+        if (active) options = value;
+      })
+      .catch((error) => {
+        console.error("could not load Xray editor options:", error);
+      });
+    return () => {
+      active = false;
+    };
+  });
 
   const fieldDraft = $derived(
     draft.kind === "fields" ? draft : null,
@@ -33,9 +56,41 @@
   const protocol = $derived(fieldDraft?.values.protocol.toLowerCase() ?? "");
   const transport = $derived(fieldDraft?.values.transport.toLowerCase() ?? "");
   const security = $derived(fieldDraft?.values.security.toLowerCase() ?? "");
+  const isWireGuard = $derived(protocol === "wireguard");
+  const isHysteria = $derived(protocol === "hysteria");
+  const transportOptions = $derived(
+    isHysteria
+      ? options?.transports.filter((option) => option.value === "hysteria") ?? []
+      : options?.transports.filter((option) => option.value !== "hysteria") ?? [],
+  );
+  const securityOptions = $derived(
+    isHysteria
+      ? options?.securities.filter((option) => option.value === "tls") ?? []
+      : options?.securities ?? [],
+  );
+  const modeOptions = $derived(
+    transport === "grpc"
+      ? options?.grpcModes ?? []
+      : options?.xhttpModes ?? [],
+  );
 
   function setField(field: LocationField, value: string): void {
-    if (draft.kind === "fields") draft.values[field] = value;
+    if (draft.kind !== "fields") return;
+    draft.values[field] = value;
+    if (field !== "protocol") return;
+    if (value === "hysteria") {
+      draft.values.transport = "hysteria";
+      draft.values.security = "tls";
+    } else if (value === "wireguard") {
+      draft.values.transport = "wireguard";
+      draft.values.security = "none";
+      draft.values.domain_strategy ||= "ForceIP";
+    } else {
+      if (draft.values.transport === "hysteria" || draft.values.transport === "wireguard") {
+        draft.values.transport = "tcp";
+      }
+      if (!draft.values.security) draft.values.security = "none";
+    }
   }
 
   function addRawParam(): void {
@@ -74,6 +129,19 @@
   </label>
 {/snippet}
 
+{#snippet selectField(field: LocationField, label: string, choices: EditorChoice[])}
+  <label class="field">
+    <span>{label}</span>
+    <Dropdown
+      field
+      value={fieldDraft?.values[field] ?? ""}
+      options={includeCurrentOption(choices, fieldDraft?.values[field] ?? "")}
+      onChange={(value) => setField(field, value)}
+      ariaLabel={label}
+    />
+  </label>
+{/snippet}
+
 {#if draft.kind === "json"}
   <label class="json-field">
     <span>{t("location.json")}</span>
@@ -82,19 +150,7 @@
 {:else}
   <div class="fields-grid">
     {@render inputField("label", t("location.name"))}
-    <label class="field">
-      <span>{t("location.protocol")}</span>
-      <select
-        value={draft.values.protocol}
-        onchange={(event) =>
-          setField("protocol", (event.currentTarget as HTMLSelectElement).value)}
-      >
-        <option value="vless">VLESS</option>
-        <option value="vmess">VMess</option>
-        <option value="trojan">Trojan</option>
-        <option value="shadowsocks">Shadowsocks</option>
-      </select>
-    </label>
+    {@render selectField("protocol", t("location.protocol"), options?.protocols ?? [])}
     {@render inputField("host", t("location.address"))}
     {@render inputField("port", t("location.port"), "text")}
 
@@ -103,27 +159,58 @@
     {:else if protocol === "trojan"}
       {@render inputField("password", t("location.password"), "text")}
     {:else if protocol === "shadowsocks"}
-      {@render inputField("method", t("location.method"))}
+      {@render selectField("method", t("location.method"), options?.shadowsocksMethods ?? [])}
       {@render inputField("password", t("location.password"), "text")}
+    {:else if protocol === "hysteria"}
+      {@render inputField("uuid", t("location.auth"))}
+    {:else if protocol === "http" || protocol === "socks"}
+      {@render inputField("uuid", t("location.username"))}
+      {@render inputField("password", t("location.password"), "text")}
+    {:else if protocol === "wireguard"}
+      {@render inputField("uuid", t("location.privateKey"))}
+      {@render inputField("public_key", t("location.peerPublicKey"))}
+      {@render inputField("local_address", t("location.localAddress"))}
+      {@render inputField("pre_shared_key", t("location.preSharedKey"))}
+      {@render inputField("reserved", t("location.reserved"))}
+      {@render inputField("mtu", "MTU")}
+      {@render selectField(
+        "domain_strategy",
+        t("location.domainStrategy"),
+        options?.wireguardDomainStrategies ?? [],
+      )}
     {/if}
 
-    {@render inputField("transport", t("location.transport"))}
-    {@render inputField("security", t("location.security"))}
+    {#if !isWireGuard}
+      {@render selectField("transport", t("location.transport"), transportOptions)}
+      {@render selectField("security", t("location.security"), securityOptions)}
+    {/if}
 
     {#if security === "tls" || security === "reality"}
       {@render inputField("sni", "SNI")}
-      {@render inputField("fingerprint", t("location.fingerprint"))}
+      {@render selectField(
+        "fingerprint",
+        t("location.fingerprint"),
+        options?.fingerprints ?? [],
+      )}
     {/if}
     {#if security === "reality"}
       {@render inputField("public_key", t("location.publicKey"))}
       {@render inputField("short_id", t("location.shortId"))}
-      {@render inputField("flow", "Flow")}
+      {@render selectField("flow", "Flow", options?.flows ?? [])}
     {/if}
     {#if transport === "ws" || transport === "xhttp" || transport === "httpupgrade" || transport === "grpc"}
       {@render inputField("path", t("location.path"))}
-      {@render inputField("mode", t("location.mode"))}
     {/if}
-    {@render inputField("packet_encoding", t("location.packetEncoding"))}
+    {#if transport === "xhttp" || transport === "grpc"}
+      {@render selectField("mode", t("location.mode"), modeOptions)}
+    {/if}
+    {#if !isWireGuard && !isHysteria}
+      {@render selectField(
+        "packet_encoding",
+        t("location.packetEncoding"),
+        options?.packetEncodings ?? [],
+      )}
+    {/if}
   </div>
 
   <div class="params-head">
@@ -178,8 +265,7 @@
     font-size: 11px;
     font-weight: 600;
   }
-  .field input,
-  .field select {
+  .field input {
     color: var(--text);
     font-size: 13px;
     font-weight: 400;

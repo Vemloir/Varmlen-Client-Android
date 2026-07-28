@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onBackButtonPress } from "@tauri-apps/api/app";
+  import type { PluginListener } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { conn } from "$lib/conn.svelte";
   import { subs } from "$lib/subs.svelte";
@@ -98,13 +100,35 @@
     }
   }
   function openDetails(server: ServerEntry): void {
-    detailFor = detailFor?.id === server.id ? null : server;
+    detailFor = server;
+  }
+  function closeDetails(): void {
+    detailFor = null;
   }
   async function saveLocationDraft(draft: LocationEditDraft): Promise<void> {
     if (!detailFor) return;
     await subs.saveServerDraft(detailFor.id, draft);
-    detailFor = null;
+    closeDetails();
   }
+
+  // Tauri's Android app plugin emits this while a frontend listener exists.
+  // Register only while this editor is open, so Back closes the sheet and
+  // otherwise keeps the platform's normal navigation/exit behaviour.
+  $effect(() => {
+    if (!isAndroid || !detailFor) return;
+    let disposed = false;
+    let listener: PluginListener | null = null;
+    void onBackButtonPress(closeDetails)
+      .then((registered) => {
+        if (disposed) void registered.unregister();
+        else listener = registered;
+      })
+      .catch((error) => console.error("could not listen for Android Back:", error));
+    return () => {
+      disposed = true;
+      void listener?.unregister();
+    };
+  });
 
   // Subscription headers (support / web-page URLs) are attacker-controlled, so
   // only hand the OS opener a vetted web/Telegram scheme — never file:, etc.
@@ -418,11 +442,11 @@
 {/if}
 
 {#if detailFor}
-  <div class="modal-backdrop" onclick={() => (detailFor = null)} role="presentation">
+  <div class="modal-backdrop" onclick={closeDetails} role="presentation">
     <div
-      class="modal card"
+      class="modal card location-modal"
       onclick={(e) => e.stopPropagation()}
-      onkeydown={(e) => e.key === "Escape" && (detailFor = null)}
+      onkeydown={(e) => e.key === "Escape" && closeDetails()}
       role="dialog"
       tabindex="-1"
       aria-modal="true"
@@ -433,17 +457,19 @@
           <FlagIcon flag={detailFor.flag ?? ""} />
           <span>{detailFor.name}</span>
         </h2>
-        <button class="icon-btn" onclick={() => (detailFor = null)} aria-label={t("common.close")}>
+        <button type="button" class="icon-btn" onclick={closeDetails} aria-label={t("common.close")}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
           </svg>
         </button>
       </header>
-      <LocationEditor
-        server={detailFor}
-        onSave={saveLocationDraft}
-        onCancel={() => (detailFor = null)}
-      />
+      <div class="location-editor-scroll">
+        <LocationEditor
+          server={detailFor}
+          onSave={saveLocationDraft}
+          onCancel={closeDetails}
+        />
+      </div>
     </div>
   </div>
 {/if}
@@ -994,6 +1020,16 @@
     animation: slideUp 180ms cubic-bezier(0.2, 0, 0, 1);
     max-height: calc(100dvh - 24px);
     overflow-y: auto;
+  }
+  .location-modal {
+    overflow: hidden;
+  }
+  .location-editor-scroll {
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 2px;
   }
   .modal h2 {
     margin: 0;

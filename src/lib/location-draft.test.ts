@@ -89,6 +89,27 @@ describe("location edit drafts", () => {
     expect(result).toEqual({ ok: false, error: expect.stringContaining("port") });
     expect(draft.values.port).toBe("not-a-port");
   });
+
+  it("maps WireGuard-specific parameters to fields without duplicating them", () => {
+    const draft = createLocationDraft({
+      ...base,
+      protocol: "wireguard",
+      uuid: "private",
+      public_key: "public",
+      raw_params: {
+        localAddress: "10.0.0.2/32",
+        domainStrategy: "ForceIPv4",
+        custom: "kept",
+      },
+    });
+    expect(draft.kind).toBe("fields");
+    if (draft.kind !== "fields") throw new Error("wrong draft kind");
+    expect(draft.values.local_address).toBe("10.0.0.2/32");
+    expect(draft.values.domain_strategy).toBe("ForceIPv4");
+    expect(draft.rawParams).toEqual([
+      expect.objectContaining({ key: "custom", value: "kept" }),
+    ]);
+  });
 });
 
 describe("provider refresh authority", () => {

@@ -29,6 +29,28 @@ export interface VlessServer {
   raw_profile: unknown | null;
 }
 
+export interface EditorChoice {
+  value: string;
+  label: string;
+}
+
+export interface LocationEditorOptions {
+  protocols: EditorChoice[];
+  transports: EditorChoice[];
+  securities: EditorChoice[];
+  fingerprints: EditorChoice[];
+  flows: EditorChoice[];
+  xhttpModes: EditorChoice[];
+  grpcModes: EditorChoice[];
+  packetEncodings: EditorChoice[];
+  shadowsocksMethods: EditorChoice[];
+  wireguardDomainStrategies: EditorChoice[];
+}
+
+export function getLocationEditorOptions(): Promise<LocationEditorOptions> {
+  return invoke<LocationEditorOptions>("location_editor_options");
+}
+
 export type SubscriptionUserAgent =
   | "varmlen"
   | "happ"

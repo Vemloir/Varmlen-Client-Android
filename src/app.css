@@ -170,6 +170,17 @@ a {
 .modal-backdrop {
   padding-bottom: env(safe-area-inset-bottom);
 }
+.is-android .modal-backdrop {
+  padding-top: calc(var(--sat) + 12px);
+  padding-right: 12px;
+  padding-bottom: calc(env(safe-area-inset-bottom) + 12px);
+  padding-left: 12px;
+}
+.is-android .modal-backdrop > .modal {
+  width: 100% !important;
+  max-height: 100% !important;
+  margin: 0 !important;
+}
 
 /* ---------- common ---------- */
 .btn {

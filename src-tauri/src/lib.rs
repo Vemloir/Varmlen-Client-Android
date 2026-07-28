@@ -373,6 +373,7 @@ pub fn run() {
             core::core_activate,
             core::core_uninstall,
             core::list_core_releases,
+            xray::location_editor_options,
             xray::generate_xray_config,
             vpn::vpn_connect,
             vpn::vpn_disconnect,

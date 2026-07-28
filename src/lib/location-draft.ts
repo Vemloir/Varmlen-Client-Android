@@ -17,7 +17,12 @@ export type LocationField =
   | "flow"
   | "path"
   | "mode"
-  | "packet_encoding";
+  | "packet_encoding"
+  | "local_address"
+  | "pre_shared_key"
+  | "reserved"
+  | "mtu"
+  | "domain_strategy";
 
 export interface FieldLocationDraft {
   kind: "fields";
@@ -53,6 +58,14 @@ function formatJsonForEditing(source: string): string {
   }
 }
 
+const STRUCTURED_RAW_PARAMS = new Set([
+  "localAddress",
+  "preSharedKey",
+  "reserved",
+  "mtu",
+  "domainStrategy",
+]);
+
 export function createLocationDraft(server: VlessServer): LocationEditDraft {
   if (server.source_json !== null) {
     return { kind: "json", source: formatJsonForEditing(server.source_json) };
@@ -77,12 +90,19 @@ export function createLocationDraft(server: VlessServer): LocationEditDraft {
       path: text(server.path),
       mode: text(server.mode),
       packet_encoding: text(server.packet_encoding),
+      local_address: server.raw_params.localAddress ?? "",
+      pre_shared_key: server.raw_params.preSharedKey ?? "",
+      reserved: server.raw_params.reserved ?? "",
+      mtu: server.raw_params.mtu ?? "",
+      domain_strategy: server.raw_params.domainStrategy ?? "",
     },
-    rawParams: Object.entries(server.raw_params).map(([key, value]) => ({
-      id: crypto.randomUUID(),
-      key,
-      value,
-    })),
+    rawParams: Object.entries(server.raw_params)
+      .filter(([key]) => !STRUCTURED_RAW_PARAMS.has(key))
+      .map(([key, value]) => ({
+        id: crypto.randomUUID(),
+        key,
+        value,
+      })),
   };
 }
 
@@ -110,10 +130,39 @@ export function compileFieldDraft(
   if (protocol === "shadowsocks" && !method) {
     return { ok: false, error: "method is required for Shadowsocks" };
   }
+  if (protocol === "hysteria" && !uuid) {
+    return { ok: false, error: "authentication is required for Hysteria2" };
+  }
+  if (protocol === "wireguard" && !uuid) {
+    return { ok: false, error: "private key is required for WireGuard" };
+  }
+  if (
+    protocol === "wireguard" &&
+    !draft.values.public_key.trim()
+  ) {
+    return { ok: false, error: "peer public key is required for WireGuard" };
+  }
   const raw_params: Record<string, string> = {};
   for (const row of draft.rawParams) {
     const key = row.key.trim();
     if (key) raw_params[key] = row.value;
+  }
+  const setRaw = (key: string, value: string): void => {
+    const trimmed = value.trim();
+    if (trimmed) raw_params[key] = trimmed;
+    else delete raw_params[key];
+  };
+  const isHysteria = protocol === "hysteria";
+  const isWireGuard = protocol === "wireguard";
+  if (isWireGuard) {
+    setRaw("localAddress", draft.values.local_address);
+    setRaw("preSharedKey", draft.values.pre_shared_key);
+    setRaw("reserved", draft.values.reserved);
+    setRaw("mtu", draft.values.mtu);
+    setRaw(
+      "domainStrategy",
+      draft.values.domain_strategy || "ForceIP",
+    );
   }
   return {
     ok: true,
@@ -126,8 +175,16 @@ export function compileFieldDraft(
       host,
       port,
       label: draft.values.label.trim() || host,
-      transport: draft.values.transport.trim().toLowerCase() || "tcp",
-      security: draft.values.security.trim().toLowerCase() || "none",
+      transport: isHysteria
+        ? "hysteria"
+        : isWireGuard
+          ? "wireguard"
+          : draft.values.transport.trim().toLowerCase() || "tcp",
+      security: isHysteria
+        ? "tls"
+        : isWireGuard
+          ? "none"
+          : draft.values.security.trim().toLowerCase() || "none",
       sni: optional(draft.values.sni),
       fingerprint: optional(draft.values.fingerprint),
       public_key: optional(draft.values.public_key),

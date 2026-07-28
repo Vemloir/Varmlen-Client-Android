@@ -11,9 +11,16 @@
     options: Option<V>[];
     onChange: (v: V) => void;
     ariaLabel?: string;
+    field?: boolean;
   }
 
-  let { value, options, onChange, ariaLabel = "Select" }: Props<string> = $props();
+  let {
+    value,
+    options,
+    onChange,
+    ariaLabel = "Select",
+    field = false,
+  }: Props<string> = $props();
 
   let open = $state(false);
   let trigger: HTMLButtonElement | undefined = $state();
@@ -65,7 +72,7 @@
   }
 </script>
 
-<div class="dd">
+<div class="dd" class:field>
   <button
     bind:this={trigger}
     type="button"
@@ -121,6 +128,10 @@
     position: relative;
     flex-shrink: 0;
   }
+  .dd.field {
+    width: 100%;
+    flex-shrink: 1;
+  }
   .trigger {
     display: inline-flex;
     align-items: center;
@@ -131,6 +142,14 @@
     border-radius: var(--radius-sm);
     font-size: 13px;
     color: var(--text);
+  }
+  .field .trigger {
+    width: 100%;
+    justify-content: space-between;
+    padding: 10px 12px;
+    padding-right: 14px;
+    min-height: 39px;
+    text-align: left;
   }
   @media (hover: hover) {
     .trigger:hover {

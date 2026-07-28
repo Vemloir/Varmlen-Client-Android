@@ -88,9 +88,33 @@ describe("card surface contract", () => {
     expect(editor).toContain('{#if draft.kind === "json"}');
     expect(editor).toContain("{:else}");
     expect(editor).toContain("rawParams");
+    expect(editor).toContain('import Dropdown from "./Dropdown.svelte";');
+    expect(editor).not.toContain("<select");
     expect(home).toContain('import LocationEditor from "$lib/components/LocationEditor.svelte";');
-    expect(home).toContain("detailFor?.id === server.id ? null : server");
+    expect(home).toContain("onBackButtonPress(closeDetails)");
+    expect(home).toContain('class="modal card location-modal"');
+    expect(home).toContain('class="location-editor-scroll"');
     expect(home).not.toContain("detailRows");
     expect(home).not.toContain("formatLocationJson");
+  });
+
+  it("keeps Android modals inside both system insets and exposes a field dropdown variant", () => {
+    const css = read("../app.css");
+    const dropdown = read("./components/Dropdown.svelte");
+
+    expect(css).toMatch(
+      /\.is-android \.modal-backdrop\s*\{[^}]*padding-top:\s*calc\(var\(--sat\) \+ 12px\);/s,
+    );
+    expect(css).toMatch(
+      /\.is-android \.modal-backdrop > \.modal\s*\{[^}]*max-height:\s*100%\s*!important;/s,
+    );
+    expect(dropdown).toContain("field?: boolean");
+    expect(dropdown).toContain("class:field");
+    expect(dropdown).toMatch(
+      /\.dd\.field\s*\{[^}]*width:\s*100%;/s,
+    );
+    expect(dropdown).toMatch(
+      /\.field \.trigger\s*\{[^}]*padding-right:\s*14px;/s,
+    );
   });
 });
