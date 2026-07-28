@@ -273,7 +273,7 @@ export function tcpPingHost(host: string, port: number, timeoutMs = 2500): Promi
 }
 
 /** Via-proxy RTT in ms: spins a throwaway xray for `server` and times an HTTP
- *  GET to a 204 endpoint through it. Rejects on timeout / unreachable. */
+ *  HEAD to a 204 endpoint through it. Rejects on timeout / unreachable. */
 export function proxyGetPing(server: VlessServer, timeoutMs = 5000): Promise<number> {
   return invoke<number>("proxy_get_ping", { server, timeoutMs });
 }

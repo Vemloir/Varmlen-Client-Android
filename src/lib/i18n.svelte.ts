@@ -142,7 +142,7 @@ const EN: Dict = {
   "settings.subscriptionUa": "Subscription User-Agent",
   "settings.subscriptionUaSub": "Used on the next subscription import or refresh.",
   "ping.tcp": "TCP",
-  "ping.proxy": "Via proxy (GET)",
+  "ping.proxy": "Via proxy (HTTP)",
   "ping.na": "n/a",
   "ping.ms": "{n} ms",
 
@@ -317,7 +317,7 @@ const RU: Dict = {
   "settings.subscriptionUa": "User-Agent подписок",
   "settings.subscriptionUaSub": "Применится при следующем импорте или обновлении подписки.",
   "ping.tcp": "TCP",
-  "ping.proxy": "Через прокси (GET)",
+  "ping.proxy": "Через прокси (HTTP)",
   "ping.na": "н/д",
   "ping.ms": "{n} мс",
 

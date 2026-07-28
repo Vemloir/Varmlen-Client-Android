@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.4
+
+- Make one-shot HTTP latency checks use a composite location's deterministic
+  fallback outbound instead of racing its cold load balancer and observatory.
+- Match Xray's health-check request with an HTTP HEAD probe to the provider's
+  gstatic 204 endpoint, reducing inflated latency and fixing Proxen USA probes.
+
 ## 0.2.3
 
 - Send client-family subscription User-Agents as

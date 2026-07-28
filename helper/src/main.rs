@@ -13,9 +13,8 @@
 //!   - `killswitch-up`  apply the nftables drop table
 //!   - `killswitch-down`remove it
 //!   - `route-up`       lay the routing xray's native tun needs: default route
-//!                      into the tun, a physical bypass table + ip rule for
-//!                      xray's own marked dials, the anti-loop server route, and
-//!                      loose rp_filter
+//!     into the tun, a physical bypass table + ip rule for xray's own marked
+//!     dials, the anti-loop server route, and loose rp_filter
 //!   - `route-down`     tear that routing down (idempotent)
 //!   - `cleanup`        crash-recovery superset (killswitch + routing + stray TUN)
 //!
@@ -229,7 +228,7 @@ fn icmp_ping(host: &str, timeout_ms: u32) -> Result<u32, String> {
     if !host.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_')) {
         return Err("invalid host".into());
     }
-    let timeout_s = ((timeout_ms + 999) / 1000).clamp(1, 10);
+    let timeout_s = timeout_ms.div_ceil(1000).clamp(1, 10);
     let out = Command::new("ping")
         .arg("-n").arg("-c").arg("1").arg("-W").arg(timeout_s.to_string()).arg(host)
         .stdout(Stdio::piped()).stderr(Stdio::null())

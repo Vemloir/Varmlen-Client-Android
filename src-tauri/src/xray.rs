@@ -324,6 +324,59 @@ fn outbound_plan(server: &VlessServer) -> Result<OutboundPlan, String> {
     })
 }
 
+fn ping_outbound_tag(plan: &OutboundPlan) -> String {
+    let first_proxy_tag = || {
+        plan.proxies[0]["tag"]
+            .as_str()
+            .expect("proxy tags are normalized")
+            .to_string()
+    };
+    let ProxyTarget::Balancer(target_tag) = &plan.target else {
+        return match &plan.target {
+            ProxyTarget::Outbound(tag) => tag.clone(),
+            ProxyTarget::Balancer(_) => unreachable!(),
+        };
+    };
+    let proxy_tags = plan
+        .proxies
+        .iter()
+        .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
+        .collect::<std::collections::HashSet<_>>();
+    let Some(balancer) = plan
+        .balancers
+        .as_ref()
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|balancer| balancer.get("tag").and_then(Value::as_str) == Some(target_tag))
+    else {
+        return first_proxy_tag();
+    };
+
+    if let Some(fallback) = balancer
+        .get("fallbackTag")
+        .and_then(Value::as_str)
+        .filter(|tag| proxy_tags.contains(tag))
+    {
+        return fallback.to_string();
+    }
+
+    balancer
+        .get("selector")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find_map(|selector| {
+            plan.proxies
+                .iter()
+                .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
+                .find(|tag| tag.starts_with(selector))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(first_proxy_tag)
+}
+
 /// Reject configurations that the normalized model would otherwise silently
 /// reinterpret. JSON-backed locations keep their exact outbound, so any real
 /// proxy protocol supported by the parser can pass through unchanged.
@@ -715,11 +768,7 @@ fn build_route_rules(
     let apps_use_proxy = apps_selective;
     let sites_use_proxy = sites_selective;
     let default_uses_proxy = if android {
-        if sites_selective {
-            false
-        } else {
-            true
-        }
+        !sites_selective
     } else if apps_selective {
         // Selective apps mode = ONLY the listed apps use the VPN; everything else
         // (e.g. a game that isn't in the list) stays DIRECT. The apps choice owns
@@ -878,25 +927,18 @@ pub fn build_xray_config(
     config
 }
 
-/// Minimal per-location latency configuration. The temporary Xray only exposes
-/// a loopback SOCKS port and sends every request through the measured server.
-/// `build_proxy_outbound` keeps the 0x2024 mark that escapes the active TUN.
+/// Minimal per-location latency configuration. A provider balancer is reduced
+/// to its fallback (or first matching proxy) so a one-shot probe does not race
+/// the balancer's cold observatory or launch parallel health checks.
 pub fn build_ping_config(server: &VlessServer, socks_port: u16) -> Value {
-    let OutboundPlan {
-        mut proxies,
-        target,
-        balancers,
-        observatory,
-        burst_observatory,
-    } = outbound_plan(server).expect("server was validated before ping config generation");
+    let mut plan =
+        outbound_plan(server).expect("server was validated before ping config generation");
+    let ping_tag = ping_outbound_tag(&plan);
+    let mut proxies = std::mem::take(&mut plan.proxies);
     proxies.push(json!({ "tag": "direct", "protocol": "freedom" }));
     let mut default_rule = json!({ "type": "field", "network": "tcp,udp" });
-    target.apply(&mut default_rule);
-    let mut routing = json!({ "rules": [default_rule] });
-    if let Some(balancers) = balancers {
-        routing["balancers"] = balancers;
-    }
-    let mut config = json!({
+    ProxyTarget::Outbound(ping_tag).apply(&mut default_rule);
+    json!({
         "log": { "loglevel": "warning" },
         "inbounds": [{
             "tag": "socks-in",
@@ -906,15 +948,8 @@ pub fn build_ping_config(server: &VlessServer, socks_port: u16) -> Value {
             "settings": { "udp": false, "auth": "noauth" }
         }],
         "outbounds": proxies,
-        "routing": routing
-    });
-    if let Some(observatory) = observatory {
-        config["observatory"] = observatory;
-    }
-    if let Some(burst_observatory) = burst_observatory {
-        config["burstObservatory"] = burst_observatory;
-    }
-    config
+        "routing": { "rules": [default_rule] }
+    })
 }
 
 // --- Tauri command ----------------------------------------------------------
@@ -1333,6 +1368,17 @@ mod tests {
             XRAY_DIAL_MARK
         );
         assert_eq!(cfg["routing"]["rules"][0]["outboundTag"], "proxy");
+    }
+
+    #[test]
+    fn composite_ping_uses_balancer_fallback_without_starting_health_checks() {
+        let server = estonia_profile_server();
+        let cfg = build_ping_config(&server, 32_000);
+
+        assert_eq!(cfg["routing"]["rules"][0]["outboundTag"], "proxy");
+        assert!(cfg["routing"].get("balancers").is_none());
+        assert!(cfg.get("observatory").is_none());
+        assert!(cfg.get("burstObservatory").is_none());
     }
 
     #[test]

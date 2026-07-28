@@ -926,8 +926,14 @@ fn free_local_port() -> Result<u16, String> {
         .map_err(|e| format!("alloc port: {e}"))
 }
 
+const PROXY_PING_URL: &str = "http://www.gstatic.com/generate_204";
+
+fn build_proxy_ping_request(client: &reqwest::Client) -> reqwest::RequestBuilder {
+    client.head(PROXY_PING_URL)
+}
+
 /// Per-server via-proxy latency: spin a throwaway xray (the server as the only
-/// outbound + a local SOCKS on an ephemeral port), time an HTTP GET to a 204
+/// outbound + a local SOCKS on an ephemeral port), time an HTTP HEAD to a 204
 /// endpoint through it, then tear it down. The probe outbound carries
 /// `sockopt.mark`, so it measures cleanly whether or not the main tunnel is up.
 #[tauri::command]
@@ -1011,11 +1017,10 @@ pub async fn proxy_get_ping(
             .build()
             .map_err(|e| format!("client: {e}"))?;
         let started = Instant::now();
-        let resp = client
-            .get("http://cp.cloudflare.com/generate_204")
+        let resp = build_proxy_ping_request(&client)
             .send()
             .await
-            .map_err(|e| format!("get: {e}"))?;
+            .map_err(|e| format!("HEAD: {e}"))?;
         // generate_204 returns exactly 204 on a clean path; anything else means
         // interception / an upstream block, not a healthy server.
         if resp.status().as_u16() != 204 {
@@ -1029,4 +1034,22 @@ pub async fn proxy_get_ping(
     let _ = child.wait();
     let _ = std::fs::remove_file(&cfg_path);
     result
+}
+
+#[cfg(test)]
+mod ping_tests {
+    use super::{build_proxy_ping_request, PROXY_PING_URL};
+
+    #[test]
+    fn proxy_ping_matches_xray_health_check_request() {
+        let client = reqwest::Client::new();
+        let request = build_proxy_ping_request(&client).build().unwrap();
+
+        assert_eq!(request.method(), reqwest::Method::HEAD);
+        assert_eq!(request.url().as_str(), PROXY_PING_URL);
+        assert_eq!(
+            request.url().as_str(),
+            "http://www.gstatic.com/generate_204"
+        );
+    }
 }
