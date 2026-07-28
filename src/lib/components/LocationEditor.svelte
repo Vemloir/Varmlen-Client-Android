@@ -7,54 +7,13 @@
   } from "$lib/api";
   import { t } from "$lib/i18n.svelte";
   import { includeCurrentOption } from "$lib/location-editor-options";
-  import {
-    createLocationDraft,
-    type LocationEditDraft,
-    type LocationField,
+  import type {
+    LocationEditDraft,
+    LocationField,
   } from "$lib/location-draft";
-  import type { ServerEntry } from "$lib/subs.svelte";
   import Dropdown from "./Dropdown.svelte";
 
-  let {
-    server,
-    onSave,
-    onCancel,
-  }: {
-    server: ServerEntry;
-    onSave: (draft: LocationEditDraft) => void | Promise<void>;
-    onCancel: () => void;
-  } = $props();
-
-  let draft = $state<LocationEditDraft>({ kind: "json", source: "" });
-  let loadedServerId = $state("");
-
-  function cloneDraft(value: LocationEditDraft): LocationEditDraft {
-    // `$state` recursively proxies persisted server drafts. Native
-    // structuredClone rejects Proxy objects (DataCloneError), so always take a
-    // plain Svelte snapshot before cloning for an independently editable copy.
-    return structuredClone($state.snapshot(value));
-  }
-
-  function releaseEditorFocus(): void {
-    const active = document.activeElement;
-    if (active instanceof HTMLElement) active.blur();
-  }
-
-  function cancel(): void {
-    // Android WebView can retain the native textarea editing session after its
-    // DOM node is removed. That stale IME session consumes later modal taps:
-    // the button still receives :active feedback, but no click is dispatched.
-    releaseEditorFocus();
-    onCancel();
-  }
-
-  $effect.pre(() => {
-    if (loadedServerId === server.id) return;
-    loadedServerId = server.id;
-    draft = cloneDraft(server.editDraft ?? createLocationDraft(server.raw));
-  });
-  let saving = $state(false);
-  let saveError = $state<string | null>(null);
+  let { draft }: { draft: LocationEditDraft } = $props();
   let options = $state<LocationEditorOptions | null>(null);
 
   onMount(() => {
@@ -124,18 +83,6 @@
     draft.rawParams = draft.rawParams.filter((row) => row.id !== id);
   }
 
-  async function save(): Promise<void> {
-    releaseEditorFocus();
-    saving = true;
-    saveError = null;
-    try {
-      await onSave(cloneDraft(draft));
-    } catch (error) {
-      saveError = error instanceof Error ? error.message : String(error);
-    } finally {
-      saving = false;
-    }
-  }
 </script>
 
 {#snippet inputField(field: LocationField, label: string, type = "text")}
@@ -257,19 +204,6 @@
   </div>
 {/if}
 
-{#if saveError}
-  <div class="error">{saveError}</div>
-{/if}
-
-<div class="modal-actions">
-  <button type="button" class="btn btn-ghost" onclick={cancel} disabled={saving}>
-    {t("common.cancel")}
-  </button>
-  <button type="button" class="btn btn-primary" onclick={() => void save()} disabled={saving}>
-    {saving ? t("json.saving") : t("common.save")}
-  </button>
-</div>
-
 <style>
   .fields-grid {
     display: grid;
@@ -336,12 +270,6 @@
     border: none;
     color: var(--text-muted);
     font-size: 18px;
-  }
-  .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 16px;
   }
   @media (max-width: 420px) {
     .fields-grid { grid-template-columns: 1fr; }
