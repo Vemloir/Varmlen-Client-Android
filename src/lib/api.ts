@@ -64,6 +64,13 @@ export function parseSubscriptionBody(body: string): Promise<VlessServer[]> {
   return invoke<VlessServer[]>("parse_subscription_body", { body });
 }
 
+export function parseSubscriptionResponse(
+  body: string,
+  headers: Record<string, string>,
+): Promise<ImportResult> {
+  return invoke<ImportResult>("parse_subscription_response", { body, headers });
+}
+
 export function fetchSubscription(
   url: string,
   subscriptionUserAgent: SubscriptionUserAgent = "varmlen",

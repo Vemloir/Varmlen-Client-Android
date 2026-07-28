@@ -9,11 +9,12 @@ mod tray;
 mod vpn;
 mod xray;
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use subscription::{
-    decode_maybe_b64, is_supported_uri, parse_body_meta, parse_headers, parse_json_subscription,
-    parse_proxy_uri, parse_subscription, ImportResult, SubscriptionMeta, VlessServer,
+    is_supported_uri, parse_json_subscription, parse_proxy_uri, parse_subscription, ImportResult,
+    SubscriptionMeta, VlessServer,
 };
 
 #[tauri::command]
@@ -24,6 +25,18 @@ fn parse_vless_uri(uri: String) -> Result<VlessServer, String> {
 #[tauri::command]
 fn parse_subscription_body(body: String) -> Vec<VlessServer> {
     parse_subscription(&body)
+}
+
+#[tauri::command]
+fn parse_subscription_response(
+    body: String,
+    headers: HashMap<String, String>,
+) -> Result<ImportResult, String> {
+    const MAX_SUB_BYTES: usize = 8 * 1024 * 1024;
+    if body.len() > MAX_SUB_BYTES {
+        return Err("subscription exceeded size limit".to_string());
+    }
+    Ok(subscription::parse_subscription_response(&body, &headers))
 }
 
 /// Fetch and parse a subscription. Returns servers + server-side metadata
@@ -205,7 +218,16 @@ async fn fetch_subscription(
     {
         return Err("subscription too large".to_string());
     }
-    let headers = resp.headers().clone();
+    let headers: HashMap<String, String> = resp
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect();
     let mut buf: Vec<u8> = Vec::new();
     {
         use futures_util::StreamExt;
@@ -219,42 +241,7 @@ async fn fetch_subscription(
         }
     }
     let body = String::from_utf8_lossy(&buf).into_owned();
-    let trimmed_body = body.trim_start_matches('\u{feff}').trim();
-    let source_json = serde_json::from_str::<serde_json::Value>(trimmed_body)
-        .ok()
-        .map(|_| trimmed_body.to_string());
-    let servers = parse_subscription(&body);
-
-    // Some panels (Marzban / Happ-style) inline the metadata as `#key: value`
-    // lines at the top of the body instead of (or in addition to) HTTP headers.
-    // Merge both: an HTTP header wins, the inline value is the fallback.
-    let (inline, body_desc) = parse_body_meta(&body);
-    let meta = parse_headers(|name| {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .or_else(|| inline.get(name).cloned())
-    });
-
-    // Description priority: a real free-text `# …` note, then the `announce`
-    // banner (base64), from either the header or the inline block.
-    let description = body_desc.or_else(|| {
-        headers
-            .get("announce")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .or_else(|| inline.get("announce").cloned())
-            .map(|s| decode_maybe_b64(&s))
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-    });
-    Ok(ImportResult {
-        meta,
-        servers,
-        description,
-        source_json,
-    })
+    Ok(subscription::parse_subscription_response(&body, &headers))
 }
 
 // (Ping/latency probes are intentionally absent — pending a design pass.
@@ -309,6 +296,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             parse_vless_uri,
             parse_subscription_body,
+            parse_subscription_response,
             fetch_subscription,
             apps::list_installed_apps,
             apps::pick_file,

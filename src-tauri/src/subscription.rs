@@ -1103,6 +1103,49 @@ where
     meta
 }
 
+/// Parse an already-fetched subscription response. Android's WorkManager uses
+/// this exact path after staging a private HTTP response while the UI is closed.
+pub fn parse_subscription_response(
+    body: &str,
+    response_headers: &HashMap<String, String>,
+) -> ImportResult {
+    let headers: HashMap<String, String> = response_headers
+        .iter()
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
+        .collect();
+    let trimmed_body = body.trim_start_matches('\u{feff}').trim();
+    let source_json = serde_json::from_str::<serde_json::Value>(trimmed_body)
+        .ok()
+        .map(|_| trimmed_body.to_string());
+    let servers = parse_subscription(body);
+
+    // HTTP metadata wins; inline #key values are the provider-compatible
+    // fallback used by several panels.
+    let (inline, body_desc) = parse_body_meta(body);
+    let meta = parse_headers(|name| {
+        headers
+            .get(name)
+            .cloned()
+            .or_else(|| inline.get(name).cloned())
+    });
+    let description = body_desc.or_else(|| {
+        headers
+            .get("announce")
+            .cloned()
+            .or_else(|| inline.get("announce").cloned())
+            .map(|value| decode_maybe_b64(&value))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    });
+
+    ImportResult {
+        meta,
+        servers,
+        description,
+        source_json,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1583,6 +1626,50 @@ mod tests {
         assert_eq!(m.expires_at_unix, Some(1_781_461_695));
         assert_eq!(m.support_url.as_deref(), Some("https://t.me/x_bot"));
         assert!(m.has_userinfo);
+    }
+
+    #[test]
+    fn parses_staged_http_response_with_headers_and_body_metadata() {
+        let body = concat!(
+            "# A staged provider response\n",
+            "vless://00000000-0000-4000-8000-000000000001@edge.example:443?type=tcp#Edge\n",
+        );
+        let headers = HashMap::from([
+            ("Profile-Title".into(), "Staged VPN".into()),
+            ("Profile-Update-Interval".into(), "4".into()),
+            (
+                "Subscription-Userinfo".into(),
+                "upload=10; download=20; total=1000; expire=1780236569".into(),
+            ),
+            ("Support-Url".into(), "https://example.com/support".into()),
+            (
+                "Profile-Web-Page-Url".into(),
+                "https://example.com/account".into(),
+            ),
+        ]);
+
+        let result = parse_subscription_response(body, &headers);
+
+        assert_eq!(result.meta.title.as_deref(), Some("Staged VPN"));
+        assert_eq!(result.meta.update_interval_hours, Some(4));
+        assert_eq!(result.meta.upload_bytes, Some(10));
+        assert_eq!(result.meta.download_bytes, Some(20));
+        assert_eq!(result.meta.total_bytes, Some(1000));
+        assert_eq!(result.meta.expires_at_unix, Some(1780236569));
+        assert_eq!(
+            result.meta.support_url.as_deref(),
+            Some("https://example.com/support")
+        );
+        assert_eq!(
+            result.meta.web_page_url.as_deref(),
+            Some("https://example.com/account")
+        );
+        assert_eq!(
+            result.description.as_deref(),
+            Some("A staged provider response")
+        );
+        assert_eq!(result.servers.len(), 1);
+        assert_eq!(result.servers[0].host, "edge.example");
     }
 
     #[test]
