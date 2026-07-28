@@ -91,7 +91,7 @@ fn subscription_headers(choice: Option<&str>) -> Result<(String, String), String
         _ => return Err("unsupported subscription User-Agent".into()),
     };
     Ok((
-        format!("{brand} ({}; {})", target_platform(), target_arch()),
+        format!("{brand}/{}/{}", target_platform(), target_arch()),
         target_platform().to_ascii_lowercase(),
     ))
 }
@@ -399,14 +399,15 @@ mod tests {
             let (ua, os) = subscription_headers(Some(choice)).expect("known UA");
             assert_eq!(
                 ua,
-                format!("{brand} ({}; {})", target_platform(), target_arch())
+                format!("{brand}/{}/{}", target_platform(), target_arch())
             );
             assert_eq!(os, target_platform().to_ascii_lowercase());
+            assert!(!ua.contains(env!("CARGO_PKG_VERSION")));
         }
 
         assert_eq!(
             subscription_headers(None).expect("default").0,
-            format!("Varmlen ({}; {})", target_platform(), target_arch())
+            format!("Varmlen/{}/{}", target_platform(), target_arch())
         );
         assert!(subscription_headers(Some("header\r\ninjection")).is_err());
     }

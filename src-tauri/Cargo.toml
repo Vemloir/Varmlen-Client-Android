@@ -1,6 +1,6 @@
 [package]
 name = "varmlen"
-version = "0.2.2"
+version = "0.2.3"
 description = "Varmlen — open-source xray-core client with per-app and per-domain split tunneling"
 authors = ["Varmlen contributors"]
 license = "MIT"
