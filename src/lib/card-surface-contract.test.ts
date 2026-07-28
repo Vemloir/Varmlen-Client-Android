@@ -101,6 +101,7 @@ describe("card surface contract", () => {
   it("keeps Android modals inside both system insets and exposes a field dropdown variant", () => {
     const css = read("../app.css");
     const dropdown = read("./components/Dropdown.svelte");
+    const editor = read("./components/LocationEditor.svelte");
 
     expect(css).toMatch(
       /\.is-android \.modal-backdrop\s*\{[^}]*padding-top:\s*calc\(var\(--sat\) \+ 12px\);/s,
@@ -115,6 +116,9 @@ describe("card surface contract", () => {
     );
     expect(dropdown).toMatch(
       /\.field \.trigger\s*\{[^}]*padding-right:\s*14px;/s,
+    );
+    expect(editor).toMatch(
+      /\.modal-actions\s*\{[^}]*margin-top:\s*16px;/s,
     );
   });
 });

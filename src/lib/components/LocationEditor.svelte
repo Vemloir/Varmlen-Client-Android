@@ -27,10 +27,18 @@
 
   let draft = $state<LocationEditDraft>({ kind: "json", source: "" });
   let loadedServerId = $state("");
+
+  function cloneDraft(value: LocationEditDraft): LocationEditDraft {
+    // `$state` recursively proxies persisted server drafts. Native
+    // structuredClone rejects Proxy objects (DataCloneError), so always take a
+    // plain Svelte snapshot before cloning for an independently editable copy.
+    return structuredClone($state.snapshot(value));
+  }
+
   $effect.pre(() => {
     if (loadedServerId === server.id) return;
     loadedServerId = server.id;
-    draft = structuredClone(server.editDraft ?? createLocationDraft(server.raw));
+    draft = cloneDraft(server.editDraft ?? createLocationDraft(server.raw));
   });
   let saving = $state(false);
   let saveError = $state<string | null>(null);
@@ -107,7 +115,7 @@
     saving = true;
     saveError = null;
     try {
-      await onSave(structuredClone(draft));
+      await onSave(cloneDraft(draft));
     } catch (error) {
       saveError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -240,10 +248,10 @@
 {/if}
 
 <div class="modal-actions">
-  <button class="btn btn-ghost" onclick={onCancel} disabled={saving}>
+  <button type="button" class="btn btn-ghost" onclick={onCancel} disabled={saving}>
     {t("common.cancel")}
   </button>
-  <button class="btn btn-primary" onclick={() => void save()} disabled={saving}>
+  <button type="button" class="btn btn-primary" onclick={() => void save()} disabled={saving}>
     {saving ? t("json.saving") : t("common.save")}
   </button>
 </div>
@@ -314,6 +322,12 @@
     border: none;
     color: var(--text-muted);
     font-size: 18px;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
   }
   @media (max-width: 420px) {
     .fields-grid { grid-template-columns: 1fr; }

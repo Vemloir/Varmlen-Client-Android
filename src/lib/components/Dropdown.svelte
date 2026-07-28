@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { placePopup, portal } from "$lib/popup";
 
   interface Option<V extends string> {
@@ -33,15 +34,31 @@
     options.find((o) => o.value === value)?.label ?? value,
   );
 
-  function toggle() {
-    if (!open && trigger) {
-      const r = trigger.getBoundingClientRect();
-      // Estimate the panel size for the flip decision (~37px per row + padding).
-      const h = options.length * 37 + 8;
-      const w = Math.max(180, r.width);
-      pos = placePopup(r, w, h);
+  async function toggle() {
+    if (open) {
+      open = false;
+      return;
     }
-    open = !open;
+    if (!trigger) return;
+
+    const activeTrigger = trigger;
+    const triggerRect = activeTrigger.getBoundingClientRect();
+    // Give the first rendered frame a safe position, then correct it from the
+    // actual panel box below. Option labels wrap and fonts vary across Android
+    // WebViews, so an estimated row height leaves upward menus detached.
+    const estimatedHeight = options.length * 37 + 8;
+    const estimatedWidth = Math.max(180, triggerRect.width);
+    pos = placePopup(triggerRect, estimatedWidth, estimatedHeight);
+    open = true;
+
+    await tick();
+    if (!open || trigger !== activeTrigger || !panel) return;
+    const panelRect = panel.getBoundingClientRect();
+    pos = placePopup(
+      activeTrigger.getBoundingClientRect(),
+      panelRect.width || estimatedWidth,
+      panelRect.height || estimatedHeight,
+    );
   }
 
   function handleDocClick(e: MouseEvent) {
@@ -80,7 +97,7 @@
     aria-haspopup="listbox"
     aria-expanded={open}
     aria-label={ariaLabel}
-    onclick={toggle}
+    onclick={() => void toggle()}
   >
     <span class="trigger-text">{current}</span>
     <svg

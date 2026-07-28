@@ -6,6 +6,13 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
+  resolve: process.env.VITEST
+    ? {
+        // Component tests run in a DOM environment and must load Svelte's
+        // browser runtime rather than the SSR-only `index-server` export.
+        conditions: ["browser"],
+      }
+    : undefined,
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

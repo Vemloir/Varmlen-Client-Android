@@ -432,59 +432,6 @@ fn outbound_plan(server: &VlessServer) -> Result<OutboundPlan, String> {
     })
 }
 
-fn ping_outbound_tag(plan: &OutboundPlan) -> String {
-    let first_proxy_tag = || {
-        plan.proxies[0]["tag"]
-            .as_str()
-            .expect("proxy tags are normalized")
-            .to_string()
-    };
-    let ProxyTarget::Balancer(target_tag) = &plan.target else {
-        return match &plan.target {
-            ProxyTarget::Outbound(tag) => tag.clone(),
-            ProxyTarget::Balancer(_) => unreachable!(),
-        };
-    };
-    let proxy_tags = plan
-        .proxies
-        .iter()
-        .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
-        .collect::<std::collections::HashSet<_>>();
-    let Some(balancer) = plan
-        .balancers
-        .as_ref()
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|balancer| balancer.get("tag").and_then(Value::as_str) == Some(target_tag))
-    else {
-        return first_proxy_tag();
-    };
-
-    if let Some(fallback) = balancer
-        .get("fallbackTag")
-        .and_then(Value::as_str)
-        .filter(|tag| proxy_tags.contains(tag))
-    {
-        return fallback.to_string();
-    }
-
-    balancer
-        .get("selector")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .find_map(|selector| {
-            plan.proxies
-                .iter()
-                .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
-                .find(|tag| tag.starts_with(selector))
-                .map(str::to_string)
-        })
-        .unwrap_or_else(first_proxy_tag)
-}
-
 /// Reject configurations that the normalized model would otherwise silently
 /// reinterpret. JSON-backed locations keep their exact outbound, so any real
 /// proxy protocol supported by the parser can pass through unchanged.
@@ -1142,29 +1089,57 @@ pub fn build_xray_config(
     config
 }
 
-/// Minimal per-location latency configuration. A provider balancer is reduced
-/// to its fallback (or first matching proxy) so a one-shot probe does not race
-/// the balancer's cold observatory or launch parallel health checks.
-pub fn build_ping_config(server: &VlessServer, socks_port: u16) -> Value {
-    let mut plan =
-        outbound_plan(server).expect("server was validated before ping config generation");
-    let ping_tag = ping_outbound_tag(&plan);
-    let mut proxies = std::mem::take(&mut plan.proxies);
-    proxies.push(json!({ "tag": "direct", "protocol": "freedom" }));
-    let mut default_rule = json!({ "type": "field", "network": "tcp,udp" });
-    ProxyTarget::Outbound(ping_tag).apply(&mut default_rule);
-    json!({
-        "log": { "loglevel": "warning" },
-        "inbounds": [{
-            "tag": "socks-in",
+/// Number of concrete proxy paths represented by one UI location. Composite
+/// JSON profiles can contain several outbounds behind a provider balancer.
+pub fn ping_proxy_count(server: &VlessServer) -> Result<usize, String> {
+    Ok(outbound_plan(server)?.proxies.len())
+}
+
+/// Minimal per-location latency configuration. Each concrete proxy gets its own
+/// loopback SOCKS inbound, so callers can probe all variants concurrently and
+/// report the fastest healthy path. Keeping the provider observatory out avoids
+/// waiting for its cold multi-sample schedule on every manual ping.
+pub fn build_ping_config(server: &VlessServer, socks_ports: &[u16]) -> Result<Value, String> {
+    let mut plan = outbound_plan(server)?;
+    if socks_ports.len() != plan.proxies.len() {
+        return Err(format!(
+            "ping config needs {} SOCKS ports, got {}",
+            plan.proxies.len(),
+            socks_ports.len()
+        ));
+    }
+
+    let mut inbounds = Vec::with_capacity(socks_ports.len());
+    let mut rules = Vec::with_capacity(socks_ports.len());
+    for (index, (proxy, port)) in plan.proxies.iter().zip(socks_ports).enumerate() {
+        let proxy_tag = proxy
+            .get("tag")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("ping proxy {index} has no tag"))?;
+        let inbound_tag = format!("socks-in-{index}");
+        inbounds.push(json!({
+            "tag": inbound_tag,
             "listen": "127.0.0.1",
-            "port": socks_port,
+            "port": port,
             "protocol": "socks",
             "settings": { "udp": false, "auth": "noauth" }
-        }],
+        }));
+        rules.push(json!({
+            "type": "field",
+            "inboundTag": [inbound_tag],
+            "network": "tcp,udp",
+            "outboundTag": proxy_tag
+        }));
+    }
+
+    let mut proxies = std::mem::take(&mut plan.proxies);
+    proxies.push(json!({ "tag": "direct", "protocol": "freedom" }));
+    Ok(json!({
+        "log": { "loglevel": "warning" },
+        "inbounds": inbounds,
         "outbounds": proxies,
-        "routing": { "rules": [default_rule] }
-    })
+        "routing": { "rules": rules }
+    }))
 }
 
 // --- Tauri command ----------------------------------------------------------
@@ -1263,7 +1238,7 @@ mod tests {
                     .raw_params
                     .insert("localAddress".into(), "10.0.0.2/32".into());
             }
-            let config = build_ping_config(&server, 31_000 + index as u16);
+            let config = build_ping_config(&server, &[31_000 + index as u16]).unwrap();
             let path = std::env::temp_dir().join(format!(
                 "varmlen-xray-editor-{}-{protocol}.json",
                 std::process::id()
@@ -1659,7 +1634,7 @@ mod tests {
     fn ping_config_uses_requested_loopback_port_and_marked_proxy() {
         let s =
             parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
-        let cfg = build_ping_config(&s, 32_000);
+        let cfg = build_ping_config(&s, &[32_000]).unwrap();
         assert_eq!(cfg["inbounds"][0]["listen"], "127.0.0.1");
         assert_eq!(cfg["inbounds"][0]["port"], 32_000);
         assert_eq!(cfg["outbounds"].as_array().unwrap().len(), 2);
@@ -1671,14 +1646,28 @@ mod tests {
     }
 
     #[test]
-    fn composite_ping_uses_balancer_fallback_without_starting_health_checks() {
+    fn composite_ping_probes_every_proxy_without_starting_health_checks() {
         let server = estonia_profile_server();
-        let cfg = build_ping_config(&server, 32_000);
+        let ports = (32_000..32_007).collect::<Vec<_>>();
+        let cfg = build_ping_config(&server, &ports).unwrap();
 
+        assert_eq!(cfg["inbounds"].as_array().unwrap().len(), 7);
+        assert_eq!(cfg["routing"]["rules"].as_array().unwrap().len(), 7);
         assert_eq!(cfg["routing"]["rules"][0]["outboundTag"], "proxy");
+        assert_eq!(cfg["routing"]["rules"][1]["outboundTag"], "proxy-2");
+        assert_eq!(cfg["routing"]["rules"][6]["outboundTag"], "proxy-7");
         assert!(cfg["routing"].get("balancers").is_none());
         assert!(cfg.get("observatory").is_none());
         assert!(cfg.get("burstObservatory").is_none());
+    }
+
+    #[test]
+    fn composite_ping_requires_one_port_per_proxy() {
+        let server = estonia_profile_server();
+
+        assert!(build_ping_config(&server, &[32_000])
+            .unwrap_err()
+            .contains("7 SOCKS ports"));
     }
 
     #[test]

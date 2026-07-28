@@ -15,6 +15,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use futures_util::future::join_all;
 use serde::{Deserialize, Serialize};
 
 use crate::core::CoreKind;
@@ -926,16 +927,50 @@ fn free_local_port() -> Result<u16, String> {
         .map_err(|e| format!("alloc port: {e}"))
 }
 
+fn free_local_ports(count: usize) -> Result<Vec<u16>, String> {
+    let mut ports = Vec::with_capacity(count);
+    while ports.len() < count {
+        let port = free_local_port()?;
+        if !ports.contains(&port) {
+            ports.push(port);
+        }
+    }
+    Ok(ports)
+}
+
 const PROXY_PING_URL: &str = "http://www.gstatic.com/generate_204";
 
 fn build_proxy_ping_request(client: &reqwest::Client) -> reqwest::RequestBuilder {
     client.head(PROXY_PING_URL)
 }
 
-/// Per-server via-proxy latency: spin a throwaway xray (the server as the only
-/// outbound + a local SOCKS on an ephemeral port), time an HTTP HEAD to a 204
-/// endpoint through it, then tear it down. The probe outbound carries
-/// `sockopt.mark`, so it measures cleanly whether or not the main tunnel is up.
+async fn probe_proxy_port(port: u16, timeout: Duration) -> Result<u32, String> {
+    let client = reqwest::Client::builder()
+        .proxy(
+            reqwest::Proxy::all(format!("socks5h://127.0.0.1:{port}"))
+                .map_err(|e| format!("proxy: {e}"))?,
+        )
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()
+        .map_err(|e| format!("client: {e}"))?;
+    let started = Instant::now();
+    let resp = build_proxy_ping_request(&client)
+        .send()
+        .await
+        .map_err(|e| format!("HEAD: {e}"))?;
+    if resp.status().as_u16() != 204 {
+        return Err(format!("unexpected status {}", resp.status()));
+    }
+    Ok(started.elapsed().as_millis().min(u32::MAX as u128) as u32)
+}
+
+/// Per-location via-proxy latency: spin one throwaway xray and time an HTTP HEAD
+/// through every concrete outbound represented by the location. Composite JSON
+/// locations (such as Proxen Estonia) are provider balancers; measuring only
+/// their fallback produced multi-second values even when another variant was
+/// healthy. The displayed value is the fastest successful path, matching what
+/// the location's least-load/least-ping balancer can actually select.
 #[tauri::command]
 pub async fn proxy_get_ping(
     app: tauri::AppHandle,
@@ -944,8 +979,9 @@ pub async fn proxy_get_ping(
 ) -> Result<u32, String> {
     validate_server(&server)?;
     let ms = timeout_ms.unwrap_or(5000) as u64;
-    let port = free_local_port()?;
-    let cfg = serde_json::to_string(&crate::xray::build_ping_config(&server, port))
+    let proxy_count = crate::xray::ping_proxy_count(&server)?;
+    let ports = free_local_ports(proxy_count)?;
+    let cfg = serde_json::to_string(&crate::xray::build_ping_config(&server, &ports)?)
         .map_err(|e| e.to_string())?;
 
     // Android: exec the bundled xray from nativeLibraryDir, config in filesDir.
@@ -954,14 +990,14 @@ pub async fn proxy_get_ping(
         let (bin, dir) = crate::mobile_vpn::xray_paths(&app)?;
         (
             std::path::PathBuf::from(bin),
-            std::path::PathBuf::from(dir).join(format!("ping-{port}.json")),
+            std::path::PathBuf::from(dir).join(format!("ping-{}.json", ports[0])),
         )
     };
     #[cfg(not(target_os = "android"))]
     let (xray_bin, cfg_path) = {
         let bin = crate::core::binary_path(&app, CoreKind::Xray)
             .map_err(|e| format!("xray core: {e}"))?;
-        (bin, runtime_dir().join(format!("ping-{port}.json")))
+        (bin, runtime_dir().join(format!("ping-{}.json", ports[0])))
     };
 
     if let Err(e) = write_private(&cfg_path, &cfg) {
@@ -981,22 +1017,26 @@ pub async fn proxy_get_ping(
     // The whole op is bounded by `ms`; always clean up the child + temp config.
     let deadline = Instant::now() + Duration::from_millis(ms);
     let result = async {
-        // Wait for the socks port, but bail the instant xray dies (e.g. an
+        // Wait for every SOCKS inbound, but bail the instant xray dies (e.g. an
         // unsupported/malformed server) instead of burning the whole budget.
         loop {
             if let Ok(Some(_)) = child.try_wait() {
                 return Err("xray exited before the proxy was ready".to_string());
             }
-            let connectable = tokio::task::spawn_blocking(move || {
-                std::net::TcpStream::connect_timeout(
-                    &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-                    Duration::from_millis(100),
-                )
-                .is_ok()
-            })
-            .await
-            .unwrap_or(false);
-            if connectable {
+            let checks = ports.iter().copied().map(|port| {
+                tokio::task::spawn_blocking(move || {
+                    std::net::TcpStream::connect_timeout(
+                        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+                        Duration::from_millis(100),
+                    )
+                    .is_ok()
+                })
+            });
+            let ready = join_all(checks)
+                .await
+                .into_iter()
+                .all(|result| result.unwrap_or(false));
+            if ready {
                 break;
             }
             if Instant::now() >= deadline {
@@ -1005,28 +1045,22 @@ pub async fn proxy_get_ping(
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
-        let client = reqwest::Client::builder()
-            .proxy(
-                reqwest::Proxy::all(format!("socks5h://127.0.0.1:{port}"))
-                    .map_err(|e| format!("proxy: {e}"))?,
-            )
-            // Don't chase a captive-portal / interception redirect — a non-204
-            // must surface as a failure, not be followed to some 200 page.
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_millis(ms))
-            .build()
-            .map_err(|e| format!("client: {e}"))?;
-        let started = Instant::now();
-        let resp = build_proxy_ping_request(&client)
-            .send()
-            .await
-            .map_err(|e| format!("HEAD: {e}"))?;
-        // generate_204 returns exactly 204 on a clean path; anything else means
-        // interception / an upstream block, not a healthy server.
-        if resp.status().as_u16() != 204 {
-            return Err(format!("unexpected status {}", resp.status()));
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("proxy ping timed out before probing".to_string());
         }
-        Ok(started.elapsed().as_millis().min(u32::MAX as u128) as u32)
+        let results = join_all(
+            ports
+                .iter()
+                .copied()
+                .map(|port| probe_proxy_port(port, remaining)),
+        )
+        .await;
+        results
+            .into_iter()
+            .filter_map(Result::ok)
+            .min()
+            .ok_or_else(|| "all proxy variants failed the latency probe".to_string())
     }
     .await;
 

@@ -29,6 +29,7 @@ import {
   nextFutureRefresh,
   nextRefreshBatch,
 } from "$lib/subscription-refresh";
+import { pingWorkerLimit } from "$lib/ping-scheduler";
 export { transportSummary } from "$lib/server-label";
 
 /** Ping result for a server entry. `null` = unknown / not yet measured,
@@ -761,9 +762,9 @@ class SubsStore {
    *  method is captured once so a mid-batch settings change stays consistent. */
   private async pingMany(servers: ServerEntry[]): Promise<void> {
     const method = settings.pingMethod;
-    // TCP probes are cheap (a connect) so run them all but for a sanity cap.
-    // Proxy probes each spin a throwaway xray, so keep that more bounded.
-    const limit = method === "proxy" ? 8 : 32;
+    // TCP probes are cheap. A proxy location can fan out to several concrete
+    // paths in one throwaway xray, so keep those batches tightly bounded.
+    const limit = pingWorkerLimit(method);
     // Mark the whole batch in-flight up front so every old result clears at
     // once, instead of one-by-one as the bounded-concurrency workers reach
     // each server (the actual probing stays rate-limited below).
