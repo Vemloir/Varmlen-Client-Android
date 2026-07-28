@@ -170,15 +170,22 @@ a {
 .modal-backdrop {
   padding-bottom: env(safe-area-inset-bottom);
 }
-.is-android .modal-backdrop {
+/* `html` is intentional: Svelte scopes page-local modal rules by adding a
+   second class, so `.is-android .modal-backdrop` tied with them and lost by
+   source order. This selector always keeps the system-inset padding. */
+html.is-android .modal-backdrop {
   padding-top: calc(var(--sat) + 12px);
   padding-right: 12px;
   padding-bottom: calc(env(safe-area-inset-bottom) + 12px);
   padding-left: 12px;
+  overflow: hidden;
 }
-.is-android .modal-backdrop > .modal {
+html.is-android .modal-backdrop > .modal {
   width: 100% !important;
+  /* Fallback for WebViews without dynamic viewport units. */
   max-height: 100% !important;
+  max-height: calc(100dvh - var(--sat) - env(safe-area-inset-bottom) - 24px) !important;
+  min-height: 0;
   margin: 0 !important;
 }
 

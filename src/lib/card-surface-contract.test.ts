@@ -78,10 +78,15 @@ describe("card surface contract", () => {
     const editor = read("./components/LocationEditor.svelte");
     const home = read("../routes/+page.svelte");
 
-    expect(list).toMatch(/\.srv-row \+ \.srv-row::before/);
-    expect(list).toMatch(/\.srv-row \+ \.srv-row::before\s*\{[^}]*left:\s*0;[^}]*right:\s*0;/s);
-    expect(list).toMatch(/\.srv-row \+ \.srv-row::before\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s);
-    expect(list).not.toMatch(/\.srv-row \+ \.srv-row::before\s*\{[^}]*opacity:/s);
+    expect(list).toMatch(/\.srv-row::before/);
+    expect(list).toMatch(/\.srv-row::before\s*\{[^}]*left:\s*0;[^}]*right:\s*0;/s);
+    expect(list).toMatch(/\.srv-row::before\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s);
+    expect(list).not.toMatch(/\.srv-row::before\s*\{[^}]*opacity:/s);
+    expect(list).not.toContain(".srv-row + .srv-row::before");
+    expect(list).toMatch(
+      /:global\(html:not\(\.is-android\)\) \.srv-row:not\(\.active\):hover\s*\{[^}]*background:\s*var\(--bg-elev-2\);/s,
+    );
+    expect(list).not.toMatch(/^\s*\.srv-row:hover\s*\{/m);
     expect(list).not.toContain("srv-stripe");
     expect(flag.match(/class="globe-arc"/g)).toHaveLength(4);
     expect(flag).toContain('class="globe-outline"');
@@ -126,6 +131,26 @@ describe("card surface contract", () => {
     );
     expect(home).toMatch(
       /\.location-actions\s*\{[^}]*margin-top:\s*16px;/s,
+    );
+  });
+
+  it("keeps the Android log viewer inside the safe viewport", () => {
+    const css = read("../app.css");
+    const settings = read("../routes/settings/+page.svelte");
+
+    // The type selector deliberately outranks Svelte's scoped
+    // `.modal-backdrop.svelte-* { padding: 16px }` rule.
+    expect(css).toMatch(
+      /html\.is-android \.modal-backdrop\s*\{[^}]*padding-top:\s*calc\(var\(--sat\) \+ 12px\);/s,
+    );
+    expect(css).toMatch(
+      /html\.is-android \.modal-backdrop > \.modal\s*\{[^}]*max-height:\s*calc\(100dvh - var\(--sat\) - env\(safe-area-inset-bottom\) - 24px\)\s*!important;/s,
+    );
+    expect(settings).toMatch(
+      /\.log-modal\s*\{[^}]*overflow:\s*hidden;/s,
+    );
+    expect(settings).toMatch(
+      /\.log-text\s*\{[^}]*min-width:\s*0;[^}]*min-height:\s*0;[^}]*max-width:\s*100%;[^}]*margin:\s*0;/s,
     );
   });
 });

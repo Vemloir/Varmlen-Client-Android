@@ -53,7 +53,7 @@
     background: transparent;
     transition: background var(--transition);
   }
-  .srv-row + .srv-row::before {
+  .srv-row::before {
     content: "";
     position: absolute;
     z-index: 1;
@@ -63,7 +63,11 @@
     border-top: 1px solid var(--bg);
     pointer-events: none;
   }
-  .srv-row:hover { background: var(--bg-elev-2); }
+  @media (hover: hover) and (pointer: fine) {
+    :global(html:not(.is-android)) .srv-row:not(.active):hover {
+      background: var(--bg-elev-2);
+    }
+  }
   .srv-btn {
     flex: 1;
     min-width: 0;
@@ -88,7 +92,11 @@
     border-radius: 0;
     color: var(--text-dim);
   }
-  .srv-detail:hover { color: var(--text); }
+  @media (hover: hover) and (pointer: fine) {
+    :global(html:not(.is-android)) .srv-detail:hover {
+      color: var(--text);
+    }
+  }
   .srv-row.active { background: var(--accent-faint); }
   .srv-info { flex: 1; min-width: 0; }
   .srv-name {

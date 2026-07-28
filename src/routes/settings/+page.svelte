@@ -811,6 +811,7 @@
     max-height: 80vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
   .modal-actions {
     display: flex;
@@ -820,12 +821,18 @@
   .log-wrap {
     position: relative;
     flex: 1;
+    min-width: 0;
     min-height: 0;
     margin: 8px 0;
     display: flex;
+    overflow: hidden;
   }
   .log-text {
     flex: 1;
+    min-width: 0;
+    min-height: 0;
+    max-width: 100%;
+    margin: 0;
     overflow: auto;
     padding: 10px 12px;
     background: var(--bg-elev-2);
