@@ -4,6 +4,12 @@ Open-source xray-core VPN client for Android, with independent per-app and per-d
 
 > Status: working, tested on a physical device. Not on Google Play yet; install the APK directly.
 
+## Screenshots
+
+| Home | Split tunneling | Settings |
+| --- | --- | --- |
+| ![Varmlen Android home with AegisVPN locations](docs/screenshots/home.png) | ![Varmlen Android per-app split tunneling](docs/screenshots/split.png) | ![Varmlen Android settings in English](docs/screenshots/settings.png) |
+
 ## Features
 
 - VLESS, VMess, Trojan, Shadowsocks over REALITY or TLS; transports tcp, ws, grpc, xhttp, httpupgrade.
