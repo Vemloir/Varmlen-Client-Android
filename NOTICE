@@ -3,8 +3,8 @@ Varmlen — third-party notices
 
 Varmlen itself is licensed under the MIT License (see LICENSE).
 
-Its release artifacts (deb / rpm / AppImage) bundle the following third-party
-component, which is distributed under its own license:
+Its release artifacts bundle the following third-party component, which is
+distributed under its own license:
 
   xray-core
     Project: https://github.com/XTLS/Xray-core

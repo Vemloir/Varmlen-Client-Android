@@ -175,19 +175,10 @@
     void setCloseToTray(settings.closeToTray);
   });
 
-  // Android always captures traffic through VpnService/TUN. Older builds
-  // exposed the desktop-only Proxy selector and may have persisted "proxy",
-  // which caused xray to omit split-routing rules even though the OS tunnel
-  // still captured traffic.
-  $effect(() => {
-    if (isAndroid && settings.vpnMode !== "tun") settings.setVpnMode("tun");
-  });
-
-  // Live-reconnect when the config changes (location / split / mode / settings)
+  // Live-reconnect when the config changes (location / split / settings)
   // while connected. Reading these here registers them as effect dependencies.
   $effect(() => {
     void subs.selectedKey;
-    void settings.vpnMode;
     void settings.killswitch;
     void settings.allowLan;
     void split.appsMode;

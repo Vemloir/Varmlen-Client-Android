@@ -69,14 +69,13 @@ class ConnStore {
   private configSig(): string {
     return JSON.stringify({
       server: subs.selectedKey,
-      mode: settings.vpnMode,
       killswitch: settings.killswitch,
       allowLan: settings.allowLan,
       split: splitInput(),
     });
   }
 
-  /** Called reactively when config (location / split / mode / settings)
+  /** Called reactively when config (location / split / settings)
    *  changes: while connected, debounce-reconnect with the new config so the
    *  change takes effect live. The killswitch (if on) holds across the gap. */
   onConfigChanged(providerRefreshRevision = 0): void {
@@ -139,7 +138,6 @@ class ConnStore {
       const resp = await vpnConnect(
         server,
         splitInput(),
-        settings.vpnMode,
         settings.killswitch,
         settings.allowLan,
         settings.logLevel,

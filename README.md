@@ -14,13 +14,17 @@ Open-source xray-core VPN client for Android, with independent per-app and per-d
 
 ## Architecture
 
-A VpnService builds the tun interface; hev-socks5-tunnel (tun2socks) bridges it to the bundled Android xray running as a local SOCKS proxy. The per-app split is enforced by the VpnService, the per-site split by xray routing. See [ANDROID.md](./ANDROID.md) for the full data plane and toolchain notes.
+`VpnService` creates the Android TUN and passes its file descriptor directly to
+the bundled Xray native TUN inbound. Android enforces the per-app split,
+including UDP; Xray applies per-site routing, DNS policy, and remote transports.
+Remote SOCKS servers are supported as provider configurations, but Varmlen does
+not run a local SOCKS bridge. See [ANDROID.md](./ANDROID.md).
 
 ## Build
 
 ```bash
 source ~/varmlen-android-env.sh          # JDK 17, Android SDK and NDK, rust android targets
-bash scripts/android-native.sh           # fetch xray-android and build tun2socks into jniLibs
+bash scripts/android-native.sh           # verify/fetch pinned xray-android
 npm install
 npm run tauri android build -- --target aarch64 --apk
 ```
@@ -48,4 +52,5 @@ subscriptions and uninstall 0.1.2 before installing 0.2.0.
 
 ## License
 
-[MIT](./LICENSE). Bundles [xray-core](https://github.com/XTLS/Xray-core) (MPL-2.0) and [hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel); see [NOTICE](./NOTICE).
+[MIT](./LICENSE). Bundles [xray-core](https://github.com/XTLS/Xray-core)
+(MPL-2.0); see [NOTICE](./NOTICE).

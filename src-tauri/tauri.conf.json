@@ -28,7 +28,7 @@
     "active": true,
     "targets": "all",
     "android": {
-      "versionCode": 2008
+      "versionCode": 2009
     },
     "icon": [
       "icons/32x32.png",

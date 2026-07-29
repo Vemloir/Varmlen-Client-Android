@@ -1,7 +1,6 @@
 //! Android VPN bridge. Registers the Kotlin `VpnPlugin` and forwards
-//! connect/disconnect/status to it; the plugin drives the system VpnService +
-//! tun2socks + the bundled xray. The xray config is the same `Tun2socks`
-//! variant the desktop generates (xray as a local SOCKS proxy).
+//! connect/disconnect/status to it; the plugin gives the system VpnService TUN
+//! file descriptor directly to the bundled xray process.
 
 use serde::Serialize;
 use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
@@ -13,7 +12,6 @@ use crate::{StagedSubscriptionResponse, SubscriptionRefreshScheduleInput};
 #[serde(rename_all = "camelCase")]
 struct ConnectArgs {
     config: String,
-    socks_port: u16,
     dns: String,
     apps: Vec<String>,
     apps_allow: bool,
@@ -66,7 +64,6 @@ fn start_state_watcher<R: Runtime>(app: AppHandle<R>) {
 pub fn connect<R: Runtime>(
     app: &AppHandle<R>,
     config: String,
-    socks_port: u16,
     apps: Vec<String>,
     apps_allow: bool,
     log_level: String,
@@ -77,7 +74,6 @@ pub fn connect<R: Runtime>(
             "connect",
             ConnectArgs {
                 config,
-                socks_port,
                 dns: "1.1.1.1".to_string(),
                 apps,
                 apps_allow,

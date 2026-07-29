@@ -32,7 +32,23 @@ require "$PLUGIN" 'pendingConnect' \
   "VPN plugin resolves before the service confirms startup"
 require "$SERVICE" 'startForegroundOrThrow' \
   "foreground-service startup is not fail-closed"
+require "$SERVICE" 'XRAY_TUN_FD' \
+  "VPN service does not pass its TUN fd to Xray"
+require "$SERVICE" 'F_SETFD' \
+  "VPN service does not explicitly control TUN fd inheritance"
+require "$SERVICE" 'FD_CLOEXEC' \
+  "VPN service does not restore close-on-exec after starting Xray"
+require "$SERVICE" 'addDisallowedApplication(packageName)' \
+  "Varmlen does not exclude its own Xray process from VPN capture"
 reject "$SERVICE" 'startForeground failed (continuing)' \
   "foreground-service startup still fails open"
+reject "$SERVICE" 'TProxyService' \
+  "VPN service still calls the obsolete tun2socks JNI bridge"
+reject "$SERVICE" 'socksPort' \
+  "VPN service still carries the obsolete local SOCKS port"
+reject "$SERVICE" 'tun2socks' \
+  "VPN service still documents or starts tun2socks"
+reject "$PLUGIN" 'socksPort' \
+  "VPN plugin still carries the obsolete local SOCKS port"
 
 echo "Android VPN acknowledgement contract: PASS"

@@ -247,12 +247,10 @@ export interface HelperResponse {
   error: string | null;
 }
 
-/** Connect in the given mode: "tun" (full system, via the root helper) or
- *  "proxy" (local SOCKS/HTTP, run as the user — no root). */
+/** Connect through the system VPN tunnel. */
 export function vpnConnect(
   server: VlessServer,
   split: SplitInput,
-  mode: "tun" | "proxy",
   killswitch: boolean,
   allowLan: boolean,
   logLevel: string,
@@ -260,7 +258,6 @@ export function vpnConnect(
   return invoke<HelperResponse>("vpn_connect", {
     server,
     split,
-    mode,
     killswitch,
     allowLan,
     logLevel,
@@ -271,7 +268,7 @@ export function vpnDisconnect(): Promise<HelperResponse> {
   return invoke<HelperResponse>("vpn_disconnect");
 }
 
-/** The VPN log (Android: VpnService steps + xray/tun2socks output). */
+/** The VPN log (Android: VpnService steps + xray output). */
 export function vpnLog(): Promise<string> {
   return invoke<string>("vpn_log");
 }

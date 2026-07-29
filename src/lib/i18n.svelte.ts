@@ -156,7 +156,7 @@ const EN: Dict = {
   "settings.notificationsOn": "Enabled. Shows speed and uptime while connected.",
   "settings.notificationsOff": "Off. Tap to enable the VPN status notification.",
   "settings.logLevel": "Log level",
-  "settings.logLevelSub": "Verbosity of the VPN log (xray + tun2socks).",
+  "settings.logLevelSub": "Verbosity of the VPN log (VpnService + xray).",
   "settings.viewLog": "View log",
   "settings.viewLogSub": "Open the VPN log - useful when a connection fails.",
   "settings.logEmpty": "(log is empty - connect once to populate it)",
@@ -175,13 +175,6 @@ const EN: Dict = {
   "ping.proxy": "Via proxy (HTTP)",
   "ping.na": "n/a",
   "ping.ms": "{n} ms",
-
-  // VPN mode
-  "settings.vpnMode": "VPN mode",
-  "mode.tun": "TUN (system-wide)",
-  "mode.proxy": "Proxy (SOCKS/HTTP)",
-  "mode.tunSub": "Routes every app. Needs network permissions.",
-  "mode.proxySub": "Local proxy at 127.0.0.1:2081 - no root. Point your apps/system at it.",
 
   // VPN core (xray)
   "settings.core": "VPN core",
@@ -361,7 +354,7 @@ const RU: Dict = {
   "settings.notificationsOn": "Включены. Показывают скорость и время подключения.",
   "settings.notificationsOff": "Выключены. Нажми, чтобы включить уведомление статуса VPN.",
   "settings.logLevel": "Уровень логов",
-  "settings.logLevelSub": "Подробность VPN-лога (xray + tun2socks).",
+  "settings.logLevelSub": "Подробность VPN-лога (VpnService + xray).",
   "settings.viewLog": "Посмотреть лог",
   "settings.viewLogSub": "Открыть VPN-лог - полезно, если не подключается.",
   "settings.logEmpty": "(лог пуст - заполнится после подключения)",
@@ -380,12 +373,6 @@ const RU: Dict = {
   "ping.proxy": "Через прокси (HTTP)",
   "ping.na": "н/д",
   "ping.ms": "{n} мс",
-
-  "settings.vpnMode": "Режим VPN",
-  "mode.tun": "TUN (всё устройство)",
-  "mode.proxy": "Прокси (SOCKS/HTTP)",
-  "mode.tunSub": "Весь трафик системы. Нужны сетевые права.",
-  "mode.proxySub": "Локальный прокси 127.0.0.1:2081 - без root. Укажи его в приложениях/системе.",
 
   "settings.core": "Ядро VPN",
   "core.checking": "Проверка обновлений…",

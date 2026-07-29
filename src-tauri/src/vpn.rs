@@ -1,12 +1,8 @@
-//! Client side of connect/disconnect — xray-native, no root daemon.
+//! Client side of connect/disconnect — native Xray TUN, no root daemon.
 //!
-//! - "tun" mode: full-system TUN. xray (setcap cap_net_admin) owns its native
-//!   `tun` inbound and does the per-app/site split + DNS + vless/reality/XHTTP
-//!   transport itself. xray's tun manages no routes, so the setcap'd
-//!   `varmlen-probe` lays the routing (`route-up`) + killswitch around it. The GUI
-//!   owns the single xray child process directly.
-//! - "proxy" mode: just xray's SOCKS inbound on 127.0.0.1:XRAY_SOCKS_PORT — no
-//!   TUN, no caps. Apps point at it.
+//! On desktop, Xray owns the TUN inbound while `varmlen-probe` lays routing and
+//! the kill switch around it. On Android, VpnService owns the OS TUN and passes
+//! its file descriptor directly to Xray.
 //!
 //! There is no unix socket / systemd service, and no second core anymore.
 
@@ -22,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use crate::core::CoreKind;
 use crate::split::SplitInput;
 use crate::subscription::VlessServer;
-use crate::xray::{build_xray_config, validate_server, TunMode};
+use crate::xray::{
+    build_xray_config, build_xray_validation_config, validate_server, AppSplitOwner,
+};
 
 /// Returned to the frontend; shape unchanged from the old socket protocol so
 /// `api.ts` keeps working.
@@ -469,27 +467,17 @@ fn write_private(path: &PathBuf, content: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Android has no local-only desktop Proxy mode: its VpnService always owns a
-/// TUN and forwards captured traffic to xray. Treat stale persisted "proxy"
-/// values as TUN so site split rules remain present in the generated config.
-#[cfg(any(target_os = "android", test))]
-fn mobile_config_mode(_requested: &str) -> &'static str {
-    "tun"
-}
-
 #[tauri::command]
 pub async fn vpn_connect(
     app: tauri::AppHandle,
     server: VlessServer,
     split: SplitInput,
-    mode: String,
     killswitch: bool,
     allow_lan: bool,
     log_level: Option<String>,
 ) -> Result<HelperResponse, String> {
-    // Android: hand the generated config to the VpnService bridge. The native
-    // tun + tun2socks + bundled xray live in the Kotlin VpnPlugin; the kill
-    // switch / routing are the OS's job there.
+    // Android: VpnService gives its TUN descriptor directly to bundled Xray;
+    // Android owns the per-package split and OS kill-switch semantics.
     let level = log_level.unwrap_or_else(|| "warn".to_string());
     validate_server(&server)?;
     #[cfg(target_os = "android")]
@@ -498,24 +486,15 @@ pub async fn vpn_connect(
         let xray_cfg = serde_json::to_string(&build_xray_config(
             &server,
             &split,
-            mobile_config_mode(&mode),
-            TunMode::Tun2socks,
+            AppSplitOwner::VpnService,
             allow_lan,
             &level,
         ))
         .map_err(|e| e.to_string())?;
-        // apps_allow = whitelist apps (only listed apps enter the tun). This is
-        // the APPS split mode — independent of the sites mode and of `mode`
-        // (which is the tun/proxy selector).
+        // apps_allow = whitelist apps (only listed apps enter the TUN). App and
+        // site split modes remain independent.
         let apps_allow = split.apps_selective();
-        crate::mobile_vpn::connect(
-            &app,
-            xray_cfg,
-            crate::xray::XRAY_SOCKS_PORT,
-            split.apps.clone(),
-            apps_allow,
-            level,
-        )?;
+        crate::mobile_vpn::connect(&app, xray_cfg, split.apps.clone(), apps_allow, level)?;
         return Ok(HelperResponse::connected(0));
     }
 
@@ -527,22 +506,17 @@ pub async fn vpn_connect(
         let xray_cfg = serde_json::to_string(&build_xray_config(
             &server,
             &split,
-            &mode,
-            TunMode::XrayNative,
+            AppSplitOwner::Xray,
             allow_lan,
             &level,
         ))
         .map_err(|e| e.to_string())?;
-        // Validation config: a SOCKS-inbound variant with the SAME routing /
-        // outbounds / dns. `xray run -test` on a tun inbound needs CAP_NET_ADMIN and
-        // actually creates the device, so we instead validate this device-free
-        // variant (the tun inbound itself is static {name,mtu} and can't have a
-        // per-server config error).
-        let validate_cfg = serde_json::to_string(&build_xray_config(
+        // `xray run -test` on a TUN inbound may create the device, so validate
+        // the same transport/routing JSON with a device-free HTTP inbound.
+        let validate_cfg = serde_json::to_string(&build_xray_validation_config(
             &server,
             &split,
-            &mode,
-            TunMode::Tun2socks,
+            AppSplitOwner::Xray,
             allow_lan,
             &level,
         ))
@@ -570,19 +544,7 @@ pub async fn vpn_connect(
             write_private(&validate_path, &validate_cfg)?;
             validate_xray(&xray_bin, &validate_path)?;
 
-            if mode == "proxy" {
-                // Local SOCKS only — no TUN, no caps, no routing. No kill switch
-                // applies, so a crash just means "disconnected" (no watcher needed).
-                let xray = spawn_core(&xray_bin, &xray_path).map_err(|e| format!("xray: {e}"))?;
-                *xray_child().lock().unwrap() = Some(xray);
-                let pid = pid_of(xray_child()).unwrap_or(0);
-                CONN_GEN.fetch_add(1, Ordering::SeqCst);
-                INTENTIONAL_STOP.store(false, Ordering::SeqCst);
-                set_phase("connected");
-                return Ok(HelperResponse::connected(pid));
-            }
-
-            // TUN mode: xray owns the native tun and needs CAP_NET_ADMIN. If the
+            // Xray owns the native TUN and needs CAP_NET_ADMIN. If the
             // permissions aren't granted yet, prompt for them now (pkexec) — on the
             // first connect — instead of nagging at launch.
             if !has_cap(&xray_bin, "cap_net_admin") {
@@ -728,7 +690,7 @@ pub async fn vpn_status(app: tauri::AppHandle) -> Result<HelperResponse, String>
         if conn_phase().lock().unwrap().as_str() == "dropped" {
             return Ok(HelperResponse::dropped());
         }
-        // The single xray process alive → connected (tun or proxy mode).
+        // The single Xray process alive means the tunnel is connected.
         if let Some(pid) = pid_of(xray_child()) {
             return Ok(HelperResponse::connected(pid));
         }
@@ -737,7 +699,7 @@ pub async fn vpn_status(app: tauri::AppHandle) -> Result<HelperResponse, String>
 }
 
 /// The VPN log shown in the in-app log viewer. On Android the VpnService writes
-/// every step + xray/tun2socks output to a file; on desktop it's xray's stderr.
+/// every VpnService step plus Xray output to a file; on desktop it's Xray stderr.
 #[tauri::command]
 pub async fn vpn_log(app: tauri::AppHandle) -> Result<String, String> {
     #[cfg(target_os = "android")]
@@ -928,7 +890,7 @@ pub async fn tcp_ping_host(
 
 /// A free ephemeral local TCP port (bind to :0, read the assigned port, release).
 /// There is an unavoidable TOCTOU window before xray re-binds it; a foreign
-/// listener that wins the race is caught later by the socks handshake failing.
+/// listener that wins the race is caught later by the HTTP proxy request failing.
 fn free_local_port() -> Result<u16, String> {
     std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
@@ -956,7 +918,7 @@ fn build_proxy_ping_request(client: &reqwest::Client) -> reqwest::RequestBuilder
 async fn probe_proxy_port(port: u16, timeout: Duration) -> Result<u32, String> {
     let client = reqwest::Client::builder()
         .proxy(
-            reqwest::Proxy::all(format!("socks5h://127.0.0.1:{port}"))
+            reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
                 .map_err(|e| format!("proxy: {e}"))?,
         )
         .redirect(reqwest::redirect::Policy::none())
@@ -1040,7 +1002,7 @@ pub async fn proxy_get_ping(
     // The whole op is bounded by `ms`; always clean up the child + temp config.
     let deadline = Instant::now() + Duration::from_millis(ms);
     let result = async {
-        // Wait for every SOCKS inbound, but bail the instant xray dies (e.g. an
+        // Wait for every HTTP inbound, but bail the instant Xray dies (e.g. an
         // unsupported/malformed server) instead of burning the whole budget.
         loop {
             if let Ok(Some(_)) = child.try_wait() {
@@ -1093,13 +1055,7 @@ pub async fn proxy_get_ping(
 mod ping_tests {
     use std::time::Duration;
 
-    use super::{build_proxy_ping_request, first_success, mobile_config_mode, PROXY_PING_URL};
-
-    #[test]
-    fn android_vpn_service_always_uses_tun_split_semantics() {
-        assert_eq!(mobile_config_mode("tun"), "tun");
-        assert_eq!(mobile_config_mode("proxy"), "tun");
-    }
+    use super::{build_proxy_ping_request, first_success, PROXY_PING_URL};
 
     #[test]
     fn proxy_ping_matches_xray_health_check_request() {

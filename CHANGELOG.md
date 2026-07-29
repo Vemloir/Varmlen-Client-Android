@@ -2,11 +2,16 @@
 
 ## 0.2.6
 
-- Remove the desktop-only Proxy mode selector from Android: Android traffic is
-  always captured by the native `VpnService` TUN.
-- Migrate stale saved Proxy preferences back to TUN and enforce TUN split
-  semantics in the backend, preventing site split rules from being silently
-  omitted after upgrading from an affected build.
+- Removed the user-facing local Proxy mode and its embedded
+  `hev-socks5-tunnel` bridge. Android now passes its `VpnService` TUN file
+  descriptor directly to Xray's native TUN inbound.
+- Removed the local SOCKS data plane, JNI service, fixed SOCKS port, and native
+  bridge library. Remote SOCKS server configurations remain supported.
+- Keep Android per-app split in `VpnService`, including UDP traffic, while Xray
+  applies site routing and DNS policy.
+- Capture IPv4 and IPv6 through the VPN and preserve fail-closed reconnects by
+  establishing the replacement TUN before retiring the previous data plane.
+- Use loopback HTTP inbounds for via-proxy latency probes.
 
 ## 0.2.5
 

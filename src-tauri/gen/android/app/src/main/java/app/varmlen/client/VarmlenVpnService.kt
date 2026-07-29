@@ -9,19 +9,21 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.VpnService
+import android.net.TrafficStats
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.service.quicksettings.TileService
+import android.system.Os
+import android.system.OsConstants
 import androidx.core.content.ContextCompat
 import java.io.File
 
 /**
- * The Android data plane. Establishes a tun via VpnService, runs the bundled
- * xray (a local SOCKS proxy) as a child process, and bridges the tun to it with
- * hev-socks5-tunnel (tun2socks). Mirrors the desktop "tun2socks" path, so the
- * same generated xray config is reused.
+ * The Android data plane. VpnService owns the OS tunnel and per-package policy,
+ * then passes the established TUN file descriptor directly to Xray's native
+ * Android TUN inbound.
  */
 class VarmlenVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
@@ -53,7 +55,6 @@ class VarmlenVpnService : VpnService() {
         const val ACTION_STATE = "app.varmlen.client.VPN_STATE"
         const val EXTRA_RUNNING = "running"
         const val EXTRA_CONFIG = "config"
-        const val EXTRA_SOCKS_PORT = "socksPort"
         const val EXTRA_DNS = "dns"
         const val EXTRA_APPS = "apps"
         const val EXTRA_APPS_ALLOW = "appsAllow"
@@ -64,7 +65,8 @@ class VarmlenVpnService : VpnService() {
         private const val CHANNEL = "varmlen_vpn"
         private const val NOTIF_ID = 1
         private const val TUN_ADDR = "10.10.10.2"
-        private const val MTU = 8500
+        private const val TUN_ADDR_V6 = "fd00:7661:726d:6c65::2"
+        private const val MTU = 1500
         private const val PREFS = "varmlen_vpn"
         private const val WANT_FILE = "vpn_want.flag"
 
@@ -108,7 +110,6 @@ class VarmlenVpnService : VpnService() {
             val config = p.getString("config", null) ?: return
             val i = Intent(ctx, VarmlenVpnService::class.java).setAction(ACTION_CONNECT)
             i.putExtra(EXTRA_CONFIG, config)
-            i.putExtra(EXTRA_SOCKS_PORT, p.getInt("socksPort", 2081))
             i.putExtra(EXTRA_DNS, p.getString("dns", "1.1.1.1"))
             i.putExtra(EXTRA_APPS, (p.getStringSet("apps", emptySet()) ?: emptySet()).toTypedArray())
             i.putExtra(EXTRA_APPS_ALLOW, p.getBoolean("appsAllow", false))
@@ -151,7 +152,6 @@ class VarmlenVpnService : VpnService() {
                 try {
                     startAll(
                         intent.getStringExtra(EXTRA_CONFIG) ?: error("no config"),
-                        intent.getIntExtra(EXTRA_SOCKS_PORT, 2081),
                         intent.getStringExtra(EXTRA_DNS) ?: "1.1.1.1",
                         intent.getStringArrayExtra(EXTRA_APPS) ?: emptyArray(),
                         intent.getBooleanExtra(EXTRA_APPS_ALLOW, false),
@@ -187,7 +187,7 @@ class VarmlenVpnService : VpnService() {
     }
 
     private fun startAll(
-        config: String, socksPort: Int, dns: String,
+        config: String, dns: String,
         apps: Array<String>, appsAllow: Boolean, logLevel: String,
         requestId: String?
     ) {
@@ -196,45 +196,24 @@ class VarmlenVpnService : VpnService() {
         // idempotency guard into the new data plane or its next Disconnect
         // action would be ignored forever.
         stopAllInProgress = false
-        log("startAll socksPort=$socksPort dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel")
+        log("startAll nativeTun dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel")
         val xrayBin = File(applicationInfo.nativeLibraryDir, "libxray.so")
         require(xrayBin.isFile && xrayBin.canExecute()) {
             "Bundled Xray executable is missing"
         }
         startForegroundOrThrow()
-        // Tear down any previous instance first — a reconnect (e.g. after a split
-        // change) must not stack a second xray on the same port or clobber hev's
-        // single work thread.
-        teardown()
-        stopping = false
-
-        // 1) xray as a local SOCKS proxy (the generated config binds 127.0.0.1:socksPort).
         val cfgFile = File(filesDir, "xray.json").apply { writeText(config) }
-        log("exec xray: ${xrayBin.absolutePath} (exists=${xrayBin.exists()})")
-        val proc = ProcessBuilder(xrayBin.absolutePath, "run", "-c", cfgFile.absolutePath)
-            .directory(filesDir)
-            .redirectErrorStream(true)
-            .start()
-        xray = proc
-        // Drain xray output into the log; when the stream closes, xray has exited.
-        // If that wasn't us tearing down, treat it as a crash and disconnect (the
-        // UI updates instantly via broadcastState in stopAll).
-        Thread {
-            try {
-                proc.inputStream.bufferedReader().forEachLine { log("xray: $it") }
-            } catch (_: Throwable) {}
-            if (!stopping && proc === xray) {
-                log("xray exited unexpectedly — disconnecting")
-                notifHandler.post { stopAll() }
-            }
-        }.apply { isDaemon = true; start() }
 
-        // 2) the tun interface.
+        // Establish the replacement TUN before stopping an existing data plane.
+        // Android atomically switches VPN routing to the new descriptor, so a
+        // reconnect can briefly block while Xray starts but cannot leak traffic.
         val builder = Builder()
             .setSession("Varmlen")
             .setMtu(MTU)
             .addAddress(TUN_ADDR, 30)
+            .addAddress(TUN_ADDR_V6, 126)
             .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
             .addDnsServer(dns)
         val appPolicy = vpnAppPolicy(apps, appsAllow, packageName)
         var installedAllowedApps = 0
@@ -249,7 +228,13 @@ class VarmlenVpnService : VpnService() {
         if (appPolicy.allowed.isNotEmpty() && installedAllowedApps == 0) {
             error("None of the selected allowlist applications are installed")
         }
+        if (appPolicy.allowed.isEmpty()) {
+            // Xray is a child of this package. Excluding our UID prevents its
+            // remote sockets from feeding back into the VPN tunnel.
+            builder.addDisallowedApplication(packageName)
+        }
         for (pkg in appPolicy.disallowed) {
+            if (pkg == packageName) continue
             try {
                 builder.addDisallowedApplication(pkg)
             } catch (_: Exception) {
@@ -257,35 +242,58 @@ class VarmlenVpnService : VpnService() {
             }
         }
         val fd = builder.establish() ?: error("establish() returned null")
+        val previousTun = tun
+        val previousXray = xray
         tun = fd
         log("tun established fd=${fd.fd}")
 
-        // 3) tun2socks: bridge the tun fd to xray's SOCKS inbound. The JNI runs
-        //    hev on a native pthread and returns immediately.
-        val yaml = """
-            tunnel:
-              mtu: $MTU
-              ipv4: $TUN_ADDR
-            socks5:
-              address: 127.0.0.1
-              port: $socksPort
-              udp: 'udp'
-            misc:
-              tcp-read-write-timeout: 300000
-              udp-read-write-timeout: 60000
-              log-level: $logLevel
-        """.trimIndent()
-        val hevFile = File(filesDir, "hev.yaml").apply { writeText(yaml) }
-        log("tun2socks starting (native)")
-        if (!TProxyService.TProxyStartService(hevFile.absolutePath, fd.fd)) {
-            throw IllegalStateException("tun2socks failed to start")
+        // Retire the old process only after the new TUN has taken ownership of
+        // VPN routing. Until the new Xray starts, packets are blocked in the TUN.
+        stopping = true
+        xray = null
+        try { previousXray?.destroy() } catch (_: Throwable) {}
+        try { previousTun?.close() } catch (_: Throwable) {}
+        stopping = false
+
+        // Xray's Android TUN inbound reads the inherited descriptor from this
+        // environment variable. ParcelFileDescriptor is close-on-exec by
+        // default, so clear that bit only around ProcessBuilder.start(), then
+        // restore it in the parent immediately.
+        val originalFdFlags = Os.fcntlInt(fd.fileDescriptor, OsConstants.F_GETFD, 0)
+        val processBuilder =
+            ProcessBuilder(xrayBin.absolutePath, "run", "-c", cfgFile.absolutePath)
+                .directory(filesDir)
+                .redirectErrorStream(true)
+        processBuilder.environment()["XRAY_TUN_FD"] = fd.fd.toString()
+        log("exec xray native TUN: ${xrayBin.absolutePath} fd=${fd.fd}")
+        val proc = try {
+            Os.fcntlInt(
+                fd.fileDescriptor,
+                OsConstants.F_SETFD,
+                originalFdFlags and OsConstants.FD_CLOEXEC.inv(),
+            )
+            processBuilder.start()
+        } finally {
+            Os.fcntlInt(fd.fileDescriptor, OsConstants.F_SETFD, originalFdFlags)
         }
+        xray = proc
+        // Drain Xray output into the log and fail closed on an unexpected exit.
+        Thread {
+            try {
+                proc.inputStream.bufferedReader().forEachLine { log("xray: $it") }
+            } catch (_: Throwable) {}
+            if (!stopping && proc === xray) {
+                log("xray exited unexpectedly — disconnecting")
+                notifHandler.post { stopAll() }
+            }
+        }.apply { isDaemon = true; start() }
+        Thread.sleep(150)
+        check(proc.isAlive) { "Xray exited during startup" }
 
         // Save only a configuration that reached the connected state. A failed
         // attempt must not poison later starts from the Quick Settings tile.
         getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString("config", config)
-            .putInt("socksPort", socksPort)
             .putString("dns", dns)
             .putStringSet("apps", apps.toSet())
             .putBoolean("appsAllow", appsAllow)
@@ -320,15 +328,10 @@ class VarmlenVpnService : VpnService() {
         } catch (_: Throwable) {}
     }
 
-    /** Stop hev + xray + the tun, but leave the service running (used to restart). */
+    /** Stop Xray before closing its TUN descriptor. */
     private fun teardown() {
         stopping = true
         notifHandler.removeCallbacks(statsTick)
-        try {
-            if (!TProxyService.TProxyStopService()) {
-                log("tun2socks stop reported failure")
-            }
-        } catch (_: Throwable) {}
         try { xray?.destroy() } catch (_: Throwable) {}
         xray = null
         try { tun?.close() } catch (_: Throwable) {}
@@ -425,10 +428,9 @@ class VarmlenVpnService : VpnService() {
         val now = System.currentTimeMillis()
         var up = 0L
         var down = 0L
-        val stats = try { TProxyService.TProxyGetStats() } catch (_: Throwable) { null }
-        if (stats != null && stats.size >= 4) {
-            val tx = stats[1]
-            val rx = stats[3]
+        val tx = TrafficStats.getUidTxBytes(applicationInfo.uid)
+        val rx = TrafficStats.getUidRxBytes(applicationInfo.uid)
+        if (tx != TrafficStats.UNSUPPORTED.toLong() && rx != TrafficStats.UNSUPPORTED.toLong()) {
             if (lastStatsAt > 0) {
                 val dt = (now - lastStatsAt).coerceAtLeast(1)
                 up = (tx - lastTx) * 1000 / dt

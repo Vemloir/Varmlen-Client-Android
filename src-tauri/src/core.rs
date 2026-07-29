@@ -18,7 +18,7 @@ use tauri::{AppHandle, Emitter, Manager};
 /// Which core a request targets. xray is now the sole core: its native tun does
 /// TUN capture, its routing does the per-app/site split + DNS, and its outbound
 /// does the vless/reality/xhttp transport. The enum is kept (single variant) so
-/// a second downloadable core — e.g. a future tun2socks fallback — can be added
+/// another downloadable core can be added later
 /// without reworking the download/activate plumbing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreKind {

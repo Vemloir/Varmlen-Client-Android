@@ -45,7 +45,6 @@ class ClipboardWriteArgs {
 @InvokeArg
 class ConnectArgs {
     var config: String = ""
-    var socksPort: Int = 10808
     var dns: String = "1.1.1.1"
     var apps: Array<String> = arrayOf()
     var appsAllow: Boolean = false
@@ -452,7 +451,6 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         val intent = Intent(activity, VarmlenVpnService::class.java)
         intent.action = VarmlenVpnService.ACTION_CONNECT
         intent.putExtra(VarmlenVpnService.EXTRA_CONFIG, args.config)
-        intent.putExtra(VarmlenVpnService.EXTRA_SOCKS_PORT, args.socksPort)
         intent.putExtra(VarmlenVpnService.EXTRA_DNS, args.dns)
         intent.putExtra(VarmlenVpnService.EXTRA_APPS, args.apps)
         intent.putExtra(VarmlenVpnService.EXTRA_APPS_ALLOW, args.appsAllow)

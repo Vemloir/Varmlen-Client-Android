@@ -59,28 +59,24 @@ describe("card surface contract", () => {
     expect(settings).toContain("Varmlen {appVersion}");
   });
 
-  it("does not expose the desktop Proxy mode selector on Android", () => {
+  it("removes the user-facing local Proxy mode from Android", () => {
+    const store = read("./settings.svelte.ts");
     const settings = read("../routes/settings/+page.svelte");
-
-    expect(settings).toMatch(
-      /{#if !isAndroid}\s*<section>\s*<h2>{t\("settings\.vpnMode"\)}<\/h2>[\s\S]*?<\/section>\s*{\/if}/,
-    );
-  });
-
-  it("migrates stale Android Proxy preferences back to TUN", () => {
     const layout = read("../routes/+layout.svelte");
-
-    expect(layout).toContain(
-      'if (isAndroid && settings.vpnMode !== "tun") settings.setVpnMode("tun");',
-    );
-  });
-
-  it("forces Android VpnService configurations to use TUN split semantics", () => {
+    const conn = read("./conn.svelte.ts");
+    const api = read("./api.ts");
+    const i18n = read("./i18n.svelte.ts");
     const vpn = read("../../src-tauri/src/vpn.rs");
+    const xray = read("../../src-tauri/src/xray.rs");
 
-    expect(vpn).toContain(
-      "mobile_config_mode(&mode)",
-    );
+    for (const source of [store, settings, layout, conn, api, i18n]) {
+      expect(source).not.toContain("vpnMode");
+    }
+    expect(api).not.toContain('"tun" | "proxy"');
+    expect(vpn).not.toContain('mode == "proxy"');
+    expect(vpn).not.toContain("mobile_config_mode");
+    expect(xray).not.toContain('mode == "proxy"');
+    expect(xray).not.toContain("XRAY_SOCKS_PORT");
   });
 
   it("uses native flags and separate link and JSON import modes", () => {
