@@ -335,6 +335,7 @@
     </div>
   </section>
 
+  {#if !isAndroid}
   <section>
     <h2>{t("settings.vpnMode")}</h2>
     <div class="list">
@@ -352,6 +353,7 @@
       </div>
     </div>
   </section>
+  {/if}
 
   <section>
     <h2>{t("settings.general")}</h2>

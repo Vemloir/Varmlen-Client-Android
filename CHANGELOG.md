@@ -2,13 +2,11 @@
 
 ## 0.2.6
 
-- Publish the current corrected Android client as a matching pre-release for
-  the Linux 0.2.6 cycle.
-- Keep per-app split tunneling on Android's native `VpnService`; the
-  Linux-only Proxy-mode process limitation does not apply to Android.
-- Include the corrected location-editor bounds, modal lifecycle, touch actions,
-  location states, parallel latency checks, and log containment from the final
-  0.2.5 source state.
+- Remove the desktop-only Proxy mode selector from Android: Android traffic is
+  always captured by the native `VpnService` TUN.
+- Migrate stale saved Proxy preferences back to TUN and enforce TUN split
+  semantics in the backend, preventing site split rules from being silently
+  omitted after upgrading from an affected build.
 
 ## 0.2.5
 

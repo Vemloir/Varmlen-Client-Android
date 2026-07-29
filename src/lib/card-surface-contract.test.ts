@@ -59,6 +59,30 @@ describe("card surface contract", () => {
     expect(settings).toContain("Varmlen {appVersion}");
   });
 
+  it("does not expose the desktop Proxy mode selector on Android", () => {
+    const settings = read("../routes/settings/+page.svelte");
+
+    expect(settings).toMatch(
+      /{#if !isAndroid}\s*<section>\s*<h2>{t\("settings\.vpnMode"\)}<\/h2>[\s\S]*?<\/section>\s*{\/if}/,
+    );
+  });
+
+  it("migrates stale Android Proxy preferences back to TUN", () => {
+    const layout = read("../routes/+layout.svelte");
+
+    expect(layout).toContain(
+      'if (isAndroid && settings.vpnMode !== "tun") settings.setVpnMode("tun");',
+    );
+  });
+
+  it("forces Android VpnService configurations to use TUN split semantics", () => {
+    const vpn = read("../../src-tauri/src/vpn.rs");
+
+    expect(vpn).toContain(
+      "mobile_config_mode(&mode)",
+    );
+  });
+
   it("uses native flags and separate link and JSON import modes", () => {
     const css = read("../app.css");
     const home = read("../routes/+page.svelte");

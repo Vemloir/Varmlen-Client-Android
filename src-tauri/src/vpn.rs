@@ -469,6 +469,14 @@ fn write_private(path: &PathBuf, content: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Android has no local-only desktop Proxy mode: its VpnService always owns a
+/// TUN and forwards captured traffic to xray. Treat stale persisted "proxy"
+/// values as TUN so site split rules remain present in the generated config.
+#[cfg(any(target_os = "android", test))]
+fn mobile_config_mode(_requested: &str) -> &'static str {
+    "tun"
+}
+
 #[tauri::command]
 pub async fn vpn_connect(
     app: tauri::AppHandle,
@@ -490,7 +498,7 @@ pub async fn vpn_connect(
         let xray_cfg = serde_json::to_string(&build_xray_config(
             &server,
             &split,
-            &mode,
+            mobile_config_mode(&mode),
             TunMode::Tun2socks,
             allow_lan,
             &level,
@@ -1085,7 +1093,13 @@ pub async fn proxy_get_ping(
 mod ping_tests {
     use std::time::Duration;
 
-    use super::{build_proxy_ping_request, first_success, PROXY_PING_URL};
+    use super::{build_proxy_ping_request, first_success, mobile_config_mode, PROXY_PING_URL};
+
+    #[test]
+    fn android_vpn_service_always_uses_tun_split_semantics() {
+        assert_eq!(mobile_config_mode("tun"), "tun");
+        assert_eq!(mobile_config_mode("proxy"), "tun");
+    }
 
     #[test]
     fn proxy_ping_matches_xray_health_check_request() {
