@@ -3,7 +3,7 @@ name = "varmlen"
 version = "0.2.6"
 description = "Varmlen — open-source xray-core client with per-app and per-domain split tunneling"
 authors = ["Varmlen contributors"]
-license = "MIT"
+license = "GPL-3.0-only"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

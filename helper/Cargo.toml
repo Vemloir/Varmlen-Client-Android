@@ -2,7 +2,7 @@
 name = "varmlen-probe"
 version = "0.0.2"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-only"
 description = "Small setcap'd helper for Varmlen: tunnel-bypass latency probes, killswitch, TUN cleanup"
 
 [[bin]]

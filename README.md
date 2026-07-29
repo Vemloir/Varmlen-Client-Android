@@ -52,5 +52,5 @@ subscriptions and uninstall 0.1.2 before installing 0.2.0.
 
 ## License
 
-[MIT](./LICENSE). Bundles [xray-core](https://github.com/XTLS/Xray-core)
+[GNU GPL v3](./LICENSE). Bundles [xray-core](https://github.com/XTLS/Xray-core)
 (MPL-2.0); see [NOTICE](./NOTICE).
