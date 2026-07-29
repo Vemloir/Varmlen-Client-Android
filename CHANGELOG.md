@@ -12,6 +12,9 @@
 - Capture IPv4 and IPv6 through the VPN and preserve fail-closed reconnects by
   establishing the replacement TUN before retiring the previous data plane.
 - Use loopback HTTP inbounds for via-proxy latency probes.
+- Launch Xray through a native Rust/JNI bridge so the duplicated
+  `VpnService` TUN descriptor survives exec instead of being closed by
+  Android's Java process launcher.
 
 ## 0.2.5
 

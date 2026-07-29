@@ -15,8 +15,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.service.quicksettings.TileService
-import android.system.Os
-import android.system.OsConstants
 import androidx.core.content.ContextCompat
 import java.io.File
 
@@ -27,7 +25,7 @@ import java.io.File
  */
 class VarmlenVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
-    private var xray: Process? = null
+    private var xrayStarted = false
 
     /** Set during an intentional teardown so the xray-exit watcher doesn't treat
      *  a deliberate kill as a crash. */
@@ -243,52 +241,29 @@ class VarmlenVpnService : VpnService() {
         }
         val fd = builder.establish() ?: error("establish() returned null")
         val previousTun = tun
-        val previousXray = xray
         tun = fd
         log("tun established fd=${fd.fd}")
 
         // Retire the old process only after the new TUN has taken ownership of
         // VPN routing. Until the new Xray starts, packets are blocked in the TUN.
         stopping = true
-        xray = null
-        try { previousXray?.destroy() } catch (_: Throwable) {}
+        try { XrayCore.stop() } catch (_: Throwable) {}
+        xrayStarted = false
         try { previousTun?.close() } catch (_: Throwable) {}
         stopping = false
 
-        // Xray's Android TUN inbound reads the inherited descriptor from this
-        // environment variable. ParcelFileDescriptor is close-on-exec by
-        // default, so clear that bit only around ProcessBuilder.start(), then
-        // restore it in the parent immediately.
-        val originalFdFlags = Os.fcntlInt(fd.fileDescriptor, OsConstants.F_GETFD, 0)
-        val processBuilder =
-            ProcessBuilder(xrayBin.absolutePath, "run", "-c", cfgFile.absolutePath)
-                .directory(filesDir)
-                .redirectErrorStream(true)
-        processBuilder.environment()["XRAY_TUN_FD"] = fd.fd.toString()
+        // Rust duplicates the descriptor and launches Xray natively. Android's
+        // Java process launcher closes arbitrary descriptors before exec.
         log("exec xray native TUN: ${xrayBin.absolutePath} fd=${fd.fd}")
-        val proc = try {
-            Os.fcntlInt(
-                fd.fileDescriptor,
-                OsConstants.F_SETFD,
-                originalFdFlags and OsConstants.FD_CLOEXEC.inv(),
-            )
-            processBuilder.start()
-        } finally {
-            Os.fcntlInt(fd.fileDescriptor, OsConstants.F_SETFD, originalFdFlags)
-        }
-        xray = proc
-        // Drain Xray output into the log and fail closed on an unexpected exit.
-        Thread {
-            try {
-                proc.inputStream.bufferedReader().forEachLine { log("xray: $it") }
-            } catch (_: Throwable) {}
-            if (!stopping && proc === xray) {
-                log("xray exited unexpectedly — disconnecting")
-                notifHandler.post { stopAll() }
-            }
-        }.apply { isDaemon = true; start() }
-        Thread.sleep(150)
-        check(proc.isAlive) { "Xray exited during startup" }
+        val started = XrayCore.start(
+            xrayBin.absolutePath,
+            cfgFile.absolutePath,
+            filesDir.absolutePath,
+            File(filesDir, LOG_FILE).absolutePath,
+            fd.fd,
+        )
+        check(started) { "Xray exited during startup" }
+        xrayStarted = true
 
         // Save only a configuration that reached the connected state. A failed
         // attempt must not poison later starts from the Quick Settings tile.
@@ -332,8 +307,8 @@ class VarmlenVpnService : VpnService() {
     private fun teardown() {
         stopping = true
         notifHandler.removeCallbacks(statsTick)
-        try { xray?.destroy() } catch (_: Throwable) {}
-        xray = null
+        try { XrayCore.stop() } catch (_: Throwable) {}
+        xrayStarted = false
         try { tun?.close() } catch (_: Throwable) {}
         tun = null
     }
@@ -425,6 +400,11 @@ class VarmlenVpnService : VpnService() {
 
     /** Refresh the notification with the current up/down speed and uptime. */
     private fun updateNotification() {
+        if (!stopping && xrayStarted && !XrayCore.isRunning()) {
+            log("xray exited unexpectedly — disconnecting")
+            stopAll("Xray exited unexpectedly")
+            return
+        }
         val now = System.currentTimeMillis()
         var up = 0L
         var down = 0L

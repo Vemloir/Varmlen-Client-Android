@@ -10,7 +10,9 @@ fi
 
 ENTRIES="$(mktemp)"
 DEX_PACKAGES="$(mktemp)"
-trap 'rm -f "$ENTRIES" "$DEX_PACKAGES"' EXIT
+NATIVE_LIB="$(mktemp)"
+NATIVE_STRINGS="$(mktemp)"
+trap 'rm -f "$ENTRIES" "$DEX_PACKAGES" "$NATIVE_LIB" "$NATIVE_STRINGS"' EXIT
 unzip -Z1 "$APK" >"$ENTRIES"
 
 require_entry() {
@@ -53,6 +55,23 @@ if grep -Fq "app.varmlen.client.TProxyService" "$DEX_PACKAGES"; then
   echo "APK still contains the obsolete tun2socks JNI service" >&2
   exit 1
 fi
+if ! grep -Fq "app.varmlen.client.XrayCore" "$DEX_PACKAGES"; then
+  echo "APK is missing the native Xray launcher bridge" >&2
+  exit 1
+fi
+
+unzip -p "$APK" "lib/arm64-v8a/libvarmlen_lib.so" >"$NATIVE_LIB"
+strings -n 8 "$NATIVE_LIB" >"$NATIVE_STRINGS"
+for symbol in \
+  Java_app_varmlen_client_XrayCore_start \
+  Java_app_varmlen_client_XrayCore_isRunning \
+  Java_app_varmlen_client_XrayCore_stop
+do
+  if ! grep -Fxq "$symbol" "$NATIVE_STRINGS"; then
+    echo "APK is missing native Xray launcher symbol: $symbol" >&2
+    exit 1
+  fi
+done
 
 APKSIGNER="$SDK/build-tools/36.0.0/apksigner"
 if [ ! -x "$APKSIGNER" ]; then

@@ -30,11 +30,13 @@ subscription data, not part of Varmlen's removed local SOCKS5 data plane.
   its uplink back into its own TUN;
 - owning and closing the `ParcelFileDescriptor`.
 
-After establishing the TUN, the service temporarily clears `FD_CLOEXEC`, starts
-the bundled Android Xray executable with `XRAY_TUN_FD=<fd>`, and restores
-`FD_CLOEXEC` in the parent. Xray 26.6.27's Android TUN implementation reads that
-environment variable, marks the fd non-blocking, and feeds it directly into its
-gVisor stack.
+After establishing the TUN, the service calls the `XrayCore` JNI bridge. The
+Rust launcher duplicates the descriptor with `dup()` and starts the bundled
+Android Xray executable with `XRAY_TUN_FD=<dup>`. This native launch is
+required because Android's Java process launcher closes arbitrary descriptors
+before exec even when the original `FD_CLOEXEC` flag has been cleared. Xray
+26.6.27's Android TUN implementation reads the environment variable, marks the
+fd non-blocking, and feeds it directly into its gVisor stack.
 
 Xray receives a native `tun` inbound. Android package split remains enforced by
 `VpnService`; Xray applies site and outbound routing without process matching.
@@ -77,11 +79,11 @@ The notes also state that remote SOCKS server configurations remain supported.
 - source contracts reject `TProxyService`, `hev-socks5-tunnel`, bridge
   `socksPort`, and the old frontend `vpnMode`;
 - source contracts require `XRAY_TUN_FD`, native `tun` inbound, explicit fd
-  inheritance, and own-package VPN exclusion;
+  inheritance through the Rust/JNI launcher, and own-package VPN exclusion;
 - Rust tests verify Android routing uses VpnService-owned app split and native
   TUN;
 - ping tests verify loopback HTTP proxy inbounds;
 - APK inspection verifies arm64-only packaging, valid signature, bundled Xray,
   and absence of `libhev-socks5-tunnel.so`;
-- the corrected `0.2.6` uses Android `versionCode 2009` so it upgrades builds
-  carrying the earlier `2008` artifact.
+- `0.2.6` uses Android `versionCode 2010` so it upgrades the earlier artifacts,
+  including the Java-launcher build carrying `2009`.

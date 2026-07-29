@@ -43,6 +43,9 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 socket2 = "0.5"
 libc = "0.2"
 
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 # Desktop-only dependencies. Single-instance + the XDG-portal file picker have
 # no Android equivalent (Android uses the system VpnService / picker instead).
 [target.'cfg(not(target_os = "android"))'.dependencies]

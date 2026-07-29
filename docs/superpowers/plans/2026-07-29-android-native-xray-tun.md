@@ -14,7 +14,8 @@
 - Do not disconnect or mutate the user's active VPN/network state.
 - Keep remote SOCKS outbound/subscription support.
 - Publish only a signed arm64 APK; do not build or publish an AAB.
-- Keep version name `0.2.6`, bump Android `versionCode` from `2008` to `2009`.
+- Keep version name `0.2.6`; use Android `versionCode 2010` so the native
+  launcher build upgrades both earlier `2008` and `2009` artifacts.
 - Commit messages and release notes must contain no AI attribution.
 
 ---
@@ -32,7 +33,8 @@
 - Produces: failing contracts for the old local SOCKS5 path and required native TUN fd path.
 
 - [ ] Add assertions that frontend source contains no `vpnMode`, Kotlin contains no `TProxyService`/`socksPort`, the native script contains no `hev-socks5-tunnel`, and APK contains no `libhev-socks5-tunnel.so`.
-- [ ] Add assertions requiring `XRAY_TUN_FD`, `F_SETFD`, `FD_CLOEXEC`, native Xray `tun` inbound, and Varmlen package exclusion.
+- [ ] Add assertions requiring `XRAY_TUN_FD`, the Rust/JNI fd launcher, native
+  Xray `tun` inbound, and Varmlen package exclusion.
 - [ ] Run the focused Vitest and shell contracts and confirm they fail on the old implementation.
 
 ### Task 2: Remove frontend and Rust local Proxy mode
@@ -60,8 +62,10 @@
 
 **Files:**
 - Modify: `src-tauri/src/mobile_vpn.rs`
+- Add: `src-tauri/src/android_xray.rs`
 - Modify: `src-tauri/gen/android/app/src/main/java/app/varmlen/client/VpnPlugin.kt`
 - Modify: `src-tauri/gen/android/app/src/main/java/app/varmlen/client/VarmlenVpnService.kt`
+- Add: `src-tauri/gen/android/app/src/main/java/app/varmlen/client/XrayCore.kt`
 - Delete: `src-tauri/gen/android/app/src/main/java/app/varmlen/client/TProxyService.kt`
 - Modify: `src-tauri/gen/android/app/build.gradle.kts`
 - Modify: `scripts/android-native.sh`
@@ -71,7 +75,8 @@
 - Produces: a foreground `VpnService` that starts Xray with `XRAY_TUN_FD=<fd>` and no SOCKS bridge.
 
 - [ ] Remove `socksPort` from plugin arguments, intent extras, persistence, logging, and start signatures.
-- [ ] Establish the Android TUN before Xray, clear `FD_CLOEXEC`, pass `XRAY_TUN_FD` in `ProcessBuilder.environment()`, start Xray, then restore `FD_CLOEXEC`.
+- [ ] Establish the Android TUN before Xray, pass its fd through JNI, duplicate
+  it in Rust, and natively start Xray with `XRAY_TUN_FD=<dup>`.
 - [ ] Remove all `TProxyService` calls and hev YAML generation.
 - [ ] Remove hev from build scripts and package metadata.
 - [ ] Run Kotlin/native contracts and Gradle compilation.
@@ -93,7 +98,8 @@
 - [ ] Change generated ping inbounds from `socks` to `http`.
 - [ ] Change `reqwest` ping proxy URLs from `socks5h://` to `http://`.
 - [ ] Update tests and error messages from SOCKS ports to HTTP proxy ports.
-- [ ] Document direct `VpnService` fd handoff, explicit component removal, retained remote SOCKS support, and `versionCode 2009`.
+- [ ] Document direct `VpnService` fd handoff, explicit component removal,
+  retained remote SOCKS support, and `versionCode 2010`.
 - [ ] Run focused ping/config tests.
 
 ### Task 5: Full verification and corrected pre-release
@@ -108,7 +114,7 @@
 
 - [ ] Run all Vitest, Svelte, audit, Cargo test/clippy, Android contract, and formatting checks.
 - [ ] Build only the signed arm64 APK with `npm run tauri android build -- --target aarch64 --apk`.
-- [ ] Verify manifest `0.2.6/2009`, arm64 ABI, certificate digest, APK contents, and absence of hev.
+- [ ] Verify manifest `0.2.6/2010`, arm64 ABI, certificate digest, APK contents, and absence of hev.
 - [ ] Commit and push functional source changes.
 - [ ] Replace the Android `v0.2.6` tag/release with the corrected commit and APK.
 - [ ] Download the GitHub asset, compare SHA-256 byte-for-byte, and repeat manifest/signature/content verification.

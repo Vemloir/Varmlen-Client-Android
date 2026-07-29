@@ -4544,6 +4544,7 @@ dependencies = [
  "base64 0.22.1",
  "flate2",
  "futures-util",
+ "jni",
  "libc",
  "percent-encoding",
  "reqwest 0.12.28",

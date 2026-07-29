@@ -12,13 +12,16 @@ The service reports startup success/failure back to the UI.
 Connect (UI) → vpn_connect (Rust, cfg android) → mobile_vpn::connect
    → VpnPlugin (Kotlin, Tauri plugin) → VarmlenVpnService (VpnService)
         ├── VpnService.Builder → TUN fd (IPv4/IPv6, DNS, per-app policy)
-        └── XRAY_TUN_FD=<fd> exec libxray.so → native Xray TUN inbound
+        └── XrayCore JNI → Rust dup(fd) + exec libxray.so
+              └── XRAY_TUN_FD=<dup> → native Xray TUN inbound
 ```
 
 - **xray** runs as the bundled `libxray.so` (Android arm64 binary), exec'd from
   `nativeLibraryDir` — `useLegacyPackaging = true` extracts it.
-- `VpnService` temporarily clears `FD_CLOEXEC`, starts Xray with
-  `XRAY_TUN_FD=<fd>`, then restores the descriptor flags in the parent.
+- `VpnService` passes the TUN descriptor to `XrayCore`; the Rust JNI launcher
+  duplicates it with `dup()` and starts Xray with `XRAY_TUN_FD=<dup>`.
+  This avoids Android's Java process launcher, which closes arbitrary file
+  descriptors before exec.
 - Per-app split maps to package names: selective = `addAllowedApplication`,
   general = `addDisallowedApplication`. Varmlen's own UID stays outside capture
   so Xray's remote sockets cannot loop back into the TUN.

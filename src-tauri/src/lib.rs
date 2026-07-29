@@ -1,3 +1,5 @@
+#[cfg(target_os = "android")]
+mod android_xray;
 mod apps;
 mod core;
 #[cfg(target_os = "android")]
