@@ -6,9 +6,24 @@ Open-source xray-core VPN client for Android, with independent per-app and per-d
 
 ## Screenshots
 
-| Home | Split tunneling | Settings |
-| --- | --- | --- |
-| ![Varmlen Android home with AegisVPN locations](docs/screenshots/home.png) | ![Varmlen Android per-app split tunneling](docs/screenshots/split.png) | ![Varmlen Android settings in English](docs/screenshots/settings.png) |
+<table>
+  <tr>
+    <th width="50%">Home</th>
+    <th width="50%">Split tunneling · Apps</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/home.png" width="100%" alt="Varmlen Android home with AegisVPN locations"></td>
+    <td><img src="docs/screenshots/split.png" width="100%" alt="Varmlen Android per-app split tunneling"></td>
+  </tr>
+  <tr>
+    <th>Split tunneling · Websites</th>
+    <th>Settings</th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/split-websites.png" width="100%" alt="Varmlen Android per-domain split tunneling"></td>
+    <td><img src="docs/screenshots/settings.png" width="100%" alt="Varmlen Android settings in English"></td>
+  </tr>
+</table>
 
 ## Features
 
