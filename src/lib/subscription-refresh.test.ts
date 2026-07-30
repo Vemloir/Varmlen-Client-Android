@@ -102,6 +102,9 @@ describe("subscription refresh setting contract", () => {
     const worker = read(
       "../../src-tauri/gen/android/app/src/main/java/app/varmlen/client/SubscriptionRefreshWorker.kt",
     );
+    const http = read(
+      "../../src-tauri/gen/android/app/src/main/java/app/varmlen/client/SubscriptionHttp.kt",
+    );
 
     expect(api).toContain("syncSubscriptionRefresh");
     expect(api).toContain("drainSubscriptionRefreshes");
@@ -111,7 +114,8 @@ describe("subscription refresh setting contract", () => {
     expect(layout).toContain("drainNativeSubscriptionRefreshes");
     expect(layout).toContain("syncSubscriptionRefresh(schedules)");
     expect(worker).toContain("CoroutineWorker");
-    expect(worker).toContain('setRequestProperty("X-Device-OS", "android")');
+    expect(worker).toContain("fetchSubscriptionHttp(");
+    expect(http).toContain('setRequestProperty("X-Device-OS", deviceOs)');
     expect(worker).not.toContain("VarmlenVpnService");
     expect(worker).not.toContain("startActivity");
   });

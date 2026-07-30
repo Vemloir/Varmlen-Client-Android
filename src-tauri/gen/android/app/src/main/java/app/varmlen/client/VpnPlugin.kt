@@ -66,6 +66,13 @@ class SyncSubscriptionRefreshArgs {
     var schedules: Array<SubscriptionRefreshItemArgs> = arrayOf()
 }
 
+@InvokeArg
+class FetchSubscriptionArgs {
+    var url: String = ""
+    var userAgent: String = ""
+    var deviceOs: String = "android"
+}
+
 /** Tauri bridge: the Rust `vpn_connect`/`vpn_disconnect` commands call into this
  *  on Android to drive the VpnService (with the system consent dialog). */
 @TauriPlugin
@@ -277,6 +284,34 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.reject(
                     boundedSubscriptionRefreshError(
                         error.message ?: "Could not read subscription refreshes",
+                    ),
+                )
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
+    /** Interactive imports use Android's platform TLS stack, exactly like
+     * WorkManager refreshes and other native Android VPN clients. */
+    @Command
+    fun fetchSubscription(invoke: Invoke) {
+        val args = invoke.parseArgs(FetchSubscriptionArgs::class.java)
+        Thread {
+            try {
+                val response = fetchSubscriptionHttp(
+                    args.url,
+                    args.userAgent,
+                    args.deviceOs,
+                )
+                val headers = JSObject()
+                response.headers.forEach { (name, value) -> headers.put(name, value) }
+                invoke.resolve(JSObject().apply {
+                    put("body", response.body)
+                    put("headers", headers)
+                })
+            } catch (error: Throwable) {
+                invoke.reject(
+                    boundedSubscriptionRefreshError(
+                        error.message ?: "Could not fetch subscription",
                     ),
                 )
             }

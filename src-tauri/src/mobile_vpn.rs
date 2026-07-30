@@ -111,6 +111,20 @@ struct SyncSubscriptionRefreshArgs {
     schedules: Vec<SubscriptionRefreshScheduleInput>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FetchSubscriptionArgs {
+    url: String,
+    user_agent: String,
+    device_os: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct FetchedSubscription {
+    pub body: String,
+    pub headers: std::collections::HashMap<String, String>,
+}
+
 #[derive(serde::Deserialize)]
 struct DrainSubscriptionRefreshResponse {
     results: Vec<StagedSubscriptionResponse>,
@@ -145,6 +159,25 @@ pub fn drain_subscription_refreshes<R: Runtime>(
     vpn.0
         .run_mobile_plugin::<DrainSubscriptionRefreshResponse>("drainSubscriptionRefreshes", ())
         .map(|response| response.results)
+        .map_err(|e| e.to_string())
+}
+
+pub fn fetch_subscription<R: Runtime>(
+    app: &AppHandle<R>,
+    url: String,
+    user_agent: String,
+    device_os: String,
+) -> Result<FetchedSubscription, String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<FetchedSubscription>(
+            "fetchSubscription",
+            FetchSubscriptionArgs {
+                url,
+                user_agent,
+                device_os,
+            },
+        )
         .map_err(|e| e.to_string())
 }
 

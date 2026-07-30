@@ -12,6 +12,7 @@ mod vpn;
 mod xray;
 
 use std::collections::HashMap;
+#[cfg(not(target_os = "android"))]
 use std::time::Duration;
 
 use subscription::{
@@ -177,6 +178,7 @@ fn subscription_headers(choice: Option<&str>) -> Result<(String, String), String
 
 #[tauri::command]
 async fn fetch_subscription(
+    app: tauri::AppHandle,
     url: String,
     subscription_user_agent: Option<String>,
 ) -> Result<ImportResult, String> {
@@ -242,72 +244,83 @@ async fn fetch_subscription(
     }
 
     let (user_agent, device_os) = subscription_headers(subscription_user_agent.as_deref())?;
-    let client = reqwest::Client::builder()
-        .user_agent(user_agent)
-        .timeout(Duration::from_secs(15))
-        // Validate every redirect hop too, so a 30x can't escape the guard.
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() >= 5 {
-                attempt.error("too many redirects")
-            } else if attempt
-                .url()
-                .host_str()
-                .map(is_blocked_host)
-                .unwrap_or(true)
-            {
-                attempt.error("redirect to a loopback/private address")
-            } else {
-                attempt.follow()
-            }
-        }))
-        .build()
-        .map_err(|e| format!("http client: {e}"))?;
-
-    let resp = client
-        .get(trimmed)
-        .header("X-Device-OS", device_os)
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+    #[cfg(target_os = "android")]
+    {
+        let response =
+            mobile_vpn::fetch_subscription(&app, trimmed.to_string(), user_agent, device_os)?;
+        return parse_subscription_response(response.body, response.headers);
     }
 
-    // Cap the body: subscriptions are KB-scale; bail past the limit so a
-    // malicious endpoint can't OOM us with an unbounded response.
-    const MAX_SUB_BYTES: usize = 8 * 1024 * 1024;
-    if resp
-        .content_length()
-        .map(|l| l > MAX_SUB_BYTES as u64)
-        .unwrap_or(false)
+    #[cfg(not(target_os = "android"))]
     {
-        return Err("subscription too large".to_string());
-    }
-    let headers: HashMap<String, String> = resp
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.as_str().to_string(), value.to_string()))
-        })
-        .collect();
-    let mut buf: Vec<u8> = Vec::new();
-    {
-        use futures_util::StreamExt;
-        let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("read body: {e}"))?;
-            buf.extend_from_slice(&chunk);
-            if buf.len() > MAX_SUB_BYTES {
-                return Err("subscription exceeded size limit".to_string());
+        let _ = app;
+        let client = reqwest::Client::builder()
+            .user_agent(user_agent)
+            .timeout(Duration::from_secs(15))
+            // Validate every redirect hop too, so a 30x can't escape the guard.
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 5 {
+                    attempt.error("too many redirects")
+                } else if attempt
+                    .url()
+                    .host_str()
+                    .map(is_blocked_host)
+                    .unwrap_or(true)
+                {
+                    attempt.error("redirect to a loopback/private address")
+                } else {
+                    attempt.follow()
+                }
+            }))
+            .build()
+            .map_err(|e| format!("http client: {e}"))?;
+
+        let resp = client
+            .get(trimmed)
+            .header("X-Device-OS", device_os)
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("HTTP {}", resp.status()));
+        }
+
+        // Cap the body: subscriptions are KB-scale; bail past the limit so a
+        // malicious endpoint can't OOM us with an unbounded response.
+        const MAX_SUB_BYTES: usize = 8 * 1024 * 1024;
+        if resp
+            .content_length()
+            .map(|l| l > MAX_SUB_BYTES as u64)
+            .unwrap_or(false)
+        {
+            return Err("subscription too large".to_string());
+        }
+        let headers: HashMap<String, String> = resp
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_string(), value.to_string()))
+            })
+            .collect();
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            use futures_util::StreamExt;
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| format!("read body: {e}"))?;
+                buf.extend_from_slice(&chunk);
+                if buf.len() > MAX_SUB_BYTES {
+                    return Err("subscription exceeded size limit".to_string());
+                }
             }
         }
+        let body = String::from_utf8_lossy(&buf).into_owned();
+        Ok(subscription::parse_subscription_response(&body, &headers))
     }
-    let body = String::from_utf8_lossy(&buf).into_owned();
-    Ok(subscription::parse_subscription_response(&body, &headers))
 }
 
 // (Ping/latency probes are intentionally absent — pending a design pass.
