@@ -68,8 +68,8 @@ scripts/test-android-native-script.sh
 scripts/test-android-apk.sh <signed-apk>
 ```
 
-Version 0.2.0 is arm64-only. Because the 0.1.2 signing key was lost, back up
-subscriptions and uninstall 0.1.2 before installing 0.2.0.
+The current APK is arm64-only. Because the 0.1.2 signing key was lost, back up
+subscriptions and uninstall 0.1.2 before installing any 0.2.0+ release.
 
 ## License
 
