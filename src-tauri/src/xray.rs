@@ -866,8 +866,23 @@ fn build_dns() -> Value {
     })
 }
 
-/// The inbound that carries system traffic.
-fn build_inbounds(inbound: CaptureInbound) -> Vec<Value> {
+/// Loopback HTTP inbound used ONLY to run a controlled egress probe through the
+/// exact outbound the tunnel is using — never exposed as a user-facing proxy
+/// and never reachable off-device (`listen` is `127.0.0.1`).
+const PROBE_PORT: u16 = 28510;
+const PROBE_TAG: &str = "probe-in";
+
+/// The port the Android egress probe connects to. Exposed so the platform
+/// code that performs the actual HTTP request agrees with the generated
+/// config without duplicating the constant.
+pub fn android_probe_port() -> u16 {
+    PROBE_PORT
+}
+
+/// The inbound that carries system traffic, plus an optional loopback probe
+/// inbound (see `PROBE_TAG`) used on Android to verify real egress before the
+/// UI reports "connected".
+fn build_inbounds(inbound: CaptureInbound, with_probe: bool) -> Vec<Value> {
     // routeOnly: the sniffed domain is used for routing (domain rules) but the
     // connection keeps its original destination. This avoids the destination
     // override that can sever the source->process binding the `process` matcher
@@ -877,7 +892,7 @@ fn build_inbounds(inbound: CaptureInbound) -> Vec<Value> {
         "destOverride": ["http", "tls", "quic"],
         "routeOnly": true
     });
-    match inbound {
+    let mut list = match inbound {
         CaptureInbound::NativeTun => vec![json!({
             "tag": "tun-in",
             "protocol": "tun",
@@ -894,7 +909,17 @@ fn build_inbounds(inbound: CaptureInbound) -> Vec<Value> {
             "settings": {},
             "sniffing": sniffing,
         })],
+    };
+    if with_probe {
+        list.push(json!({
+            "tag": PROBE_TAG,
+            "listen": "127.0.0.1",
+            "port": PROBE_PORT,
+            "protocol": "http",
+            "settings": {},
+        }));
     }
+    list
 }
 
 /// Routing rules. Per-app (`process`) and per-site (`domain`) split are BOTH
@@ -918,6 +943,7 @@ fn build_route_rules(
     inbound_tag: &str,
     app_split_owner: AppSplitOwner,
     proxy_target: &ProxyTarget,
+    with_probe: bool,
 ) -> Vec<Value> {
     let apps_selective = split.apps_selective();
     let sites_selective = split.sites_selective();
@@ -936,10 +962,22 @@ fn build_route_rules(
         true
     };
 
-    let mut rules = vec![
-        // 1. Hijack app DNS (:53) into xray's DNS module.
+    let mut rules = Vec::new();
+
+    // 0. The egress probe MUST go through the exact tunnel outbound and can
+    //    never fall back to direct or be affected by app/site split — its
+    //    only purpose is proving that outbound actually reaches the network.
+    //    Placed first so nothing below can shadow it.
+    if with_probe {
+        let mut probe_rule = json!({ "type": "field", "inboundTag": [PROBE_TAG] });
+        proxy_target.apply(&mut probe_rule);
+        rules.push(probe_rule);
+    }
+
+    // 1. Hijack app DNS (:53) into xray's DNS module.
+    rules.push(
         json!({ "type": "field", "inboundTag": [inbound_tag], "port": 53, "outboundTag": "dns-out" }),
-    ];
+    );
 
     // 2. Keep LAN/private traffic direct when allowed.
     if allow_lan {
@@ -1021,6 +1059,7 @@ fn build_xray_config_with_inbound(
     app_split_owner: AppSplitOwner,
     allow_lan: bool,
     log_level: &str,
+    with_probe: bool,
 ) -> Value {
     let loglevel = xray_loglevel(log_level);
     let OutboundPlan {
@@ -1034,7 +1073,14 @@ fn build_xray_config_with_inbound(
     proxies.push(json!({ "tag": "dns-out", "protocol": "dns" }));
     proxies.push(json!({ "tag": "block", "protocol": "blackhole" }));
 
-    let rules = build_route_rules(split, allow_lan, inbound.tag(), app_split_owner, &target);
+    let rules = build_route_rules(
+        split,
+        allow_lan,
+        inbound.tag(),
+        app_split_owner,
+        &target,
+        with_probe,
+    );
     let mut routing = json!({ "rules": rules });
     if let Some(balancers) = balancers {
         routing["balancers"] = balancers;
@@ -1042,7 +1088,7 @@ fn build_xray_config_with_inbound(
     let mut config = json!({
         "log": { "loglevel": loglevel },
         "dns": build_dns(),
-        "inbounds": build_inbounds(inbound),
+        "inbounds": build_inbounds(inbound, with_probe),
         "outbounds": proxies,
         "routing": routing
     });
@@ -1070,11 +1116,14 @@ pub fn build_xray_config(
         app_split_owner,
         allow_lan,
         log_level,
+        false,
     )
 }
 
 /// Device-free equivalent used to validate transport/routing JSON before
-/// touching desktop kernel state.
+/// touching kernel/OS network state (desktop `xray run -test`, and the
+/// Android preflight check run before a candidate config is ever allowed to
+/// replace the active tunnel).
 pub fn build_xray_validation_config(
     server: &VlessServer,
     split: &SplitInput,
@@ -1089,6 +1138,30 @@ pub fn build_xray_validation_config(
         app_split_owner,
         allow_lan,
         log_level,
+        false,
+    )
+}
+
+/// Native-TUN config for Android, with an added loopback probe inbound
+/// (`probe-in`) hard-routed to the tunnel outbound only. After Xray starts,
+/// the platform code sends one request through `127.0.0.1:android_probe_port()`
+/// to prove the outbound actually reaches the network before the UI is told
+/// the VPN is connected — this request cannot silently fall back to a direct
+/// route (see `build_route_rules`'s probe rule).
+pub fn build_android_xray_config(
+    server: &VlessServer,
+    split: &SplitInput,
+    allow_lan: bool,
+    log_level: &str,
+) -> Value {
+    build_xray_config_with_inbound(
+        server,
+        split,
+        CaptureInbound::NativeTun,
+        AppSplitOwner::VpnService,
+        allow_lan,
+        log_level,
+        true,
     )
 }
 

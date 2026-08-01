@@ -20,6 +20,16 @@ object XrayCore {
         tunFd: Int,
     ): Boolean
 
+    /** Runs `xray run -test -c configPath` synchronously (call off the main
+     *  thread). Used to preflight the exact candidate config BEFORE the TUN
+     *  is established or any policy is switched. */
+    @JvmStatic
+    external fun validate(binary: String, configPath: String, logPath: String): Boolean
+
+    /** The fixed loopback port the config's egress-probe inbound listens on. */
+    @JvmStatic
+    external fun probePort(): Int
+
     @JvmStatic
     external fun isRunning(): Boolean
 

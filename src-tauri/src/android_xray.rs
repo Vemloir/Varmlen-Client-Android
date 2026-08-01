@@ -103,6 +103,77 @@ pub extern "system" fn Java_app_varmlen_client_XrayCore_start(
     1
 }
 
+/// Runs `xray run -test -c <config>` synchronously and returns whether the
+/// config is structurally valid. Called by Kotlin on the device-free
+/// validation variant BEFORE the candidate config is ever allowed to
+/// establish the TUN or replace the active tunnel (see android_xray_config /
+/// android-xray-validate flow in `vpn.rs`/`VarmlenVpnService.kt`). Any
+/// failure text goes to `log_path` so it's visible in the in-app log.
+#[no_mangle]
+pub extern "system" fn Java_app_varmlen_client_XrayCore_validate(
+    mut env: JNIEnv,
+    _class: JClass,
+    binary: JString,
+    config: JString,
+    log_path: JString,
+) -> jboolean {
+    let (Some(binary), Some(config), Some(log_path)) = (
+        read(&mut env, &binary),
+        read(&mut env, &config),
+        read(&mut env, &log_path),
+    ) else {
+        return 0;
+    };
+
+    let output = Command::new(&binary)
+        .arg("run")
+        .arg("-test")
+        .arg("-c")
+        .arg(&config)
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => 1,
+        Ok(out) => {
+            let mut msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            if msg.is_empty() {
+                msg = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            }
+            append_log(
+                &log_path,
+                &format!("xray config validation failed: {msg}"),
+            );
+            0
+        }
+        Err(e) => {
+            append_log(&log_path, &format!("xray config validation error: {e}"));
+            0
+        }
+    }
+}
+
+fn append_log(path: &str, line: &str) {
+    use std::io::Write;
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(file, "[{ts}] {line}");
+    }
+}
+
+/// The fixed loopback port the egress-verification probe inbound listens on
+/// in the config built by `build_android_xray_config`. Exposed over JNI so
+/// Kotlin never has to duplicate the constant.
+#[no_mangle]
+pub extern "system" fn Java_app_varmlen_client_XrayCore_probePort(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jint {
+    crate::xray::android_probe_port() as jint
+}
+
 #[no_mangle]
 pub extern "system" fn Java_app_varmlen_client_XrayCore_isRunning(
     _env: JNIEnv,

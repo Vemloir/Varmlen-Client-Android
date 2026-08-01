@@ -45,6 +45,9 @@ class ClipboardWriteArgs {
 @InvokeArg
 class ConnectArgs {
     var config: String = ""
+    /** Device-free variant of `config`, validated with `xray run -test`
+     *  before the candidate config may replace the active tunnel. */
+    var validationConfig: String = ""
     var dns: String = "1.1.1.1"
     var apps: Array<String> = arrayOf()
     var appsAllow: Boolean = false
@@ -210,8 +213,9 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun readLog(invoke: Invoke) {
         val ret = JSObject()
-        val f = java.io.File(activity.filesDir, VarmlenVpnService.LOG_FILE)
-        ret.put("log", if (f.exists()) f.readText() else "")
+        // Bounded tail, not the whole (potentially multi-MB) file — see
+        // VarmlenVpnService.readLogTail.
+        ret.put("log", VarmlenVpnService.readLogTail(activity))
         invoke.resolve(ret)
     }
 
@@ -486,6 +490,7 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         val intent = Intent(activity, VarmlenVpnService::class.java)
         intent.action = VarmlenVpnService.ACTION_CONNECT
         intent.putExtra(VarmlenVpnService.EXTRA_CONFIG, args.config)
+        intent.putExtra(VarmlenVpnService.EXTRA_VALIDATION_CONFIG, args.validationConfig)
         intent.putExtra(VarmlenVpnService.EXTRA_DNS, args.dns)
         intent.putExtra(VarmlenVpnService.EXTRA_APPS, args.apps)
         intent.putExtra(VarmlenVpnService.EXTRA_APPS_ALLOW, args.appsAllow)

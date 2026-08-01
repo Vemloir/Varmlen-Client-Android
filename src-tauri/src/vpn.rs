@@ -483,7 +483,18 @@ pub async fn vpn_connect(
     #[cfg(target_os = "android")]
     {
         let _ = killswitch;
-        let xray_cfg = serde_json::to_string(&build_xray_config(
+        // The real candidate config: native TUN inbound (fd handed over by
+        // VpnService) plus a loopback probe inbound used only to verify real
+        // egress once Xray is up (see `build_android_xray_config`).
+        let xray_cfg = serde_json::to_string(&crate::xray::build_android_xray_config(
+            &server, &split, allow_lan, &level,
+        ))
+        .map_err(|e| e.to_string())?;
+        // Device-free variant of the exact same transport/routing JSON, so the
+        // service can run `xray run -test` on it BEFORE establishing the TUN
+        // or touching any policy — the native tun inbound may create its
+        // device just by being parsed, so it can't be used for `-test` itself.
+        let validate_cfg = serde_json::to_string(&build_xray_validation_config(
             &server,
             &split,
             AppSplitOwner::VpnService,
@@ -494,7 +505,14 @@ pub async fn vpn_connect(
         // apps_allow = whitelist apps (only listed apps enter the TUN). App and
         // site split modes remain independent.
         let apps_allow = split.apps_selective();
-        crate::mobile_vpn::connect(&app, xray_cfg, split.apps.clone(), apps_allow, level)?;
+        crate::mobile_vpn::connect(
+            &app,
+            xray_cfg,
+            validate_cfg,
+            split.apps.clone(),
+            apps_allow,
+            level,
+        )?;
         return Ok(HelperResponse::connected(0));
     }
 

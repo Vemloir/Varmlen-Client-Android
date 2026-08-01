@@ -12,6 +12,10 @@ use crate::{StagedSubscriptionResponse, SubscriptionRefreshScheduleInput};
 #[serde(rename_all = "camelCase")]
 struct ConnectArgs {
     config: String,
+    /// Device-free variant of `config` (no native TUN inbound), run through
+    /// `xray run -test` on the Kotlin side before the candidate config is
+    /// ever allowed to replace the active tunnel.
+    validation_config: String,
     dns: String,
     apps: Vec<String>,
     apps_allow: bool,
@@ -64,6 +68,7 @@ fn start_state_watcher<R: Runtime>(app: AppHandle<R>) {
 pub fn connect<R: Runtime>(
     app: &AppHandle<R>,
     config: String,
+    validation_config: String,
     apps: Vec<String>,
     apps_allow: bool,
     log_level: String,
@@ -74,6 +79,7 @@ pub fn connect<R: Runtime>(
             "connect",
             ConnectArgs {
                 config,
+                validation_config,
                 dns: "1.1.1.1".to_string(),
                 apps,
                 apps_allow,
