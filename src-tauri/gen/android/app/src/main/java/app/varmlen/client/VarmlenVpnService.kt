@@ -17,6 +17,9 @@ import android.os.ParcelFileDescriptor
 import android.service.quicksettings.TileService
 import androidx.core.content.ContextCompat
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 
 /**
  * The Android data plane. VpnService owns the OS tunnel and per-package policy,
@@ -53,8 +56,9 @@ class VarmlenVpnService : VpnService() {
         const val ACTION_STATE = "app.varmlen.client.VPN_STATE"
         const val EXTRA_RUNNING = "running"
         const val EXTRA_CONFIG = "config"
-        /** Device-free variant of EXTRA_CONFIG, validated with `xray run
-         *  -test` before the candidate config may replace the active tunnel. */
+        /** Device-free preflight config with the same proxy outbounds and
+         *  routing policy as EXTRA_CONFIG. It is validated with `xray run
+         *  -test` before the candidate may replace the active tunnel. */
         const val EXTRA_VALIDATION_CONFIG = "validationConfig"
         const val EXTRA_DNS = "dns"
         const val EXTRA_APPS = "apps"
@@ -63,25 +67,9 @@ class VarmlenVpnService : VpnService() {
         const val EXTRA_REQUEST_ID = "requestId"
         const val EXTRA_ERROR = "error"
         const val LOG_FILE = "varmlen.log"
-        /** On-disk cap for varmlen.log. Trimmed down to half this whenever it
-         *  is exceeded (see trimLogIfOversized) — otherwise a long-lived
-         *  install with many connect cycles grows the file without bound. */
-        private const val MAX_LOG_BYTES = 8L * 1024 * 1024
         /** Bound on what any single read (IPC response / log viewer) ever
          *  loads into memory, independent of how large the file is. */
         private const val LOG_TAIL_BYTES = 512L * 1024
-
-        /** Keep only the last half of MAX_LOG_BYTES. Only safe to call when
-         *  nothing is concurrently appending — call sites must ensure any
-         *  previous Xray process has already exited first. */
-        fun trimLogIfOversized(ctx: Context) {
-            try {
-                val f = File(ctx.filesDir, LOG_FILE)
-                if (f.length() <= MAX_LOG_BYTES) return
-                val tail = readTail(f, MAX_LOG_BYTES / 2)
-                f.writeText(tail)
-            } catch (_: Throwable) {}
-        }
 
         /** Bounded tail read for the in-app log viewer / readLog IPC — never
          *  loads the whole (potentially multi-MB) file into memory. */
@@ -185,8 +173,10 @@ class VarmlenVpnService : VpnService() {
     private fun log(msg: String, e: Throwable? = null) {
         try {
             val f = File(filesDir, LOG_FILE)
-            f.appendText("[${System.currentTimeMillis()}] $msg\n")
-            if (e != null) f.appendText(android.util.Log.getStackTraceString(e) + "\n")
+            XrayCore.appendLog(f.absolutePath, msg)
+            if (e != null) {
+                XrayCore.appendLog(f.absolutePath, android.util.Log.getStackTraceString(e))
+            }
         } catch (_: Throwable) {}
         android.util.Log.i("VarmlenVpn", msg, e)
     }
@@ -254,8 +244,8 @@ class VarmlenVpnService : VpnService() {
             "Bundled Xray executable is missing"
         }
 
-        // Preflight: validate the EXACT candidate transport/routing JSON
-        // (device-free variant, no native tun inbound) with `xray run -test`
+        // Preflight: validate the candidate's proxy outbounds and routing
+        // policy through its device-free variant with `xray run -test`
         // BEFORE the foreground notification, the TUN, or any routing policy
         // is touched. A structurally invalid config must never reach
         // establish()/XrayCore.start() — catching it only at process spawn
@@ -321,11 +311,6 @@ class VarmlenVpnService : VpnService() {
         try { previousTun?.close() } catch (_: Throwable) {}
         stopping = false
 
-        // The old Xray process (if any) is confirmed exited and the new one
-        // hasn't started yet, so nothing is appending to the log right now —
-        // the only safe window to trim it without racing a concurrent writer.
-        trimLogIfOversized(this)
-
         // Rust duplicates the descriptor and launches Xray natively. Android's
         // Java process launcher closes arbitrary descriptors before exec.
         log("exec xray native TUN: ${xrayBin.absolutePath} fd=${fd.fd}")
@@ -341,12 +326,11 @@ class VarmlenVpnService : VpnService() {
 
         // Verify REAL egress before announcing "connected". A dead or
         // unreachable remote must never surface as a working connection: run
-        // one controlled request through the config's loopback probe inbound,
-        // which is hard-routed to the tunnel outbound only (build_route_rules'
-        // probe rule) and can never silently fall back to a direct
-        // connection. On failure this throws, and the caller's existing catch
-        // block tears everything back down via stopAll().
-        check(verifyEgress()) { "Tunnel established but the server is unreachable" }
+        // one controlled request through every loopback probe inbound. Each is
+        // hard-routed to exactly one concrete proxy outbound and can never
+        // silently fall back to direct or hide behind a healthy balancer peer.
+        // On failure the caller tears everything back down via stopAll().
+        check(verifyEgress(config)) { "Tunnel established but one or more server paths are unreachable" }
 
         // Save only a configuration that reached the connected state. A failed
         // attempt must not poison later starts from the Quick Settings tile.
@@ -368,20 +352,45 @@ class VarmlenVpnService : VpnService() {
         log("connected")
     }
 
-    /** One controlled HTTPS request through the config's loopback probe
-     *  inbound (127.0.0.1:XrayCore.probePort()), which routing forces onto
-     *  the tunnel outbound with no possibility of a direct fallback. A
-     *  204/2xx/3xx response proves the chosen outbound reaches the open
-     *  network; anything else (timeout, connection refused, dead remote)
-     *  means the tunnel is NOT actually usable, whatever XrayCore.isRunning()
-     *  says. Deliberately synchronous/short — see the call site. */
-    private fun verifyEgress(): Boolean {
-        val port = try {
-            XrayCore.probePort()
+    /** Probe every loopback inbound generated for the concrete proxy paths.
+     *  Each inbound has an explicit outboundTag rule and therefore cannot use
+     *  direct fallback or hide a dead variant behind a healthy balancer peer. */
+    private fun verifyEgress(config: String): Boolean {
+        val ports = try {
+            val inbounds = JSONObject(config).getJSONArray("inbounds")
+            buildList {
+                for (index in 0 until inbounds.length()) {
+                    val inbound = inbounds.getJSONObject(index)
+                    if (!inbound.optString("tag").startsWith("probe-in-")) continue
+                    check(inbound.optString("listen") == "127.0.0.1") {
+                        "egress probe is not loopback-only"
+                    }
+                    add(inbound.getInt("port"))
+                }
+            }.also { resolved ->
+                check(resolved.isNotEmpty() && resolved.size <= 64 && resolved.distinct().size == resolved.size) {
+                    "invalid egress probe set"
+                }
+            }
         } catch (e: Throwable) {
-            log("egress probe: could not read probe port", e)
+            log("egress probe config is invalid", e)
             return false
         }
+        val executor = Executors.newFixedThreadPool(ports.size.coerceAtMost(8))
+        return try {
+            val futures = ports.map { port -> executor.submit<Boolean> { verifyEgressPort(port) } }
+            val results = futures.map { future ->
+                try { future.get(9, TimeUnit.SECONDS) } catch (_: Throwable) { false }
+            }
+            val healthy = results.count { it }
+            log("egress probes: $healthy/${results.size} healthy")
+            allEgressProbesHealthy(results)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    private fun verifyEgressPort(port: Int): Boolean {
         val proxy = java.net.Proxy(
             java.net.Proxy.Type.HTTP,
             java.net.InetSocketAddress("127.0.0.1", port),
@@ -396,10 +405,8 @@ class VarmlenVpnService : VpnService() {
                 requestMethod = "GET"
             }
             val code = connection.responseCode
-            log("egress probe: HTTP $code")
-            code in 200..399
-        } catch (e: Throwable) {
-            log("egress probe failed", e)
+            code == 204
+        } catch (_: Throwable) {
             false
         } finally {
             try { connection?.disconnect() } catch (_: Throwable) {}
@@ -565,3 +572,6 @@ class VarmlenVpnService : VpnService() {
         else String.format("%02d:%02d", m, s)
     }
 }
+
+internal fun allEgressProbesHealthy(results: List<Boolean>): Boolean =
+    results.isNotEmpty() && results.all { it }

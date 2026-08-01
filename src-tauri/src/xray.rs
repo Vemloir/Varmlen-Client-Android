@@ -230,6 +230,9 @@ fn is_proxy_protocol(protocol: &str) -> bool {
 }
 
 fn sanitize_raw_outbound(outbound: &Value, preserve_tag_and_chains: bool) -> Result<Value, String> {
+    if contains_forbidden_provider_file_reference(outbound) {
+        return Err("JSON proxy outbound may not reference local files".into());
+    }
     let mut object = outbound
         .as_object()
         .cloned()
@@ -272,6 +275,20 @@ fn sanitize_raw_outbound(outbound: &Value, preserve_tag_and_chains: bool) -> Res
     }
     sockopt.insert("mark".into(), json!(XRAY_DIAL_MARK));
     Ok(Value::Object(object))
+}
+
+fn contains_forbidden_provider_file_reference(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => object.iter().any(|(key, value)| {
+            let key = key.to_ascii_lowercase();
+            key.ends_with("file")
+                || key.ends_with("filepath")
+                || key == "masterkeylog"
+                || contains_forbidden_provider_file_reference(value)
+        }),
+        Value::Array(items) => items.iter().any(contains_forbidden_provider_file_reference),
+        _ => false,
+    }
 }
 
 fn provider_proxy_outbounds(profile: &Value) -> Result<Vec<Value>, String> {
@@ -869,20 +886,13 @@ fn build_dns() -> Value {
 /// Loopback HTTP inbound used ONLY to run a controlled egress probe through the
 /// exact outbound the tunnel is using — never exposed as a user-facing proxy
 /// and never reachable off-device (`listen` is `127.0.0.1`).
-const PROBE_PORT: u16 = 28510;
-const PROBE_TAG: &str = "probe-in";
-
-/// The port the Android egress probe connects to. Exposed so the platform
-/// code that performs the actual HTTP request agrees with the generated
-/// config without duplicating the constant.
-pub fn android_probe_port() -> u16 {
-    PROBE_PORT
-}
+const PROBE_PORT_BASE: u16 = 28510;
+const PROBE_TAG_PREFIX: &str = "probe-in-";
 
 /// The inbound that carries system traffic, plus an optional loopback probe
-/// inbound (see `PROBE_TAG`) used on Android to verify real egress before the
+/// inbounds (see `PROBE_TAG_PREFIX`) used on Android to verify real egress before the
 /// UI reports "connected".
-fn build_inbounds(inbound: CaptureInbound, with_probe: bool) -> Vec<Value> {
+fn build_inbounds(inbound: CaptureInbound, probe_targets: &[String]) -> Vec<Value> {
     // routeOnly: the sniffed domain is used for routing (domain rules) but the
     // connection keeps its original destination. This avoids the destination
     // override that can sever the source->process binding the `process` matcher
@@ -910,11 +920,11 @@ fn build_inbounds(inbound: CaptureInbound, with_probe: bool) -> Vec<Value> {
             "sniffing": sniffing,
         })],
     };
-    if with_probe {
+    for (index, _) in probe_targets.iter().enumerate() {
         list.push(json!({
-            "tag": PROBE_TAG,
+            "tag": format!("{PROBE_TAG_PREFIX}{index}"),
             "listen": "127.0.0.1",
-            "port": PROBE_PORT,
+            "port": PROBE_PORT_BASE + index as u16,
             "protocol": "http",
             "settings": {},
         }));
@@ -943,7 +953,7 @@ fn build_route_rules(
     inbound_tag: &str,
     app_split_owner: AppSplitOwner,
     proxy_target: &ProxyTarget,
-    with_probe: bool,
+    probe_targets: &[String],
 ) -> Vec<Value> {
     let apps_selective = split.apps_selective();
     let sites_selective = split.sites_selective();
@@ -968,10 +978,12 @@ fn build_route_rules(
     //    never fall back to direct or be affected by app/site split — its
     //    only purpose is proving that outbound actually reaches the network.
     //    Placed first so nothing below can shadow it.
-    if with_probe {
-        let mut probe_rule = json!({ "type": "field", "inboundTag": [PROBE_TAG] });
-        proxy_target.apply(&mut probe_rule);
-        rules.push(probe_rule);
+    for (index, outbound_tag) in probe_targets.iter().enumerate() {
+        rules.push(json!({
+            "type": "field",
+            "inboundTag": [format!("{PROBE_TAG_PREFIX}{index}")],
+            "outboundTag": outbound_tag,
+        }));
     }
 
     // 1. Hijack app DNS (:53) into xray's DNS module.
@@ -1069,6 +1081,15 @@ fn build_xray_config_with_inbound(
         observatory,
         burst_observatory,
     } = outbound_plan(server).expect("server was validated before config generation");
+    let probe_targets = if with_probe {
+        proxies
+            .iter()
+            .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     proxies.push(direct_outbound());
     proxies.push(json!({ "tag": "dns-out", "protocol": "dns" }));
     proxies.push(json!({ "tag": "block", "protocol": "blackhole" }));
@@ -1079,7 +1100,7 @@ fn build_xray_config_with_inbound(
         inbound.tag(),
         app_split_owner,
         &target,
-        with_probe,
+        &probe_targets,
     );
     let mut routing = json!({ "rules": rules });
     if let Some(balancers) = balancers {
@@ -1088,7 +1109,7 @@ fn build_xray_config_with_inbound(
     let mut config = json!({
         "log": { "loglevel": loglevel },
         "dns": build_dns(),
-        "inbounds": build_inbounds(inbound, with_probe),
+        "inbounds": build_inbounds(inbound, &probe_targets),
         "outbounds": proxies,
         "routing": routing
     });
@@ -1142,12 +1163,11 @@ pub fn build_xray_validation_config(
     )
 }
 
-/// Native-TUN config for Android, with an added loopback probe inbound
-/// (`probe-in`) hard-routed to the tunnel outbound only. After Xray starts,
-/// the platform code sends one request through `127.0.0.1:android_probe_port()`
-/// to prove the outbound actually reaches the network before the UI is told
-/// the VPN is connected — this request cannot silently fall back to a direct
-/// route (see `build_route_rules`'s probe rule).
+/// Native-TUN config for Android, with one loopback probe inbound per concrete
+/// proxy path. After Xray starts, the platform probes them concurrently before
+/// the UI is told the VPN is connected. Every probe is hard-routed to its exact
+/// outbound, so a dead variant cannot hide behind a healthy balancer peer and
+/// no request can silently fall back to a direct route.
 pub fn build_android_xray_config(
     server: &VlessServer,
     split: &SplitInput,
@@ -1158,6 +1178,25 @@ pub fn build_android_xray_config(
         server,
         split,
         CaptureInbound::NativeTun,
+        AppSplitOwner::VpnService,
+        allow_lan,
+        log_level,
+        true,
+    )
+}
+
+/// Device-free Android preflight with one loopback probe route per concrete
+/// outbound. It differs from the active config only in the system-data inbound.
+pub fn build_android_validation_config(
+    server: &VlessServer,
+    split: &SplitInput,
+    allow_lan: bool,
+    log_level: &str,
+) -> Value {
+    build_xray_config_with_inbound(
+        server,
+        split,
+        CaptureInbound::ValidationHttp,
         AppSplitOwner::VpnService,
         allow_lan,
         log_level,
@@ -1525,6 +1564,27 @@ mod tests {
     }
 
     #[test]
+    fn json_location_rejects_local_certificate_and_key_files() {
+        let body = r#"{
+          "remarks": "Unsafe",
+          "outbounds": [{
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": {"vnext": [{"address": "vpn.example", "port": 443,
+              "users": [{"id": "uuid"}]}]},
+            "streamSettings": {"security": "tls", "tlsSettings": {
+              "certificates": [{"certificateFile": "/sdcard/provider.pem",
+                "keyFile": "/sdcard/provider.key"}]
+            }}
+          }]
+        }"#;
+        let server = parse_subscription(body).remove(0);
+        assert!(validate_server(&server)
+            .unwrap_err()
+            .contains("may not reference local files"));
+    }
+
+    #[test]
     fn tcp_reality_vision_keeps_flow() {
         let s = parse_proxy_uri(
             "vless://uuid-1@1.2.3.4:443?type=tcp&security=reality&flow=xtls-rprx-vision&sni=icloud.com&pbk=K&sid=ab&fp=chrome#X",
@@ -1660,6 +1720,61 @@ mod tests {
         let dns_rule = rule_for(&cfg, "inboundTag").unwrap();
         assert_eq!(dns_rule["inboundTag"][0], "tun-in");
         assert!(rule_for(&cfg, "process").is_none());
+    }
+
+    #[test]
+    fn android_connection_probe_is_loopback_only_and_has_no_direct_fallback() {
+        let server = parse_proxy_uri("vless://u@1.2.3.4:443?security=reality&pbk=K#X").unwrap();
+        let config = build_android_xray_config(&server, &split(), false, "warning");
+        let probe = config["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|inbound| inbound["tag"] == format!("{PROBE_TAG_PREFIX}0"))
+            .unwrap();
+        assert_eq!(probe["listen"], "127.0.0.1");
+        assert_eq!(probe["port"], PROBE_PORT_BASE);
+        let rule = config["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|rule| rule["inboundTag"][0] == format!("{PROBE_TAG_PREFIX}0"))
+            .unwrap();
+        assert_eq!(rule["outboundTag"], "proxy");
+        assert!(rule.get("balancerTag").is_none());
+    }
+
+    #[test]
+    fn android_composite_has_one_probe_route_per_concrete_outbound() {
+        let server = estonia_profile_server();
+        let config = build_android_xray_config(&server, &split(), false, "warning");
+        let probe_inbounds = config["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|inbound| {
+                inbound["tag"]
+                    .as_str()
+                    .is_some_and(|tag| tag.starts_with(PROBE_TAG_PREFIX))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(probe_inbounds.len(), 7);
+        for (index, inbound) in probe_inbounds.iter().enumerate() {
+            assert_eq!(inbound["port"], PROBE_PORT_BASE + index as u16);
+            let tag = inbound["tag"].as_str().unwrap();
+            let route = config["routing"]["rules"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|rule| rule["inboundTag"][0] == tag)
+                .unwrap();
+            let expected = if index == 0 {
+                "proxy".to_string()
+            } else {
+                format!("proxy-{}", index + 1)
+            };
+            assert_eq!(route["outboundTag"], expected);
+        }
     }
 
     #[test]

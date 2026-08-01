@@ -21,14 +21,14 @@ object XrayCore {
     ): Boolean
 
     /** Runs `xray run -test -c configPath` synchronously (call off the main
-     *  thread). Used to preflight the exact candidate config BEFORE the TUN
-     *  is established or any policy is switched. */
+     *  thread). Used to preflight the candidate's proxy/routing policy in its
+     *  device-free form BEFORE the TUN is established or policy is switched. */
     @JvmStatic
     external fun validate(binary: String, configPath: String, logPath: String): Boolean
 
-    /** The fixed loopback port the config's egress-probe inbound listens on. */
+    /** Appends through the same bounded rotating writer used for Xray output. */
     @JvmStatic
-    external fun probePort(): Int
+    external fun appendLog(logPath: String, message: String)
 
     @JvmStatic
     external fun isRunning(): Boolean

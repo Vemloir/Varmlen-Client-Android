@@ -115,7 +115,7 @@ describe("subscription refresh setting contract", () => {
     expect(layout).toContain("syncSubscriptionRefresh(schedules)");
     expect(worker).toContain("CoroutineWorker");
     expect(worker).toContain("fetchSubscriptionHttp(");
-    expect(http).toContain('setRequestProperty("X-Device-OS", deviceOs)');
+    expect(http).toContain('.header("X-Device-OS", deviceOs)');
     expect(worker).not.toContain("VarmlenVpnService");
     expect(worker).not.toContain("startActivity");
   });

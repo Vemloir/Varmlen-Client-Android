@@ -64,6 +64,8 @@ unzip -p "$APK" "lib/arm64-v8a/libvarmlen_lib.so" >"$NATIVE_LIB"
 strings -n 8 "$NATIVE_LIB" >"$NATIVE_STRINGS"
 for symbol in \
   Java_app_varmlen_client_XrayCore_start \
+  Java_app_varmlen_client_XrayCore_validate \
+  Java_app_varmlen_client_XrayCore_appendLog \
   Java_app_varmlen_client_XrayCore_isRunning \
   Java_app_varmlen_client_XrayCore_stop
 do

@@ -42,10 +42,20 @@ require "$CORE" 'external fun stop' \
   "Android Xray JNI bridge does not expose a stop function"
 require "$CORE" 'external fun isRunning' \
   "Android Xray JNI bridge cannot detect a runtime Xray exit"
+require "$CORE" 'external fun validate' \
+  "Android Xray JNI bridge cannot validate a candidate config"
+require "$CORE" 'external fun appendLog' \
+  "Android Xray JNI bridge does not use the bounded native log writer"
+require "$SERVICE" 'allEgressProbesHealthy' \
+  "Android VPN service does not require every concrete proxy path to work"
+require "$SERVICE" 'startsWith("probe-in-")' \
+  "Android VPN service does not discover per-outbound egress probes"
 require "$NATIVE" 'libc::dup' \
   "native Xray launcher does not duplicate the TUN fd for child inheritance"
 require "$NATIVE" 'XRAY_TUN_FD' \
   "native Xray launcher does not pass the duplicated TUN fd to Xray"
+require "$NATIVE" 'BoundedLog' \
+  "native Xray launcher does not continuously rotate its log"
 require "$SERVICE" 'addDisallowedApplication(packageName)' \
   "Varmlen does not exclude its own Xray process from VPN capture"
 reject "$SERVICE" 'startForeground failed (continuing)' \

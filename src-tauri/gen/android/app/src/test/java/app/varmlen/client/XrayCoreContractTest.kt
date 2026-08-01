@@ -28,8 +28,25 @@ class XrayCoreContractTest {
             type.getDeclaredMethod("isRunning").returnType,
         )
         assertEquals(
+            java.lang.Boolean.TYPE,
+            type.getDeclaredMethod(
+                "validate",
+                String::class.java,
+                String::class.java,
+                String::class.java,
+            ).returnType,
+        )
+        assertEquals(
             java.lang.Void.TYPE,
             type.getDeclaredMethod("stop").returnType,
+        )
+        assertEquals(
+            java.lang.Void.TYPE,
+            type.getDeclaredMethod(
+                "appendLog",
+                String::class.java,
+                String::class.java,
+            ).returnType,
         )
     }
 }

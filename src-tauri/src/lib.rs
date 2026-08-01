@@ -1,6 +1,8 @@
 #[cfg(target_os = "android")]
 mod android_xray;
 mod apps;
+#[cfg(any(target_os = "android", test))]
+mod bounded_log;
 mod core;
 #[cfg(target_os = "android")]
 mod mobile_vpn;

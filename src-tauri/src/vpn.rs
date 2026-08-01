@@ -494,12 +494,8 @@ pub async fn vpn_connect(
         // service can run `xray run -test` on it BEFORE establishing the TUN
         // or touching any policy — the native tun inbound may create its
         // device just by being parsed, so it can't be used for `-test` itself.
-        let validate_cfg = serde_json::to_string(&build_xray_validation_config(
-            &server,
-            &split,
-            AppSplitOwner::VpnService,
-            allow_lan,
-            &level,
+        let validate_cfg = serde_json::to_string(&crate::xray::build_android_validation_config(
+            &server, &split, allow_lan, &level,
         ))
         .map_err(|e| e.to_string())?;
         // apps_allow = whitelist apps (only listed apps enter the TUN). App and

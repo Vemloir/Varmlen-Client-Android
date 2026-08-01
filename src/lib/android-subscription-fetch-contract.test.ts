@@ -29,8 +29,10 @@ describe("Android subscription fetch contract", () => {
     expect(plugin).toContain("fun fetchSubscription(invoke: Invoke)");
     expect(plugin).toContain("fetchSubscriptionHttp(");
     expect(worker).toContain("fetchSubscriptionHttp(");
-    expect(nativeHttp).toContain("HttpURLConnection");
-    expect(nativeHttp).toContain("requireSafeSubscriptionRemote");
+    expect(nativeHttp).toContain("OkHttpClient.Builder()");
+    expect(nativeHttp).toContain("PinnedSubscriptionDns");
+    expect(nativeHttp).toContain("approvedSubscriptionAddresses(url)");
+    expect(nativeHttp).toContain(".followRedirects(false)");
     expect(nativeHttp).toContain("MAX_SUBSCRIPTION_BODY_BYTES");
     expect(nativeHttp).toContain("MAX_SUBSCRIPTION_REDIRECTS");
   });

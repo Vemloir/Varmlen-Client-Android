@@ -221,7 +221,13 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command
     fun clearLog(invoke: Invoke) {
-        try { java.io.File(activity.filesDir, VarmlenVpnService.LOG_FILE).writeText("") } catch (_: Throwable) {}
+        try {
+            val path = java.io.File(activity.filesDir, VarmlenVpnService.LOG_FILE)
+            path.writeText("")
+            for (index in 1..3) {
+                java.io.File("${path.absolutePath}.$index").delete()
+            }
+        } catch (_: Throwable) {}
         invoke.resolve()
     }
 
