@@ -53,6 +53,9 @@ class VarmlenVpnService : VpnService() {
         const val ACTION_STATE = "app.varmlen.client.VPN_STATE"
         const val EXTRA_RUNNING = "running"
         const val EXTRA_CONFIG = "config"
+        /** Device-free variant of EXTRA_CONFIG, validated with `xray run
+         *  -test` before the candidate config may replace the active tunnel. */
+        const val EXTRA_VALIDATION_CONFIG = "validationConfig"
         const val EXTRA_DNS = "dns"
         const val EXTRA_APPS = "apps"
         const val EXTRA_APPS_ALLOW = "appsAllow"
@@ -60,6 +63,52 @@ class VarmlenVpnService : VpnService() {
         const val EXTRA_REQUEST_ID = "requestId"
         const val EXTRA_ERROR = "error"
         const val LOG_FILE = "varmlen.log"
+        /** On-disk cap for varmlen.log. Trimmed down to half this whenever it
+         *  is exceeded (see trimLogIfOversized) — otherwise a long-lived
+         *  install with many connect cycles grows the file without bound. */
+        private const val MAX_LOG_BYTES = 8L * 1024 * 1024
+        /** Bound on what any single read (IPC response / log viewer) ever
+         *  loads into memory, independent of how large the file is. */
+        private const val LOG_TAIL_BYTES = 512L * 1024
+
+        /** Keep only the last half of MAX_LOG_BYTES. Only safe to call when
+         *  nothing is concurrently appending — call sites must ensure any
+         *  previous Xray process has already exited first. */
+        fun trimLogIfOversized(ctx: Context) {
+            try {
+                val f = File(ctx.filesDir, LOG_FILE)
+                if (f.length() <= MAX_LOG_BYTES) return
+                val tail = readTail(f, MAX_LOG_BYTES / 2)
+                f.writeText(tail)
+            } catch (_: Throwable) {}
+        }
+
+        /** Bounded tail read for the in-app log viewer / readLog IPC — never
+         *  loads the whole (potentially multi-MB) file into memory. */
+        fun readLogTail(ctx: Context, maxBytes: Long = LOG_TAIL_BYTES): String {
+            val f = File(ctx.filesDir, LOG_FILE)
+            if (!f.exists()) return ""
+            return try { readTail(f, maxBytes) } catch (_: Throwable) { "" }
+        }
+
+        private fun readTail(f: File, maxBytes: Long): String {
+            java.io.RandomAccessFile(f, "r").use { raf ->
+                val len = raf.length()
+                val start = (len - maxBytes).coerceAtLeast(0)
+                raf.seek(start)
+                val buf = ByteArray((len - start).toInt())
+                raf.readFully(buf)
+                var text = buf.toString(Charsets.UTF_8)
+                if (start > 0) {
+                    // Drop a possibly byte-sliced partial first line for a clean start.
+                    val nl = text.indexOf('\n')
+                    if (nl >= 0) text = text.substring(nl + 1)
+                    text = "[log truncated — showing last ${maxBytes / 1024} KiB]\n$text"
+                }
+                return text
+            }
+        }
+
         private const val CHANNEL = "varmlen_vpn"
         private const val NOTIF_ID = 1
         private const val TUN_ADDR = "10.10.10.2"
@@ -99,15 +148,19 @@ class VarmlenVpnService : VpnService() {
 
         /** Whether a previous connect saved a config we can re-launch without
          *  the app being open (used by the Quick Settings tile). */
-        fun hasSavedConfig(ctx: Context): Boolean =
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("config", null) != null
+        fun hasSavedConfig(ctx: Context): Boolean {
+            val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            return p.getString("config", null) != null && p.getString("validationConfig", null) != null
+        }
 
         /** Re-launch the VPN from the last saved config (tile / shade). */
         fun start(ctx: Context) {
             val p = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val config = p.getString("config", null) ?: return
+            val validationConfig = p.getString("validationConfig", null) ?: return
             val i = Intent(ctx, VarmlenVpnService::class.java).setAction(ACTION_CONNECT)
             i.putExtra(EXTRA_CONFIG, config)
+            i.putExtra(EXTRA_VALIDATION_CONFIG, validationConfig)
             i.putExtra(EXTRA_DNS, p.getString("dns", "1.1.1.1"))
             i.putExtra(EXTRA_APPS, (p.getStringSet("apps", emptySet()) ?: emptySet()).toTypedArray())
             i.putExtra(EXTRA_APPS_ALLOW, p.getBoolean("appsAllow", false))
@@ -150,6 +203,7 @@ class VarmlenVpnService : VpnService() {
                 try {
                     startAll(
                         intent.getStringExtra(EXTRA_CONFIG) ?: error("no config"),
+                        intent.getStringExtra(EXTRA_VALIDATION_CONFIG) ?: error("no validation config"),
                         intent.getStringExtra(EXTRA_DNS) ?: "1.1.1.1",
                         intent.getStringArrayExtra(EXTRA_APPS) ?: emptyArray(),
                         intent.getBooleanExtra(EXTRA_APPS_ALLOW, false),
@@ -185,7 +239,7 @@ class VarmlenVpnService : VpnService() {
     }
 
     private fun startAll(
-        config: String, dns: String,
+        config: String, validationConfig: String, dns: String,
         apps: Array<String>, appsAllow: Boolean, logLevel: String,
         requestId: String?
     ) {
@@ -199,6 +253,21 @@ class VarmlenVpnService : VpnService() {
         require(xrayBin.isFile && xrayBin.canExecute()) {
             "Bundled Xray executable is missing"
         }
+
+        // Preflight: validate the EXACT candidate transport/routing JSON
+        // (device-free variant, no native tun inbound) with `xray run -test`
+        // BEFORE the foreground notification, the TUN, or any routing policy
+        // is touched. A structurally invalid config must never reach
+        // establish()/XrayCore.start() — catching it only at process spawn
+        // would already mean a partially-switched network state.
+        val validationFile = File(filesDir, "xray-validate.json").apply { writeText(validationConfig) }
+        val validated = XrayCore.validate(
+            xrayBin.absolutePath,
+            validationFile.absolutePath,
+            File(filesDir, LOG_FILE).absolutePath,
+        )
+        check(validated) { "Xray rejected the generated config (see log for details)" }
+
         startForegroundOrThrow()
         val cfgFile = File(filesDir, "xray.json").apply { writeText(config) }
 
@@ -252,6 +321,11 @@ class VarmlenVpnService : VpnService() {
         try { previousTun?.close() } catch (_: Throwable) {}
         stopping = false
 
+        // The old Xray process (if any) is confirmed exited and the new one
+        // hasn't started yet, so nothing is appending to the log right now —
+        // the only safe window to trim it without racing a concurrent writer.
+        trimLogIfOversized(this)
+
         // Rust duplicates the descriptor and launches Xray natively. Android's
         // Java process launcher closes arbitrary descriptors before exec.
         log("exec xray native TUN: ${xrayBin.absolutePath} fd=${fd.fd}")
@@ -265,10 +339,20 @@ class VarmlenVpnService : VpnService() {
         check(started) { "Xray exited during startup" }
         xrayStarted = true
 
+        // Verify REAL egress before announcing "connected". A dead or
+        // unreachable remote must never surface as a working connection: run
+        // one controlled request through the config's loopback probe inbound,
+        // which is hard-routed to the tunnel outbound only (build_route_rules'
+        // probe rule) and can never silently fall back to a direct
+        // connection. On failure this throws, and the caller's existing catch
+        // block tears everything back down via stopAll().
+        check(verifyEgress()) { "Tunnel established but the server is unreachable" }
+
         // Save only a configuration that reached the connected state. A failed
         // attempt must not poison later starts from the Quick Settings tile.
         getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString("config", config)
+            .putString("validationConfig", validationConfig)
             .putString("dns", dns)
             .putStringSet("apps", apps.toSet())
             .putBoolean("appsAllow", appsAllow)
@@ -282,6 +366,44 @@ class VarmlenVpnService : VpnService() {
         notifHandler.removeCallbacks(statsTick)
         notifHandler.post(statsTick)
         log("connected")
+    }
+
+    /** One controlled HTTPS request through the config's loopback probe
+     *  inbound (127.0.0.1:XrayCore.probePort()), which routing forces onto
+     *  the tunnel outbound with no possibility of a direct fallback. A
+     *  204/2xx/3xx response proves the chosen outbound reaches the open
+     *  network; anything else (timeout, connection refused, dead remote)
+     *  means the tunnel is NOT actually usable, whatever XrayCore.isRunning()
+     *  says. Deliberately synchronous/short — see the call site. */
+    private fun verifyEgress(): Boolean {
+        val port = try {
+            XrayCore.probePort()
+        } catch (e: Throwable) {
+            log("egress probe: could not read probe port", e)
+            return false
+        }
+        val proxy = java.net.Proxy(
+            java.net.Proxy.Type.HTTP,
+            java.net.InetSocketAddress("127.0.0.1", port),
+        )
+        var connection: java.net.HttpURLConnection? = null
+        return try {
+            val url = java.net.URL("https://www.gstatic.com/generate_204")
+            connection = (url.openConnection(proxy) as java.net.HttpURLConnection).apply {
+                connectTimeout = 4000
+                readTimeout = 4000
+                instanceFollowRedirects = false
+                requestMethod = "GET"
+            }
+            val code = connection.responseCode
+            log("egress probe: HTTP $code")
+            code in 200..399
+        } catch (e: Throwable) {
+            log("egress probe failed", e)
+            false
+        } finally {
+            try { connection?.disconnect() } catch (_: Throwable) {}
+        }
     }
 
     private fun broadcastState(
