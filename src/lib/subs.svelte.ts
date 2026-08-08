@@ -174,6 +174,32 @@ function load(): Persisted {
   }
 }
 
+/** First-launch imports can race a cold network stack (DNS resolver / TLS
+ *  session cache not warmed up yet, connectivity manager still settling),
+ *  which makes the very first request fail even though a retry a moment
+ *  later succeeds. One transparent retry avoids surfacing that as a user-
+ *  visible error on a freshly installed app. Validation failures like "no
+ *  servers found" are not network errors and are not worth retrying, but we
+ *  can't reliably tell those apart from a transient failure here, so we keep
+ *  it to a single retry with a short delay rather than looping. */
+async function fetchSubscriptionWithRetry(
+  url: string,
+  userAgent: Parameters<typeof fetchSubscription>[1],
+): Promise<ImportResult> {
+  try {
+    return await fetchSubscription(url, userAgent);
+  } catch (firstError) {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    try {
+      return await fetchSubscription(url, userAgent);
+    } catch {
+      // Surface the original failure; it's whichever the user is more
+      // likely to see repeated (both attempts usually fail the same way).
+      throw firstError;
+    }
+  }
+}
+
 function toServerEntry(s: VlessServer): ServerEntry {
   return {
     // Random id avoids collisions when two subscriptions advertise the same
@@ -360,7 +386,7 @@ class SubsStore {
     if (!trimmed) throw new Error("empty url");
     this.importing = true;
     try {
-      const result = await fetchSubscription(
+      const result = await fetchSubscriptionWithRetry(
         trimmed,
         settings.subscriptionUserAgent,
       );
@@ -502,15 +528,12 @@ class SubsStore {
   ): void {
     const previous = this.list.find((sub) => sub.id === subId);
     if (!previous || result.servers.length === 0) return;
-    // A present Subscription-Userinfo header is authoritative. Missing quota
-    // or expiry values therefore clear old finite-plan data.
-    const info = result.meta.has_userinfo;
-    const totalBytes = info
-      ? (result.meta.total_bytes ?? 0)
-      : previous.totalBytes;
-    const usedBytes = info
-      ? (result.meta.upload_bytes ?? 0) + (result.meta.download_bytes ?? 0)
-      : previous.usedBytes;
+    // The latest response is authoritative, full stop — no falling back to
+    // cached quota/expiry from a previous fetch. If this response doesn't
+    // carry a value, there is no value: show nothing rather than stale data.
+    const totalBytes = result.meta.total_bytes ?? 0;
+    const usedBytes =
+      (result.meta.upload_bytes ?? 0) + (result.meta.download_bytes ?? 0);
     const freshServers = result.servers.map(toServerEntry);
     this.list = this.list.map((sub) =>
       sub.id === subId
@@ -523,9 +546,7 @@ class SubsStore {
               result.meta.update_interval_hours ?? sub.updateIntervalHours,
             usedBytes,
             totalBytes,
-            expiresAtUnix: info
-              ? (result.meta.expires_at_unix ?? null)
-              : sub.expiresAtUnix,
+            expiresAtUnix: result.meta.expires_at_unix ?? null,
             supportUrl: result.meta.support_url,
             webPageUrl: result.meta.web_page_url,
             sourceJson: result.source_json,
