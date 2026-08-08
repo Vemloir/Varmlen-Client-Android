@@ -30,6 +30,7 @@ class SubscriptionRefreshWorker(
         return try {
             val response = withContext(Dispatchers.IO) {
                 fetchSubscriptionHttp(
+                    applicationContext,
                     schedule.url,
                     subscriptionRefreshUserAgent(
                         schedule.userAgent,

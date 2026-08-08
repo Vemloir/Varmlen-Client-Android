@@ -37,6 +37,18 @@ class SubscriptionHttpPolicyTest {
     }
 
     @Test
+    fun addressApprovalUsesTheSelectedNetworksResolver() {
+        var resolvedHost: String? = null
+        val approved = approvedSubscriptionAddresses(java.net.URL("https://sub.proxen.net/path")) {
+            resolvedHost = it
+            arrayOf(InetAddress.getByName("201.24.125.125"))
+        }
+
+        assertEquals("sub.proxen.net", resolvedHost)
+        assertEquals(listOf(InetAddress.getByName("201.24.125.125")), approved)
+    }
+
+    @Test
     fun pinnedDnsReturnsOnlyTheAlreadyApprovedAddresses() {
         val approved = listOf(InetAddress.getByName("201.24.125.125"))
         val dns = PinnedSubscriptionDns("sub.proxen.net", approved)

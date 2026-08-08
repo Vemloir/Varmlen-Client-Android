@@ -1,12 +1,18 @@
 package app.varmlen.client
 
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import java.io.ByteArrayOutputStream
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.URL
 import java.net.UnknownHostException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import okhttp3.ConnectionPool
 import okhttp3.Dns
 import okhttp3.OkHttpClient
@@ -38,15 +44,21 @@ internal data class SubscriptionHttpResponse(
  * the original URL hostname for Host, TLS SNI, and certificate verification.
  */
 internal fun fetchSubscriptionHttp(
+    context: Context,
     sourceUrl: String,
     userAgent: String,
     deviceOs: String = "android",
 ): SubscriptionHttpResponse {
+    // A freshly launched process can run before Android has published a usable
+    // default network to this UID. Synchronize with ConnectivityManager once;
+    // do not send and retry the subscription request.
+    val network = awaitValidatedSubscriptionNetwork(context)
     var url = URL(sourceUrl)
     repeat(MAX_SUBSCRIPTION_REDIRECTS + 1) { redirect ->
-        val approved = approvedSubscriptionAddresses(url)
+        val approved = approvedSubscriptionAddresses(url, network::getAllByName)
         val client = OkHttpClient.Builder()
             .dns(PinnedSubscriptionDns(url.host, approved))
+            .socketFactory(network.socketFactory)
             .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
             .followRedirects(false)
             .followSslRedirects(false)
@@ -117,7 +129,71 @@ internal class PinnedSubscriptionDns(
     }
 }
 
-internal fun approvedSubscriptionAddresses(url: URL): List<InetAddress> {
+internal fun awaitValidatedSubscriptionNetwork(
+    context: Context,
+    timeoutMs: Long = SUBSCRIPTION_HTTP_TIMEOUT_MS,
+): Network {
+    val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        ?: error("connectivity service unavailable")
+    validatedDefaultNetwork(connectivity)?.let { return it }
+
+    val selected = AtomicReference<Network?>()
+    val ready = CountDownLatch(1)
+    val callback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            selectIfValidated(connectivity, network, selected, ready)
+        }
+
+        override fun onCapabilitiesChanged(
+            network: Network,
+            capabilities: NetworkCapabilities,
+        ) {
+            if (hasValidatedInternet(capabilities) && selected.compareAndSet(null, network)) {
+                ready.countDown()
+            }
+        }
+    }
+
+    connectivity.registerDefaultNetworkCallback(callback)
+    try {
+        // Close the race between the first activeNetwork check and callback
+        // registration without issuing a second HTTP request.
+        validatedDefaultNetwork(connectivity)?.let { return it }
+        check(ready.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+            "no validated internet network"
+        }
+        return selected.get() ?: error("validated internet network disappeared")
+    } finally {
+        connectivity.unregisterNetworkCallback(callback)
+    }
+}
+
+private fun validatedDefaultNetwork(connectivity: ConnectivityManager): Network? {
+    val network = connectivity.activeNetwork ?: return null
+    val capabilities = connectivity.getNetworkCapabilities(network) ?: return null
+    return network.takeIf { hasValidatedInternet(capabilities) }
+}
+
+private fun selectIfValidated(
+    connectivity: ConnectivityManager,
+    network: Network,
+    selected: AtomicReference<Network?>,
+    ready: CountDownLatch,
+) {
+    val capabilities = connectivity.getNetworkCapabilities(network) ?: return
+    if (hasValidatedInternet(capabilities) && selected.compareAndSet(null, network)) {
+        ready.countDown()
+    }
+}
+
+private fun hasValidatedInternet(capabilities: NetworkCapabilities): Boolean =
+    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+
+internal fun approvedSubscriptionAddresses(
+    url: URL,
+    resolve: (String) -> Array<InetAddress> = InetAddress::getAllByName,
+): List<InetAddress> {
     check(url.protocol == "https" || url.protocol == "http") {
         "unsupported URL scheme"
     }
@@ -128,7 +204,7 @@ internal fun approvedSubscriptionAddresses(url: URL): List<InetAddress> {
     check(host.isNotEmpty() && !host.equals("localhost", ignoreCase = true)) {
         "refusing to fetch a local address"
     }
-    val addresses = InetAddress.getAllByName(host).toList()
+    val addresses = resolve(host).toList()
     check(addresses.isNotEmpty() && addresses.none(::isBlockedSubscriptionAddress)) {
         "refusing to fetch a non-public address"
     }

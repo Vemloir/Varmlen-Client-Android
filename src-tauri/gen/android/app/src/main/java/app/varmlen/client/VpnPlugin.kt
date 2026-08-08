@@ -308,6 +308,7 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         Thread {
             try {
                 val response = fetchSubscriptionHttp(
+                    activity.applicationContext,
                     args.url,
                     args.userAgent,
                     args.deviceOs,

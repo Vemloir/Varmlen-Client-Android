@@ -174,32 +174,6 @@ function load(): Persisted {
   }
 }
 
-/** First-launch imports can race a cold network stack (DNS resolver / TLS
- *  session cache not warmed up yet, connectivity manager still settling),
- *  which makes the very first request fail even though a retry a moment
- *  later succeeds. One transparent retry avoids surfacing that as a user-
- *  visible error on a freshly installed app. Validation failures like "no
- *  servers found" are not network errors and are not worth retrying, but we
- *  can't reliably tell those apart from a transient failure here, so we keep
- *  it to a single retry with a short delay rather than looping. */
-async function fetchSubscriptionWithRetry(
-  url: string,
-  userAgent: Parameters<typeof fetchSubscription>[1],
-): Promise<ImportResult> {
-  try {
-    return await fetchSubscription(url, userAgent);
-  } catch (firstError) {
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    try {
-      return await fetchSubscription(url, userAgent);
-    } catch {
-      // Surface the original failure; it's whichever the user is more
-      // likely to see repeated (both attempts usually fail the same way).
-      throw firstError;
-    }
-  }
-}
-
 function toServerEntry(s: VlessServer): ServerEntry {
   return {
     // Random id avoids collisions when two subscriptions advertise the same
@@ -386,7 +360,7 @@ class SubsStore {
     if (!trimmed) throw new Error("empty url");
     this.importing = true;
     try {
-      const result = await fetchSubscriptionWithRetry(
+      const result = await fetchSubscription(
         trimmed,
         settings.subscriptionUserAgent,
       );

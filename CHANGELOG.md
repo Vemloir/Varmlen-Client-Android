@@ -5,8 +5,8 @@
 - Treat every successful subscription response as authoritative: quota, usage,
   and expiry values omitted by the provider are now cleared instead of showing
   stale data from an earlier refresh.
-- Retry a failed subscription URL import once after 800 ms, fixing first-launch
-  imports that can race Android's cold DNS, TLS, or connectivity stack.
+- Wait for Android to publish a validated default network, then bind DNS and
+  the subscription request to it, fixing first-launch imports without retries.
 - Validate every proxy path before reporting Connected.
 - Pin subscription DNS, validate redirects, and bound response downloads.
 - Harden raw JSON handling, rotated logs, connection teardown, and the Android

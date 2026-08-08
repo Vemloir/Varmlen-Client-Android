@@ -15,6 +15,10 @@ describe("Android subscription fetch contract", () => {
     const worker = read(
       "../../src-tauri/gen/android/app/src/main/java/app/varmlen/client/SubscriptionRefreshWorker.kt",
     );
+    const manifest = read(
+      "../../src-tauri/gen/android/app/src/main/AndroidManifest.xml",
+    );
+    const store = read("./subs.svelte.ts");
     const nativeHttpUrl = new URL(
       "../../src-tauri/gen/android/app/src/main/java/app/varmlen/client/SubscriptionHttp.kt",
       import.meta.url,
@@ -31,7 +35,13 @@ describe("Android subscription fetch contract", () => {
     expect(worker).toContain("fetchSubscriptionHttp(");
     expect(nativeHttp).toContain("OkHttpClient.Builder()");
     expect(nativeHttp).toContain("PinnedSubscriptionDns");
-    expect(nativeHttp).toContain("approvedSubscriptionAddresses(url)");
+    expect(nativeHttp).toContain("awaitValidatedSubscriptionNetwork(context)");
+    expect(nativeHttp).toContain("NET_CAPABILITY_VALIDATED");
+    expect(nativeHttp).toContain(".socketFactory(network.socketFactory)");
+    expect(nativeHttp).toContain("network::getAllByName");
+    expect(manifest).toContain("android.permission.ACCESS_NETWORK_STATE");
+    expect(store).not.toContain("fetchSubscriptionWithRetry");
+    expect(store).not.toContain("setTimeout(resolve, 800)");
     expect(nativeHttp).toContain(".followRedirects(false)");
     expect(nativeHttp).toContain("MAX_SUBSCRIPTION_BODY_BYTES");
     expect(nativeHttp).toContain("MAX_SUBSCRIPTION_REDIRECTS");
