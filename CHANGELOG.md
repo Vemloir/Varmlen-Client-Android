@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 Preview
+
+- Treat every successful subscription response as authoritative: quota, usage,
+  and expiry values omitted by the provider are now cleared instead of showing
+  stale data from an earlier refresh.
+- Retry a failed subscription URL import once after 800 ms, fixing first-launch
+  imports that can race Android's cold DNS, TLS, or connectivity stack.
+- Validate every proxy path before reporting Connected.
+- Pin subscription DNS, validate redirects, and bound response downloads.
+- Harden raw JSON handling, rotated logs, connection teardown, and the Android
+  VPN lifecycle.
+
 ## 0.2.6
 
 - Removed the user-facing local Proxy mode and its embedded
