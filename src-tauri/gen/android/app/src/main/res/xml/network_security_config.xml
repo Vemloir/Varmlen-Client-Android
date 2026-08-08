@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <!-- Android versions before 14 do not ship ISRG Root X2. Keep
+                 system trust and add only Let's Encrypt's official root so
+                 X2-only public chains remain verifiable. -->
+            <certificates src="system" />
+            <certificates src="@raw/isrg_root_x2" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

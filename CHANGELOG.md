@@ -7,6 +7,8 @@
   stale data from an earlier refresh.
 - Wait for Android to publish a validated default network, then bind DNS and
   the subscription request to it, fixing first-launch imports without retries.
+- Add the official ISRG Root X2 trust anchor alongside Android system roots so
+  Let's Encrypt X2-only subscription endpoints work on Android versions below 14.
 - Validate every proxy path before reporting Connected.
 - Pin subscription DNS, validate redirects, and bound response downloads.
 - Harden raw JSON handling, rotated logs, connection teardown, and the Android
