@@ -535,6 +535,7 @@
                 <div class="ver-info">
                   <span class="ver-tag">{v.tag}</span>
                   {#if v.active}<span class="ver-meta muted">{t("core.active")}</span>{/if}
+                  {#if v.bundled}<span class="ver-meta muted">{t("core.bundled")}</span>{/if}
                 </div>
                 <div class="ver-actions">
                   {#if !v.active}
@@ -546,7 +547,7 @@
                       {isSwitching ? "…" : t("core.use")}
                     </button>
                   {/if}
-                  {@render delBtn(v.tag, isSwitching)}
+                  {#if !v.bundled}{@render delBtn(v.tag, isSwitching)}{/if}
                 </div>
               </li>
             {/each}

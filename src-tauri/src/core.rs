@@ -15,6 +15,9 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
+#[cfg(target_os = "android")]
+const BUNDLED_XRAY_VERSION: &str = "26.6.27";
+
 /// Which core a request targets. xray is now the sole core: its native tun does
 /// TUN capture, its routing does the per-app/site split + DNS, and its outbound
 /// does the vless/reality/xhttp transport. The enum is kept (single variant) so
@@ -56,6 +59,8 @@ impl CoreKind {
 pub struct InstalledVersion {
     pub tag: String,
     pub active: bool,
+    /// Shipped inside the APK and updated only together with Varmlen.
+    pub bundled: bool,
 }
 
 #[derive(Serialize)]
@@ -351,6 +356,19 @@ pub struct CoreRelease {
     pub prerelease: bool,
 }
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn list_core_releases(kind: String) -> Result<Vec<CoreRelease>, String> {
+    CoreKind::parse(&kind)?;
+    Ok(vec![CoreRelease {
+        tag: BUNDLED_XRAY_VERSION.into(),
+        name: format!("Xray {BUNDLED_XRAY_VERSION} (bundled)"),
+        date: None,
+        prerelease: false,
+    }])
+}
+
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn list_core_releases(kind: String) -> Result<Vec<CoreRelease>, String> {
     let kind = CoreKind::parse(&kind)?;
@@ -611,6 +629,23 @@ fn extract_binary_zip(zip_bytes: &[u8], dest: &PathBuf, member: &str) -> Result<
 
 // --- public API ------------------------------------------------------------
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn core_info(_app: AppHandle, kind: String) -> Result<CoreInfo, String> {
+    CoreKind::parse(&kind)?;
+    Ok(CoreInfo {
+        installed: vec![InstalledVersion {
+            tag: BUNDLED_XRAY_VERSION.into(),
+            active: true,
+            bundled: true,
+        }],
+        active: Some(BUNDLED_XRAY_VERSION.into()),
+        latest: Some(BUNDLED_XRAY_VERSION.into()),
+        has_update: false,
+    })
+}
+
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn core_info(app: AppHandle, kind: String) -> Result<CoreInfo, String> {
     let kind = CoreKind::parse(&kind)?;
@@ -619,6 +654,7 @@ pub async fn core_info(app: AppHandle, kind: String) -> Result<CoreInfo, String>
         .into_iter()
         .map(|tag| InstalledVersion {
             active: active.as_deref() == Some(tag.as_str()),
+            bundled: false,
             tag,
         })
         .collect();
@@ -639,6 +675,25 @@ pub async fn core_info(app: AppHandle, kind: String) -> Result<CoreInfo, String>
 /// Download `version` (or latest when null) for `kind`. First install for a
 /// kind auto-activates it. xray installs trigger a setcap prompt: its native TUN
 /// needs CAP_NET_ADMIN (file caps are cleared whenever the binary is rewritten).
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn core_install(
+    _app: AppHandle,
+    kind: String,
+    version: Option<String>,
+) -> Result<String, String> {
+    CoreKind::parse(&kind)?;
+    if version
+        .as_deref()
+        .is_none_or(|tag| strip_v(tag) == BUNDLED_XRAY_VERSION)
+    {
+        Ok(BUNDLED_XRAY_VERSION.into())
+    } else {
+        Err("Android Xray updates are delivered through Varmlen APK updates".into())
+    }
+}
+
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn core_install(
     app: AppHandle,
@@ -672,6 +727,18 @@ pub async fn core_install(
 
 /// Switch the active version for `kind`. Re-cap xray afterwards (its native TUN
 /// needs CAP_NET_ADMIN and caps are bound to the specific binary).
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn core_activate(_app: AppHandle, kind: String, tag: String) -> Result<(), String> {
+    CoreKind::parse(&kind)?;
+    if strip_v(&tag) == BUNDLED_XRAY_VERSION {
+        Ok(())
+    } else {
+        Err("this Xray version is not bundled with the installed APK".into())
+    }
+}
+
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn core_activate(app: AppHandle, kind: String, tag: String) -> Result<(), String> {
     let kind = CoreKind::parse(&kind)?;
@@ -688,6 +755,14 @@ pub async fn core_activate(app: AppHandle, kind: String, tag: String) -> Result<
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn core_uninstall(_app: AppHandle, kind: String, _tag: String) -> Result<(), String> {
+    CoreKind::parse(&kind)?;
+    Err("the bundled Android Xray can only be removed with Varmlen".into())
+}
+
+#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn core_uninstall(app: AppHandle, kind: String, tag: String) -> Result<(), String> {
     let kind = CoreKind::parse(&kind)?;

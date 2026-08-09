@@ -167,6 +167,8 @@ export interface InstalledVersion {
   tag: string;
   /** True iff this is the currently active version. */
   active: boolean;
+  /** Shipped inside Varmlen rather than downloaded separately. */
+  bundled: boolean;
 }
 
 export interface CoreInfo {
