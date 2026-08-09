@@ -35,7 +35,7 @@ Rust launcher duplicates the descriptor with `dup()` and starts the bundled
 Android Xray executable with `XRAY_TUN_FD=<dup>`. This native launch is
 required because Android's Java process launcher closes arbitrary descriptors
 before exec even when the original `FD_CLOEXEC` flag has been cleared. Xray
-26.6.27's Android TUN implementation reads the environment variable, marks the
+26.3.27's Android TUN implementation reads the environment variable, marks the
 fd non-blocking, and feeds it directly into its gVisor stack.
 
 Xray receives a native `tun` inbound. Android package split remains enforced by

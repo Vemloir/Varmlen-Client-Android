@@ -4,15 +4,16 @@
 # VpnService executes it with its TUN descriptor inherited through XRAY_TUN_FD.
 set -euo pipefail
 
-XRAY_VER="26.6.27"
-XRAY_SHA256="9621d72c2f706f47d7bc3c79b5326c12aa29d29013beada1c60df84ff8fe3a0f"
+XRAY_VER="26.3.27"
+XRAY_SHA256="57149ffd48b629c07bf76938e73ab2729fde5910091497eab3e93d1c190f4c1b"
 ABI="arm64-v8a"
 ROOT="$(pwd)"
 JNI="$ROOT/src-tauri/gen/android/app/src/main/jniLibs/$ABI"
+MARKER="$JNI/libxray.so.version"
 
 mkdir -p "$JNI"
 
-if [ ! -f "$JNI/libxray.so" ]; then
+if [ ! -f "$JNI/libxray.so" ] || [ ! -f "$MARKER" ] || [ "$(cat "$MARKER")" != "$XRAY_VER" ]; then
   echo "fetching xray-core $XRAY_VER (android arm64)…"
   TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
   curl -fsSL -o "$TMP/x.zip" \
@@ -20,6 +21,7 @@ if [ ! -f "$JNI/libxray.so" ]; then
   echo "$XRAY_SHA256  $TMP/x.zip" | sha256sum -c -
   unzip -o -q "$TMP/x.zip" xray -d "$TMP"
   install -m 0755 "$TMP/xray" "$JNI/libxray.so"
+  printf '%s\n' "$XRAY_VER" >"$MARKER"
 fi
 
 echo "Android Xray ready in $JNI"

@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Feed the Android `VpnService` TUN fd directly into Xray 26.6.27 and remove Varmlen's local SOCKS5/tun2socks data plane and user-facing Proxy mode.
+**Goal:** Feed the Android `VpnService` TUN fd directly into Xray 26.3.27 and remove Varmlen's local SOCKS5/tun2socks data plane and user-facing Proxy mode.
 
 **Architecture:** Kotlin owns the Android VPN lifecycle and passes its inherited TUN fd to the bundled Xray child through `XRAY_TUN_FD`. Rust generates a native Xray `tun` inbound with Android-specific routing semantics, while Android package split remains in `VpnService`.
 
-**Tech Stack:** Kotlin/Android `VpnService`, Tauri 2, Rust, Xray-core 26.6.27, Svelte 5, Vitest, Gradle, Android SDK/NDK.
+**Tech Stack:** Kotlin/Android `VpnService`, Tauri 2, Rust, Xray-core 26.3.27, Svelte 5, Vitest, Gradle, Android SDK/NDK.
 
 ## Global Constraints
 

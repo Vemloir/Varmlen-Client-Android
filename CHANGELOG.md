@@ -2,8 +2,9 @@
 
 ## 0.3.0 Preview
 
-- Show the APK-bundled Xray version in the core menu as the active, immutable
-  offline fallback; Android core updates remain tied to verified APK updates.
+- Pin the APK-bundled core to stable Xray 26.3.27 and show it in the core menu
+  as the active, immutable offline fallback; Android core updates remain tied
+  to verified APK updates.
 - Treat every successful subscription response as authoritative: quota, usage,
   and expiry values omitted by the provider are now cleared instead of showing
   stale data from an earlier refresh.

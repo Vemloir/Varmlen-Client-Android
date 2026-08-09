@@ -16,7 +16,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(target_os = "android")]
-const BUNDLED_XRAY_VERSION: &str = "26.6.27";
+const BUNDLED_XRAY_VERSION: &str = "26.3.27";
 
 /// Which core a request targets. xray is now the sole core: its native tun does
 /// TUN capture, its routing does the per-app/site split + DNS, and its outbound
@@ -137,7 +137,7 @@ fn bundled_core_path(app: &AppHandle, kind: CoreKind) -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-/// Read a core binary's own version (`xray version` → "26.6.27"), so the seeded
+/// Read a core binary's own version (`xray version` → "26.3.27"), so the seeded
 /// version dir is named correctly without a hardcoded tag to keep in sync.
 fn core_version_of(bin: &PathBuf) -> Option<String> {
     let out = std::process::Command::new(bin)
@@ -145,7 +145,7 @@ fn core_version_of(bin: &PathBuf) -> Option<String> {
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
-    // First line: "Xray 26.6.27 (Xray, Penetrates Everything.) <hash> ..."
+    // First line: "Xray 26.3.27 (Xray, Penetrates Everything.) <hash> ..."
     text.lines()
         .next()?
         .split_whitespace()

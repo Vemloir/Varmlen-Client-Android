@@ -9,10 +9,12 @@
 # tauri beforeBuildCommand invokes it there).
 set -euo pipefail
 
-VERSION="26.6.27"
+VERSION="26.3.27"
+SHA256="23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae"
 DEST="src-tauri/cores/xray"
+MARKER="${DEST}.version"
 
-if [ -f "$DEST" ]; then
+if [ -f "$DEST" ] && [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$VERSION" ]; then
   echo "xray already present: $DEST"
   exit 0
 fi
@@ -24,6 +26,8 @@ URL="https://github.com/XTLS/Xray-core/releases/download/v${VERSION}/Xray-linux-
 
 echo "fetching xray v${VERSION}…"
 curl -fsSL "$URL" -o "$TMP/xray.zip"
+echo "$SHA256  $TMP/xray.zip" | sha256sum -c -
 unzip -o -q "$TMP/xray.zip" xray -d "$TMP"
 install -m 0755 "$TMP/xray" "$DEST"
+printf '%s\n' "$VERSION" >"$MARKER"
 echo "xray v${VERSION} -> $DEST"
