@@ -28,7 +28,7 @@
     "active": true,
     "targets": "all",
     "android": {
-      "versionCode": 3000
+      "versionCode": 3001
     },
     "icon": [
       "icons/32x32.png",

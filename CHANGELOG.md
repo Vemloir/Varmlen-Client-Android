@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+- Increment the APK revision so existing 0.3.0 installations can update to
+  the corrected build without uninstalling.
 - Pin the APK-bundled core to stable Xray 26.3.27 and show it in the core menu
   as the active, immutable offline fallback; Android core updates remain tied
   to verified APK updates.
