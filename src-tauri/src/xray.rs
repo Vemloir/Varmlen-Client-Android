@@ -13,8 +13,10 @@
 //! The native tun inbound deliberately manages NO addresses/routes/DNS/iptables
 //! ("the OS should manage it"), so the helper lays the device address, the
 //! default route into the tun, the fwmark bypass rules, and the anti-loop
-//! server-IP route. xray's own dials (proxy + direct outbounds) carry
-//! `sockopt.mark = XRAY_DIAL_MARK` so they escape the tun instead of looping.
+//! server-IP route. On desktop, xray's own dials (proxy + direct outbounds)
+//! carry `sockopt.mark = XRAY_DIAL_MARK` so they escape the tun instead of
+//! looping. Android must not use `SO_MARK` (ordinary apps cannot set it); its
+//! VpnService excludes the Xray-owning package from capture instead.
 //!
 //! On Android the OS VpnService owns the TUN descriptor and per-package split;
 //! on desktop Xray creates the interface and matches host process names.
@@ -883,16 +885,10 @@ fn build_dns() -> Value {
     })
 }
 
-/// Loopback HTTP inbound used ONLY to run a controlled egress probe through the
-/// effective route selected by the profile — never exposed as a user-facing
-/// proxy and never reachable off-device (`listen` is `127.0.0.1`).
-const PROBE_PORT: u16 = 28510;
-const PROBE_TAG: &str = "probe-in";
-
-/// The inbound that carries system traffic, plus an optional loopback probe
-/// used on Android to verify the profile's effective egress before the UI
-/// reports "connected".
-fn build_inbounds(inbound: CaptureInbound, with_probe: bool) -> Vec<Value> {
+/// Build the single inbound that carries system traffic. Connection startup is
+/// structural only: synthetic Internet probes are not allowed to reject a
+/// valid tunnel or race a composite profile's still-warming balancer.
+fn build_inbounds(inbound: CaptureInbound) -> Vec<Value> {
     // routeOnly: the sniffed domain is used for routing (domain rules) but the
     // connection keeps its original destination. This avoids the destination
     // override that can sever the source->process binding the `process` matcher
@@ -902,7 +898,7 @@ fn build_inbounds(inbound: CaptureInbound, with_probe: bool) -> Vec<Value> {
         "destOverride": ["http", "tls", "quic"],
         "routeOnly": true
     });
-    let mut list = match inbound {
+    match inbound {
         CaptureInbound::NativeTun => vec![json!({
             "tag": "tun-in",
             "protocol": "tun",
@@ -919,17 +915,7 @@ fn build_inbounds(inbound: CaptureInbound, with_probe: bool) -> Vec<Value> {
             "settings": {},
             "sniffing": sniffing,
         })],
-    };
-    if with_probe {
-        list.push(json!({
-            "tag": PROBE_TAG,
-            "listen": "127.0.0.1",
-            "port": PROBE_PORT,
-            "protocol": "http",
-            "settings": {},
-        }));
     }
-    list
 }
 
 /// Routing rules. Per-app (`process`) and per-site (`domain`) split are BOTH
@@ -953,7 +939,6 @@ fn build_route_rules(
     inbound_tag: &str,
     app_split_owner: AppSplitOwner,
     proxy_target: &ProxyTarget,
-    with_probe: bool,
 ) -> Vec<Value> {
     let apps_selective = split.apps_selective();
     let sites_selective = split.sites_selective();
@@ -973,19 +958,6 @@ fn build_route_rules(
     };
 
     let mut rules = Vec::new();
-
-    // 0. The egress probe follows the profile's effective target: either the
-    //    selected outbound or its balancer. It must not require every optional,
-    //    fallback, or chained outbound in a composite profile to work
-    //    independently. Placed first so split rules cannot shadow it.
-    if with_probe {
-        let mut probe_rule = json!({
-            "type": "field",
-            "inboundTag": [PROBE_TAG],
-        });
-        proxy_target.apply(&mut probe_rule);
-        rules.push(probe_rule);
-    }
 
     // 1. Hijack app DNS (:53) into xray's DNS module.
     rules.push(
@@ -1065,6 +1037,27 @@ fn xray_loglevel(level: &str) -> &'static str {
     }
 }
 
+/// Android applications cannot use Xray's Linux `SO_MARK` bypass; attempting
+/// it makes every outbound dial fail with EPERM. VpnService excludes this app's
+/// UID from capture, so the mark is both invalid and unnecessary there.
+fn remove_android_outbound_marks(outbounds: &mut [Value]) {
+    for outbound in outbounds {
+        let Some(stream) = outbound
+            .get_mut("streamSettings")
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        let Some(sockopt) = stream.get_mut("sockopt").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        sockopt.remove("mark");
+        if sockopt.is_empty() {
+            stream.remove("sockopt");
+        }
+    }
+}
+
 fn build_xray_config_with_inbound(
     server: &VlessServer,
     split: &SplitInput,
@@ -1072,7 +1065,6 @@ fn build_xray_config_with_inbound(
     app_split_owner: AppSplitOwner,
     allow_lan: bool,
     log_level: &str,
-    with_probe: bool,
 ) -> Value {
     let loglevel = xray_loglevel(log_level);
     let OutboundPlan {
@@ -1085,15 +1077,11 @@ fn build_xray_config_with_inbound(
     proxies.push(direct_outbound());
     proxies.push(json!({ "tag": "dns-out", "protocol": "dns" }));
     proxies.push(json!({ "tag": "block", "protocol": "blackhole" }));
+    if matches!(app_split_owner, AppSplitOwner::VpnService) {
+        remove_android_outbound_marks(&mut proxies);
+    }
 
-    let rules = build_route_rules(
-        split,
-        allow_lan,
-        inbound.tag(),
-        app_split_owner,
-        &target,
-        with_probe,
-    );
+    let rules = build_route_rules(split, allow_lan, inbound.tag(), app_split_owner, &target);
     let mut routing = json!({ "rules": rules });
     if let Some(balancers) = balancers {
         routing["balancers"] = balancers;
@@ -1101,7 +1089,7 @@ fn build_xray_config_with_inbound(
     let mut config = json!({
         "log": { "loglevel": loglevel },
         "dns": build_dns(),
-        "inbounds": build_inbounds(inbound, with_probe),
+        "inbounds": build_inbounds(inbound),
         "outbounds": proxies,
         "routing": routing
     });
@@ -1129,7 +1117,6 @@ pub fn build_xray_config(
         app_split_owner,
         allow_lan,
         log_level,
-        false,
     )
 }
 
@@ -1151,15 +1138,12 @@ pub fn build_xray_validation_config(
         app_split_owner,
         allow_lan,
         log_level,
-        false,
     )
 }
 
-/// Native-TUN config for Android, with one loopback probe inbound routed through
-/// the profile's effective target. After Xray starts, the platform verifies that
-/// selected outbound or balancer before the UI is told the VPN is connected.
-/// Optional, fallback, and chained outbounds are not treated as independently
-/// mandatory connection paths.
+/// Native-TUN config for Android. Xray's structural preflight remains mandatory,
+/// but connection startup is not gated on a synthetic destination or on a
+/// composite profile's observatory/balancer having warmed up.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub fn build_android_xray_config(
     server: &VlessServer,
@@ -1174,12 +1158,11 @@ pub fn build_android_xray_config(
         AppSplitOwner::VpnService,
         allow_lan,
         log_level,
-        true,
     )
 }
 
-/// Device-free Android preflight with the same effective-route probe used by
-/// the active config. It differs only in the system-data inbound.
+/// Device-free Android preflight. It differs from the active config only in
+/// the system-data inbound and validates transport/routing without dialing.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub fn build_android_validation_config(
     server: &VlessServer,
@@ -1194,7 +1177,6 @@ pub fn build_android_validation_config(
         AppSplitOwner::VpnService,
         allow_lan,
         log_level,
-        true,
     )
 }
 
@@ -1714,52 +1696,28 @@ mod tests {
         let dns_rule = rule_for(&cfg, "inboundTag").unwrap();
         assert_eq!(dns_rule["inboundTag"][0], "tun-in");
         assert!(rule_for(&cfg, "process").is_none());
-    }
-
-    #[test]
-    fn android_connection_probe_is_loopback_only_and_has_no_direct_fallback() {
-        let server = parse_proxy_uri("vless://u@1.2.3.4:443?security=reality&pbk=K#X").unwrap();
-        let config = build_android_xray_config(&server, &split(), false, "warning");
-        let probe = config["inbounds"]
+        assert!(cfg["outbounds"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|inbound| inbound["tag"] == PROBE_TAG)
-            .unwrap();
-        assert_eq!(probe["listen"], "127.0.0.1");
-        assert_eq!(probe["port"], PROBE_PORT);
-        let rule = config["routing"]["rules"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|rule| rule["inboundTag"][0] == PROBE_TAG)
-            .unwrap();
-        assert_eq!(rule["outboundTag"], "proxy");
-        assert!(rule.get("balancerTag").is_none());
+            .all(|outbound| outbound["streamSettings"]["sockopt"].get("mark").is_none()));
     }
 
     #[test]
-    fn android_composite_probes_its_effective_balancer_once() {
+    fn android_startup_config_has_only_the_native_tun_inbound() {
         let server = estonia_profile_server();
         let config = build_android_xray_config(&server, &split(), false, "warning");
-        let probe_inbounds = config["inbounds"]
+        let inbounds = config["inbounds"].as_array().unwrap();
+        assert_eq!(inbounds.len(), 1);
+        assert_eq!(inbounds[0]["tag"], "tun-in");
+        assert_eq!(inbounds[0]["protocol"], "tun");
+        assert!(config["routing"]["rules"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|inbound| inbound["tag"] == PROBE_TAG)
-            .collect::<Vec<_>>();
-        assert_eq!(probe_inbounds.len(), 1);
-        assert_eq!(probe_inbounds[0]["port"], PROBE_PORT);
-
-        let probe_routes = config["routing"]["rules"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|rule| rule["inboundTag"][0] == PROBE_TAG)
-            .collect::<Vec<_>>();
-        assert_eq!(probe_routes.len(), 1);
-        assert_eq!(probe_routes[0]["balancerTag"], "estonia-balancer");
-        assert!(probe_routes[0].get("outboundTag").is_none());
+            .all(|rule| rule["inboundTag"]
+                .as_array()
+                .is_none_or(|tags| tags.iter().all(|tag| tag != "probe-in"))));
     }
 
     #[test]

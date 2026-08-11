@@ -46,12 +46,12 @@ require "$CORE" 'external fun validate' \
   "Android Xray JNI bridge cannot validate a candidate config"
 require "$CORE" 'external fun appendLog' \
   "Android Xray JNI bridge does not use the bounded native log writer"
-require "$SERVICE" 'resolved.size == 1' \
-  "Android VPN service does not enforce one effective-route egress probe"
-require "$SERVICE" 'inbound.optString("tag") != "probe-in"' \
-  "Android VPN service does not discover its effective-route egress probe"
-reject "$SERVICE" 'allEgressProbesHealthy' \
-  "Android VPN service still requires every configured proxy path to work"
+reject "$SERVICE" 'verifyEgress' \
+  "Android VPN startup is still gated by a synthetic Internet probe"
+reject "$SERVICE" 'probe-in' \
+  "Android VPN service still carries the obsolete startup-probe inbound"
+reject "$SERVICE" 'Connection verification failed' \
+  "Android VPN service can still reject a running tunnel on probe failure"
 require "$NATIVE" 'libc::dup' \
   "native Xray launcher does not duplicate the TUN fd for child inheritance"
 require "$NATIVE" 'XRAY_TUN_FD' \
@@ -59,7 +59,13 @@ require "$NATIVE" 'XRAY_TUN_FD' \
 require "$NATIVE" 'BoundedLog' \
   "native Xray launcher does not continuously rotate its log"
 require "$SERVICE" 'addDisallowedApplication(packageName)' \
-  "Varmlen does not exclude its own Xray process from VPN capture"
+  "Varmlen does not exclude its own Xray process from ordinary VPN capture"
+require "$SERVICE" 'isLockdownEnabled' \
+  "Android VPN service does not detect the system kill switch"
+require "$SERVICE" 'bindOutboundsToInterface' \
+  "Android VPN service cannot keep Xray outbounds alive under lockdown"
+require "$SERVICE" 'setUnderlyingNetworks' \
+  "Android VPN service does not declare its physical network under lockdown"
 reject "$SERVICE" 'startForeground failed (continuing)' \
   "foreground-service startup still fails open"
 reject "$SERVICE" 'TProxyService' \

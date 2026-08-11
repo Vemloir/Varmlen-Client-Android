@@ -8,6 +8,9 @@ import android.content.Context
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.net.TrafficStats
 import android.os.Build
@@ -242,13 +245,31 @@ class VarmlenVpnService : VpnService() {
             "Bundled Xray executable is missing"
         }
 
+        // Android lockdown blocks packages that bypass the VPN. Normally this
+        // package is excluded to keep Xray's own sockets out of its TUN. In
+        // lockdown mode it must stay inside the allowed set instead, so bind
+        // every supported Xray outbound to the validated physical interface.
+        val lockdown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isLockdownEnabled
+        val underlying = if (lockdown) {
+            physicalUnderlyingNetwork()
+                ?: error("Android kill switch is active, but no physical network is available")
+        } else null
+        val runtimeConfig = if (underlying != null) {
+            bindOutboundsToInterface(config, underlying.second)
+        } else config
+        val runtimeValidationConfig = if (underlying != null) {
+            bindOutboundsToInterface(validationConfig, underlying.second)
+        } else validationConfig
+
         // Preflight: validate the candidate's proxy outbounds and routing
         // policy through its device-free variant with `xray run -test`
         // BEFORE the foreground notification, the TUN, or any routing policy
         // is touched. A structurally invalid config must never reach
         // establish()/XrayCore.start() — catching it only at process spawn
         // would already mean a partially-switched network state.
-        val validationFile = File(filesDir, "xray-validate.json").apply { writeText(validationConfig) }
+        val validationFile = File(filesDir, "xray-validate.json").apply {
+            writeText(runtimeValidationConfig)
+        }
         val validated = XrayCore.validate(
             xrayBin.absolutePath,
             validationFile.absolutePath,
@@ -257,7 +278,7 @@ class VarmlenVpnService : VpnService() {
         check(validated) { "Xray rejected the generated config (see log for details)" }
 
         startForegroundOrThrow()
-        val cfgFile = File(filesDir, "xray.json").apply { writeText(config) }
+        val cfgFile = File(filesDir, "xray.json").apply { writeText(runtimeConfig) }
 
         // Establish the replacement TUN before stopping an existing data plane.
         // Android atomically switches VPN routing to the new descriptor, so a
@@ -270,6 +291,7 @@ class VarmlenVpnService : VpnService() {
             .addRoute("0.0.0.0", 0)
             .addRoute("::", 0)
             .addDnsServer(dns)
+        if (underlying != null) builder.setUnderlyingNetworks(arrayOf(underlying.first))
         val appPolicy = vpnAppPolicy(apps, appsAllow, packageName)
         var installedAllowedApps = 0
         for (pkg in appPolicy.allowed) {
@@ -283,9 +305,14 @@ class VarmlenVpnService : VpnService() {
         if (appPolicy.allowed.isNotEmpty() && installedAllowedApps == 0) {
             error("None of the selected allowlist applications are installed")
         }
-        if (appPolicy.allowed.isEmpty()) {
-            // Xray is a child of this package. Excluding our UID prevents its
-            // remote sockets from feeding back into the VPN tunnel.
+        if (appPolicy.allowed.isNotEmpty() && lockdown && packageName !in appPolicy.allowed) {
+            // Keep Xray's UID network-capable under Android lockdown. Its remote
+            // sockets bypass the TUN by binding to the physical interface.
+            builder.addAllowedApplication(packageName)
+        }
+        if (appPolicy.allowed.isEmpty() && !lockdown) {
+            // Outside lockdown, excluding Xray's UID is the most portable
+            // anti-loop mechanism and lets the UI retain direct connectivity.
             builder.addDisallowedApplication(packageName)
         }
         for (pkg in appPolicy.disallowed) {
@@ -322,12 +349,10 @@ class VarmlenVpnService : VpnService() {
         check(started) { "Xray exited during startup" }
         xrayStarted = true
 
-        // Verify real egress before announcing "connected". The controlled
-        // request follows the profile's effective target — its selected
-        // outbound or balancer — exactly like user traffic. Optional, fallback,
-        // and chained outbounds are not independently required to be healthy.
-        // On failure the caller tears everything back down via stopAll().
-        check(verifyEgress(config)) { "Connection verification failed: selected route is unreachable" }
+        // Xray is running with an established TUN and a structurally validated
+        // configuration. Do not gate startup on a synthetic Internet request:
+        // that request can be blocked independently and composite balancers need
+        // time to warm their observatory before selecting an outbound.
 
         // Save only a configuration that reached the connected state. A failed
         // attempt must not poison later starts from the Quick Settings tile.
@@ -349,53 +374,46 @@ class VarmlenVpnService : VpnService() {
         log("connected")
     }
 
-    /** Probe the one loopback inbound routed through the profile's effective
-     *  target. It cannot fall back to direct or be redirected by split rules. */
-    private fun verifyEgress(config: String): Boolean {
-        val port = try {
-            val inbounds = JSONObject(config).getJSONArray("inbounds")
-            buildList {
-                for (index in 0 until inbounds.length()) {
-                    val inbound = inbounds.getJSONObject(index)
-                    if (inbound.optString("tag") != "probe-in") continue
-                    check(inbound.optString("listen") == "127.0.0.1") {
-                        "egress probe is not loopback-only"
-                    }
-                    add(inbound.getInt("port"))
-                }
-            }.also { resolved ->
-                check(resolved.size == 1) { "invalid effective egress probe" }
-            }.single()
-        } catch (e: Throwable) {
-            log("egress probe config is invalid", e)
-            return false
-        }
-        val healthy = verifyEgressPort(port)
-        log("effective egress probe: ${if (healthy) "healthy" else "unreachable"}")
-        return healthy
+    private fun physicalUnderlyingNetwork(): Pair<Network, String>? {
+        val connectivity = getSystemService(ConnectivityManager::class.java)
+        return connectivity.allNetworks
+            .mapNotNull { network ->
+                val capabilities = connectivity.getNetworkCapabilities(network) ?: return@mapNotNull null
+                if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@mapNotNull null
+                val interfaceName = connectivity.getLinkProperties(network)?.interfaceName
+                    ?: return@mapNotNull null
+                val validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                Triple(network, interfaceName, validated)
+            }
+            .sortedByDescending { it.third }
+            .firstOrNull()
+            ?.let { it.first to it.second }
     }
 
-    private fun verifyEgressPort(port: Int): Boolean {
-        val proxy = java.net.Proxy(
-            java.net.Proxy.Type.HTTP,
-            java.net.InetSocketAddress("127.0.0.1", port),
-        )
-        var connection: java.net.HttpURLConnection? = null
-        return try {
-            val url = java.net.URL("https://www.gstatic.com/generate_204")
-            connection = (url.openConnection(proxy) as java.net.HttpURLConnection).apply {
-                connectTimeout = 4000
-                readTimeout = 4000
-                instanceFollowRedirects = false
-                requestMethod = "GET"
+    /** Bind Xray's remote sockets to the physical Android interface while
+     * lockdown keeps this package inside the VPN app set. SO_BINDTODEVICE is
+     * available to Android apps and avoids the unsupported Linux SO_MARK path. */
+    private fun bindOutboundsToInterface(config: String, interfaceName: String): String {
+        val root = JSONObject(config)
+        val outbounds = root.getJSONArray("outbounds")
+        for (index in 0 until outbounds.length()) {
+            val outbound = outbounds.getJSONObject(index)
+            when (outbound.optString("protocol")) {
+                "blackhole", "dns" -> continue
+                "wireguard" -> error(
+                    "Android kill switch does not support a WireGuard outbound in this build"
+                )
             }
-            val code = connection.responseCode
-            code == 204
-        } catch (_: Throwable) {
-            false
-        } finally {
-            try { connection?.disconnect() } catch (_: Throwable) {}
+            val stream = outbound.optJSONObject("streamSettings")
+                ?: JSONObject().also { outbound.put("streamSettings", it) }
+            val sockopt = stream.optJSONObject("sockopt")
+                ?: JSONObject().also { stream.put("sockopt", it) }
+            sockopt.remove("mark")
+            sockopt.put("interface", interfaceName)
         }
+        log("Android kill switch active; Xray outbounds bound to $interfaceName")
+        return root.toString()
     }
 
     private fun broadcastState(

@@ -405,8 +405,23 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
             invoke.resolve()
-        } catch (error: Throwable) {
-            invoke.reject(error.message ?: "Could not open Android VPN settings")
+        } catch (vpnError: Throwable) {
+            // A few OEM Android builds do not expose ACTION_VPN_SETTINGS.
+            // Always give the user a working route into system settings rather
+            // than leaving the kill-switch row as a dead control.
+            try {
+                activity.startActivity(
+                    Intent(android.provider.Settings.ACTION_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+                invoke.resolve()
+            } catch (settingsError: Throwable) {
+                invoke.reject(
+                    settingsError.message
+                        ?: vpnError.message
+                        ?: "Could not open Android settings"
+                )
+            }
         }
     }
 

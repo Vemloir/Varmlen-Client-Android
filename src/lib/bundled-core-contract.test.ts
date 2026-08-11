@@ -19,6 +19,8 @@ describe("Android bundled Xray core", () => {
     expect(core).toContain("bundled: true");
     expect(core).toContain("Android Xray updates are delivered through Varmlen APK updates");
     expect(settings).toContain('t("core.bundled")');
+    expect(settings).toContain('t("core.androidManaged")');
+    expect(settings).toContain("{#if !isAndroid}");
     expect(settings).toContain("{#if !v.bundled}");
   });
 });

@@ -483,9 +483,9 @@ pub async fn vpn_connect(
     #[cfg(target_os = "android")]
     {
         let _ = killswitch;
-        // The real candidate config: native TUN inbound (fd handed over by
-        // VpnService) plus a loopback probe inbound used only to verify real
-        // egress once Xray is up (see `build_android_xray_config`).
+        // The real candidate config: native TUN inbound whose descriptor is
+        // handed to Xray by VpnService. Startup requires structural validation
+        // and a live Xray process, but never a synthetic Internet destination.
         let xray_cfg = serde_json::to_string(&crate::xray::build_android_xray_config(
             &server, &split, allow_lan, &level,
         ))

@@ -481,14 +481,17 @@
         <div class="row-text">
           <div class="row-title">xray <span class="muted" style="font-weight:400">· TUN</span></div>
           <div class="row-sub muted">{coreStatus(core)}</div>
+          {#if isAndroid}<div class="row-sub muted">{t("core.androidManaged")}</div>{/if}
         </div>
-        <button class="btn versions-btn" onclick={() => openVersions(core)} title={t("core.versionsTitle")}>
-          <svg class="btn-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="1.9"
-              stroke-linecap="round" />
-          </svg>
-          <span>{t("core.versions")}</span>
-        </button>
+        {#if !isAndroid}
+          <button class="btn versions-btn" onclick={() => openVersions(core)} title={t("core.versionsTitle")}>
+            <svg class="btn-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="1.9"
+                stroke-linecap="round" />
+            </svg>
+            <span>{t("core.versions")}</span>
+          </button>
+        {/if}
       </div>
     </div>
     {#if core.error}
@@ -496,7 +499,7 @@
     {/if}
   </section>
 
-  {#if showVersions}
+  {#if showVersions && !isAndroid}
     {@const installed = activeCore.info?.installed ?? []}
     {@const available = activeCore.releases.filter((r) => !activeCore.isInstalled(r.tag))}
     <div class="modal-backdrop" onclick={() => (showVersions = false)} role="presentation">
