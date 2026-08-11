@@ -17,8 +17,6 @@ import android.os.ParcelFileDescriptor
 import android.service.quicksettings.TileService
 import androidx.core.content.ContextCompat
 import java.io.File
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
 /**
@@ -324,13 +322,12 @@ class VarmlenVpnService : VpnService() {
         check(started) { "Xray exited during startup" }
         xrayStarted = true
 
-        // Verify REAL egress before announcing "connected". A dead or
-        // unreachable remote must never surface as a working connection: run
-        // one controlled request through every loopback probe inbound. Each is
-        // hard-routed to exactly one concrete proxy outbound and can never
-        // silently fall back to direct or hide behind a healthy balancer peer.
+        // Verify real egress before announcing "connected". The controlled
+        // request follows the profile's effective target — its selected
+        // outbound or balancer — exactly like user traffic. Optional, fallback,
+        // and chained outbounds are not independently required to be healthy.
         // On failure the caller tears everything back down via stopAll().
-        check(verifyEgress(config)) { "Tunnel established but one or more server paths are unreachable" }
+        check(verifyEgress(config)) { "Connection verification failed: selected route is unreachable" }
 
         // Save only a configuration that reached the connected state. A failed
         // attempt must not poison later starts from the Quick Settings tile.
@@ -352,42 +349,30 @@ class VarmlenVpnService : VpnService() {
         log("connected")
     }
 
-    /** Probe every loopback inbound generated for the concrete proxy paths.
-     *  Each inbound has an explicit outboundTag rule and therefore cannot use
-     *  direct fallback or hide a dead variant behind a healthy balancer peer. */
+    /** Probe the one loopback inbound routed through the profile's effective
+     *  target. It cannot fall back to direct or be redirected by split rules. */
     private fun verifyEgress(config: String): Boolean {
-        val ports = try {
+        val port = try {
             val inbounds = JSONObject(config).getJSONArray("inbounds")
             buildList {
                 for (index in 0 until inbounds.length()) {
                     val inbound = inbounds.getJSONObject(index)
-                    if (!inbound.optString("tag").startsWith("probe-in-")) continue
+                    if (inbound.optString("tag") != "probe-in") continue
                     check(inbound.optString("listen") == "127.0.0.1") {
                         "egress probe is not loopback-only"
                     }
                     add(inbound.getInt("port"))
                 }
             }.also { resolved ->
-                check(resolved.isNotEmpty() && resolved.size <= 64 && resolved.distinct().size == resolved.size) {
-                    "invalid egress probe set"
-                }
-            }
+                check(resolved.size == 1) { "invalid effective egress probe" }
+            }.single()
         } catch (e: Throwable) {
             log("egress probe config is invalid", e)
             return false
         }
-        val executor = Executors.newFixedThreadPool(ports.size.coerceAtMost(8))
-        return try {
-            val futures = ports.map { port -> executor.submit<Boolean> { verifyEgressPort(port) } }
-            val results = futures.map { future ->
-                try { future.get(9, TimeUnit.SECONDS) } catch (_: Throwable) { false }
-            }
-            val healthy = results.count { it }
-            log("egress probes: $healthy/${results.size} healthy")
-            allEgressProbesHealthy(results)
-        } finally {
-            executor.shutdownNow()
-        }
+        val healthy = verifyEgressPort(port)
+        log("effective egress probe: ${if (healthy) "healthy" else "unreachable"}")
+        return healthy
     }
 
     private fun verifyEgressPort(port: Int): Boolean {
@@ -572,6 +557,3 @@ class VarmlenVpnService : VpnService() {
         else String.format("%02d:%02d", m, s)
     }
 }
-
-internal fun allEgressProbesHealthy(results: List<Boolean>): Boolean =
-    results.isNotEmpty() && results.all { it }

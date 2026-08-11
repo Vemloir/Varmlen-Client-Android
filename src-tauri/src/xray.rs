@@ -884,15 +884,15 @@ fn build_dns() -> Value {
 }
 
 /// Loopback HTTP inbound used ONLY to run a controlled egress probe through the
-/// exact outbound the tunnel is using — never exposed as a user-facing proxy
-/// and never reachable off-device (`listen` is `127.0.0.1`).
-const PROBE_PORT_BASE: u16 = 28510;
-const PROBE_TAG_PREFIX: &str = "probe-in-";
+/// effective route selected by the profile — never exposed as a user-facing
+/// proxy and never reachable off-device (`listen` is `127.0.0.1`).
+const PROBE_PORT: u16 = 28510;
+const PROBE_TAG: &str = "probe-in";
 
 /// The inbound that carries system traffic, plus an optional loopback probe
-/// inbounds (see `PROBE_TAG_PREFIX`) used on Android to verify real egress before the
-/// UI reports "connected".
-fn build_inbounds(inbound: CaptureInbound, probe_targets: &[String]) -> Vec<Value> {
+/// used on Android to verify the profile's effective egress before the UI
+/// reports "connected".
+fn build_inbounds(inbound: CaptureInbound, with_probe: bool) -> Vec<Value> {
     // routeOnly: the sniffed domain is used for routing (domain rules) but the
     // connection keeps its original destination. This avoids the destination
     // override that can sever the source->process binding the `process` matcher
@@ -920,11 +920,11 @@ fn build_inbounds(inbound: CaptureInbound, probe_targets: &[String]) -> Vec<Valu
             "sniffing": sniffing,
         })],
     };
-    for (index, _) in probe_targets.iter().enumerate() {
+    if with_probe {
         list.push(json!({
-            "tag": format!("{PROBE_TAG_PREFIX}{index}"),
+            "tag": PROBE_TAG,
             "listen": "127.0.0.1",
-            "port": PROBE_PORT_BASE + index as u16,
+            "port": PROBE_PORT,
             "protocol": "http",
             "settings": {},
         }));
@@ -953,7 +953,7 @@ fn build_route_rules(
     inbound_tag: &str,
     app_split_owner: AppSplitOwner,
     proxy_target: &ProxyTarget,
-    probe_targets: &[String],
+    with_probe: bool,
 ) -> Vec<Value> {
     let apps_selective = split.apps_selective();
     let sites_selective = split.sites_selective();
@@ -974,16 +974,17 @@ fn build_route_rules(
 
     let mut rules = Vec::new();
 
-    // 0. The egress probe MUST go through the exact tunnel outbound and can
-    //    never fall back to direct or be affected by app/site split — its
-    //    only purpose is proving that outbound actually reaches the network.
-    //    Placed first so nothing below can shadow it.
-    for (index, outbound_tag) in probe_targets.iter().enumerate() {
-        rules.push(json!({
+    // 0. The egress probe follows the profile's effective target: either the
+    //    selected outbound or its balancer. It must not require every optional,
+    //    fallback, or chained outbound in a composite profile to work
+    //    independently. Placed first so split rules cannot shadow it.
+    if with_probe {
+        let mut probe_rule = json!({
             "type": "field",
-            "inboundTag": [format!("{PROBE_TAG_PREFIX}{index}")],
-            "outboundTag": outbound_tag,
-        }));
+            "inboundTag": [PROBE_TAG],
+        });
+        proxy_target.apply(&mut probe_rule);
+        rules.push(probe_rule);
     }
 
     // 1. Hijack app DNS (:53) into xray's DNS module.
@@ -1081,15 +1082,6 @@ fn build_xray_config_with_inbound(
         observatory,
         burst_observatory,
     } = outbound_plan(server).expect("server was validated before config generation");
-    let probe_targets = if with_probe {
-        proxies
-            .iter()
-            .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
-            .map(str::to_string)
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
     proxies.push(direct_outbound());
     proxies.push(json!({ "tag": "dns-out", "protocol": "dns" }));
     proxies.push(json!({ "tag": "block", "protocol": "blackhole" }));
@@ -1100,7 +1092,7 @@ fn build_xray_config_with_inbound(
         inbound.tag(),
         app_split_owner,
         &target,
-        &probe_targets,
+        with_probe,
     );
     let mut routing = json!({ "rules": rules });
     if let Some(balancers) = balancers {
@@ -1109,7 +1101,7 @@ fn build_xray_config_with_inbound(
     let mut config = json!({
         "log": { "loglevel": loglevel },
         "dns": build_dns(),
-        "inbounds": build_inbounds(inbound, &probe_targets),
+        "inbounds": build_inbounds(inbound, with_probe),
         "outbounds": proxies,
         "routing": routing
     });
@@ -1163,11 +1155,12 @@ pub fn build_xray_validation_config(
     )
 }
 
-/// Native-TUN config for Android, with one loopback probe inbound per concrete
-/// proxy path. After Xray starts, the platform probes them concurrently before
-/// the UI is told the VPN is connected. Every probe is hard-routed to its exact
-/// outbound, so a dead variant cannot hide behind a healthy balancer peer and
-/// no request can silently fall back to a direct route.
+/// Native-TUN config for Android, with one loopback probe inbound routed through
+/// the profile's effective target. After Xray starts, the platform verifies that
+/// selected outbound or balancer before the UI is told the VPN is connected.
+/// Optional, fallback, and chained outbounds are not treated as independently
+/// mandatory connection paths.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub fn build_android_xray_config(
     server: &VlessServer,
     split: &SplitInput,
@@ -1185,8 +1178,9 @@ pub fn build_android_xray_config(
     )
 }
 
-/// Device-free Android preflight with one loopback probe route per concrete
-/// outbound. It differs from the active config only in the system-data inbound.
+/// Device-free Android preflight with the same effective-route probe used by
+/// the active config. It differs only in the system-data inbound.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub fn build_android_validation_config(
     server: &VlessServer,
     split: &SplitInput,
@@ -1730,51 +1724,42 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|inbound| inbound["tag"] == format!("{PROBE_TAG_PREFIX}0"))
+            .find(|inbound| inbound["tag"] == PROBE_TAG)
             .unwrap();
         assert_eq!(probe["listen"], "127.0.0.1");
-        assert_eq!(probe["port"], PROBE_PORT_BASE);
+        assert_eq!(probe["port"], PROBE_PORT);
         let rule = config["routing"]["rules"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|rule| rule["inboundTag"][0] == format!("{PROBE_TAG_PREFIX}0"))
+            .find(|rule| rule["inboundTag"][0] == PROBE_TAG)
             .unwrap();
         assert_eq!(rule["outboundTag"], "proxy");
         assert!(rule.get("balancerTag").is_none());
     }
 
     #[test]
-    fn android_composite_has_one_probe_route_per_concrete_outbound() {
+    fn android_composite_probes_its_effective_balancer_once() {
         let server = estonia_profile_server();
         let config = build_android_xray_config(&server, &split(), false, "warning");
         let probe_inbounds = config["inbounds"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|inbound| {
-                inbound["tag"]
-                    .as_str()
-                    .is_some_and(|tag| tag.starts_with(PROBE_TAG_PREFIX))
-            })
+            .filter(|inbound| inbound["tag"] == PROBE_TAG)
             .collect::<Vec<_>>();
-        assert_eq!(probe_inbounds.len(), 7);
-        for (index, inbound) in probe_inbounds.iter().enumerate() {
-            assert_eq!(inbound["port"], PROBE_PORT_BASE + index as u16);
-            let tag = inbound["tag"].as_str().unwrap();
-            let route = config["routing"]["rules"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|rule| rule["inboundTag"][0] == tag)
-                .unwrap();
-            let expected = if index == 0 {
-                "proxy".to_string()
-            } else {
-                format!("proxy-{}", index + 1)
-            };
-            assert_eq!(route["outboundTag"], expected);
-        }
+        assert_eq!(probe_inbounds.len(), 1);
+        assert_eq!(probe_inbounds[0]["port"], PROBE_PORT);
+
+        let probe_routes = config["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|rule| rule["inboundTag"][0] == PROBE_TAG)
+            .collect::<Vec<_>>();
+        assert_eq!(probe_routes.len(), 1);
+        assert_eq!(probe_routes[0]["balancerTag"], "estonia-balancer");
+        assert!(probe_routes[0].get("outboundTag").is_none());
     }
 
     #[test]

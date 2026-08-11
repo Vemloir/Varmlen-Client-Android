@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 Preview
+## 0.3.0
 
 - Pin the APK-bundled core to stable Xray 26.3.27 and show it in the core menu
   as the active, immutable offline fallback; Android core updates remain tied
@@ -12,7 +12,9 @@
   the subscription request to it, fixing first-launch imports without retries.
 - Add the official ISRG Root X2 trust anchor alongside Android system roots so
   Let's Encrypt X2-only subscription endpoints work on Android versions below 14.
-- Validate every proxy path before reporting Connected.
+- Verify the selected profile's effective route before reporting Connected;
+  optional, fallback, balancer, and chained outbounds no longer make an
+  otherwise working connection fail.
 - Pin subscription DNS, validate redirects, and bound response downloads.
 - Harden raw JSON handling, rotated logs, connection teardown, and the Android
   VPN lifecycle.

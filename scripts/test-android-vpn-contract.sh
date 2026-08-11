@@ -46,10 +46,12 @@ require "$CORE" 'external fun validate' \
   "Android Xray JNI bridge cannot validate a candidate config"
 require "$CORE" 'external fun appendLog' \
   "Android Xray JNI bridge does not use the bounded native log writer"
-require "$SERVICE" 'allEgressProbesHealthy' \
-  "Android VPN service does not require every concrete proxy path to work"
-require "$SERVICE" 'startsWith("probe-in-")' \
-  "Android VPN service does not discover per-outbound egress probes"
+require "$SERVICE" 'resolved.size == 1' \
+  "Android VPN service does not enforce one effective-route egress probe"
+require "$SERVICE" 'inbound.optString("tag") != "probe-in"' \
+  "Android VPN service does not discover its effective-route egress probe"
+reject "$SERVICE" 'allEgressProbesHealthy' \
+  "Android VPN service still requires every configured proxy path to work"
 require "$NATIVE" 'libc::dup' \
   "native Xray launcher does not duplicate the TUN fd for child inheritance"
 require "$NATIVE" 'XRAY_TUN_FD' \
