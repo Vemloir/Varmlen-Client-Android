@@ -737,15 +737,19 @@ class SubsStore {
     this.pings = pruned;
   }
 
-  /** Probe one server with the user's chosen method (TCP or via-proxy real
-   *  delay). Updates `pings[id]` in place; never throws. */
+  /** Probe one server with the user's chosen latency method. Even in TCP mode,
+   *  require the end-to-end proxy + DNS health check before exposing the raw
+   *  endpoint RTT: a reachable socket is not necessarily a usable VPN. */
   async pingServer(srv: ServerEntry, method: PingMethod = settings.pingMethod): Promise<void> {
     this.pings = { ...this.pings, [srv.id]: "pinging" };
     try {
       const rtt =
         method === "proxy"
           ? await proxyGetPing(srv.raw, 5000)
-          : await tcpPingHost(srv.raw.host, srv.raw.port, 2500);
+          : await Promise.all([
+              tcpPingHost(srv.raw.host, srv.raw.port, 2500),
+              proxyGetPing(srv.raw, 5000),
+            ]).then(([tcpRtt]) => tcpRtt);
       this.pings = { ...this.pings, [srv.id]: rtt };
     } catch {
       this.pings = { ...this.pings, [srv.id]: "timeout" };

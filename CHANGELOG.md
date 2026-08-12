@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1
+
+- Treat a location as reachable only when ordinary HTTP traffic and the same
+  Cloudflare DNS-over-HTTPS path used by the active tunnel both work through
+  one concrete proxy outbound.
+- Keep composite-profile probes parallel and report the fastest fully usable
+  outbound instead of accepting a path that can connect but cannot resolve DNS.
+- Validate full proxy and DNS health even when displaying raw TCP latency, so a
+  reachable server socket no longer appears as a working VPN location.
+
 ## 0.3.0
 
 - Increment the APK revision so existing 0.3.0 installations can update to

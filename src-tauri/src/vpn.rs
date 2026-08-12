@@ -924,9 +924,73 @@ fn free_local_ports(count: usize) -> Result<Vec<u16>, String> {
 }
 
 const PROXY_PING_URL: &str = "http://www.gstatic.com/generate_204";
+const PROXY_DNS_PROBE_URL: &str = "https://1.1.1.1/dns-query";
+// Standard DNS query for A www.gstatic.com. The fixed transaction ID lets us
+// reject an unrelated/HTML response without pulling a DNS parser into the app.
+const DNS_PROBE_QUERY: &[u8] = &[
+    0x56, 0x4d, // transaction ID ("VM")
+    0x01, 0x00, // recursion desired
+    0x00, 0x01, // one question
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // no answers/authority/additional
+    0x03, b'w', b'w', b'w', 0x07, b'g', b's', b't', b'a', b't', b'i', b'c', 0x03, b'c', b'o', b'm',
+    0x00, // end of QNAME
+    0x00, 0x01, // A
+    0x00, 0x01, // IN
+];
 
 fn build_proxy_ping_request(client: &reqwest::Client) -> reqwest::RequestBuilder {
     client.head(PROXY_PING_URL)
+}
+
+fn build_proxy_dns_probe_request(client: &reqwest::Client) -> reqwest::RequestBuilder {
+    client
+        .post(PROXY_DNS_PROBE_URL)
+        .header(reqwest::header::ACCEPT, "application/dns-message")
+        .header(reqwest::header::CONTENT_TYPE, "application/dns-message")
+        .body(DNS_PROBE_QUERY)
+}
+
+fn validate_dns_probe_response(body: &[u8]) -> Result<(), String> {
+    if body.len() < 12 {
+        return Err("DNS probe returned a truncated response".into());
+    }
+    if body[0..2] != DNS_PROBE_QUERY[0..2] {
+        return Err("DNS probe returned a mismatched transaction".into());
+    }
+    if body[2] & 0x80 == 0 {
+        return Err("DNS probe did not return a response packet".into());
+    }
+    if body[3] & 0x0f != 0 {
+        return Err(format!("DNS probe failed with RCODE {}", body[3] & 0x0f));
+    }
+    Ok(())
+}
+
+async fn probe_http_through_proxy(client: &reqwest::Client) -> Result<u32, String> {
+    let started = Instant::now();
+    let resp = build_proxy_ping_request(client)
+        .send()
+        .await
+        .map_err(|e| format!("HEAD: {e}"))?;
+    if resp.status().as_u16() != 204 {
+        return Err(format!("unexpected status {}", resp.status()));
+    }
+    Ok(started.elapsed().as_millis().min(u32::MAX as u128) as u32)
+}
+
+async fn probe_dns_through_proxy(client: &reqwest::Client) -> Result<(), String> {
+    let resp = build_proxy_dns_probe_request(client)
+        .send()
+        .await
+        .map_err(|e| format!("DNS probe: {e}"))?;
+    if resp.status().as_u16() != 200 {
+        return Err(format!("DNS probe returned HTTP {}", resp.status()));
+    }
+    let body = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("DNS probe response: {e}"))?;
+    validate_dns_probe_response(&body)
 }
 
 async fn probe_proxy_port(port: u16, timeout: Duration) -> Result<u32, String> {
@@ -939,15 +1003,16 @@ async fn probe_proxy_port(port: u16, timeout: Duration) -> Result<u32, String> {
         .timeout(timeout)
         .build()
         .map_err(|e| format!("client: {e}"))?;
-    let started = Instant::now();
-    let resp = build_proxy_ping_request(&client)
-        .send()
-        .await
-        .map_err(|e| format!("HEAD: {e}"))?;
-    if resp.status().as_u16() != 204 {
-        return Err(format!("unexpected status {}", resp.status()));
-    }
-    Ok(started.elapsed().as_millis().min(u32::MAX as u128) as u32)
+
+    // A location is shown as reachable only when both ordinary web traffic and
+    // the exact DoH endpoint used by the active tunnel work through the SAME
+    // concrete outbound. Running them concurrently keeps the displayed number
+    // as HTTP RTT instead of inflating it by a second sequential round trip.
+    let (http_rtt, ()) = tokio::try_join!(
+        probe_http_through_proxy(&client),
+        probe_dns_through_proxy(&client),
+    )?;
+    Ok(http_rtt)
 }
 
 async fn first_success<T, E, I, F>(futures: I) -> Option<T>
@@ -964,8 +1029,9 @@ where
     None
 }
 
-/// Per-location via-proxy latency: spin one throwaway xray and time an HTTP HEAD
-/// through every concrete outbound represented by the location. Composite JSON
+/// Per-location via-proxy latency: spin one throwaway xray and require both an
+/// HTTP HEAD and a real DNS-over-HTTPS response through every concrete outbound
+/// represented by the location. Composite JSON
 /// locations (such as Proxen Estonia) are provider balancers; measuring only
 /// their fallback produced multi-second values even when another variant was
 /// healthy. The displayed value is the fastest successful path, matching what
@@ -1069,7 +1135,10 @@ pub async fn proxy_get_ping(
 mod ping_tests {
     use std::time::Duration;
 
-    use super::{build_proxy_ping_request, first_success, PROXY_PING_URL};
+    use super::{
+        build_proxy_dns_probe_request, build_proxy_ping_request, first_success,
+        validate_dns_probe_response, DNS_PROBE_QUERY, PROXY_DNS_PROBE_URL, PROXY_PING_URL,
+    };
 
     #[test]
     fn proxy_ping_matches_xray_health_check_request() {
@@ -1082,6 +1151,41 @@ mod ping_tests {
             request.url().as_str(),
             "http://www.gstatic.com/generate_204"
         );
+    }
+
+    #[test]
+    fn proxy_ping_checks_the_active_tunnels_doh_path() {
+        let client = reqwest::Client::new();
+        let request = build_proxy_dns_probe_request(&client).build().unwrap();
+
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(request.url().as_str(), PROXY_DNS_PROBE_URL);
+        assert_eq!(
+            request.headers()[reqwest::header::CONTENT_TYPE],
+            "application/dns-message"
+        );
+        assert_eq!(request.body().unwrap().as_bytes().unwrap(), DNS_PROBE_QUERY);
+    }
+
+    #[test]
+    fn dns_probe_rejects_timeout_substitutes_and_accepts_a_real_reply() {
+        assert!(validate_dns_probe_response(b"").is_err());
+
+        let mut mismatched = [0_u8; 12];
+        mismatched[2] = 0x80;
+        assert!(validate_dns_probe_response(&mismatched).is_err());
+
+        let mut servfail = [0_u8; 12];
+        servfail[0..2].copy_from_slice(&DNS_PROBE_QUERY[0..2]);
+        servfail[2] = 0x81;
+        servfail[3] = 0x82;
+        assert!(validate_dns_probe_response(&servfail).is_err());
+
+        let mut valid = [0_u8; 12];
+        valid[0..2].copy_from_slice(&DNS_PROBE_QUERY[0..2]);
+        valid[2] = 0x81;
+        valid[3] = 0x80;
+        assert!(validate_dns_probe_response(&valid).is_ok());
     }
 
     #[tokio::test]
