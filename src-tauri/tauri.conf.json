@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Varmlen",
-  "version": "0.3.2",
+  "version": "0.3.1",
   "identifier": "app.varmlen.client",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -28,7 +28,7 @@
     "active": true,
     "targets": "all",
     "android": {
-      "versionCode": 3020
+      "versionCode": 3011
     },
     "icon": [
       "icons/32x32.png",
