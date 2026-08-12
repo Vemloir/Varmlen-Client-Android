@@ -1044,9 +1044,22 @@ fn is_safe_remote_dns_ip(address: IpAddr) -> bool {
     }
 }
 
-fn safe_doh_url(raw: &str) -> Option<(String, String)> {
+/// Accept DNS endpoints that can be forced through the selected proxy without
+/// consulting the host resolver first. Full JSON profiles commonly use plain
+/// public DNS (for example `8.8.8.8`) rather than DoH; dropping those settings
+/// changes the profile's behaviour and broke otherwise valid Hysteria2 nodes.
+///
+/// Hostnames and every `+local` scheme stay rejected because bootstrapping them
+/// would use Android/Linux system DNS outside Xray. Local, private and special
+/// addresses are rejected for the same anti-leak reason.
+fn safe_remote_dns_address(raw: &str) -> Option<(String, String, Option<String>)> {
+    if let Ok(address) = raw.parse::<IpAddr>() {
+        return is_safe_remote_dns_ip(address)
+            .then(|| (raw.to_string(), address.to_string(), None));
+    }
+
     let url = Url::parse(raw).ok()?;
-    if url.scheme() != "https"
+    if !matches!(url.scheme(), "https" | "tls" | "tcp" | "quic")
         || !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
@@ -1057,10 +1070,12 @@ fn safe_doh_url(raw: &str) -> Option<(String, String)> {
     if !is_safe_remote_dns_ip(address) {
         return None;
     }
-    Some((url.to_string(), address.to_string()))
+    let normalized = url.to_string();
+    let probe_url = (url.scheme() == "https").then(|| normalized.clone());
+    Some((normalized, address.to_string(), probe_url))
 }
 
-fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, String, String)> {
+fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, String, Option<String>)> {
     let Some(servers) = server
         .raw_profile
         .as_ref()
@@ -1079,33 +1094,33 @@ fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, String, String
                 Value::Object(object) => object.get("address")?.as_str()?,
                 _ => return None,
             };
-            let (url, ip) = safe_doh_url(raw)?;
+            let (address, ip, probe_url) = safe_remote_dns_address(raw)?;
             let sanitized = match server {
-                Value::String(_) => Value::String(url.clone()),
+                Value::String(_) => Value::String(address.clone()),
                 Value::Object(object) => {
                     let mut object = object.clone();
-                    object.insert("address".into(), Value::String(url.clone()));
+                    object.insert("address".into(), Value::String(address.clone()));
                     Value::Object(object)
                 }
                 _ => unreachable!(),
             };
-            Some((sanitized, url, ip))
+            Some((sanitized, ip, probe_url))
         })
         .collect()
 }
 
-/// Use a provider's encrypted resolver for a full JSON location when it is a
-/// public literal-IP DoH endpoint. Local/system/plaintext resolvers and
-/// `https+local` are deliberately ignored: preserving those would let a remote
-/// subscription silently reintroduce the DNS leak Varmlen's TUN prevents.
+/// Preserve a full JSON profile's public literal-IP DNS endpoints exactly,
+/// including ordinary UDP DNS, and force their destination IPs through the
+/// selected proxy. Local/system resolvers and hostname-based bootstrap remain
+/// excluded so a subscription cannot silently reintroduce a DNS leak.
 fn build_dns_plan(server: &VlessServer) -> DnsPlan {
     let mut servers = safe_provider_dns_servers(server);
     if servers.is_empty() {
         servers = DEFAULT_DOH_URLS
             .iter()
             .filter_map(|url| {
-                let (url, ip) = safe_doh_url(url)?;
-                Some((Value::String(url.clone()), url, ip))
+                let (url, ip, probe_url) = safe_remote_dns_address(url)?;
+                Some((Value::String(url), ip, probe_url))
             })
             .collect();
     }
@@ -1125,13 +1140,13 @@ fn build_dns_plan(server: &VlessServer) -> DnsPlan {
         .unwrap_or("UseIPv4");
     let mut upstream_ips = servers
         .iter()
-        .map(|(_, _, ip)| ip.clone())
+        .map(|(_, ip, _)| ip.clone())
         .collect::<Vec<_>>();
     upstream_ips.sort();
     upstream_ips.dedup();
     let probe_urls = servers
         .iter()
-        .map(|(_, url, _)| url.clone())
+        .filter_map(|(_, _, url)| url.clone())
         .collect::<Vec<_>>();
     let mut config = server
         .raw_profile
@@ -1746,19 +1761,19 @@ mod tests {
             cfg["routing"]["rules"].as_array().unwrap().last().unwrap()["balancerTag"],
             "estonia-balancer"
         );
-        let doh_rule = cfg["routing"]["rules"]
+        let dns_rule = cfg["routing"]["rules"]
             .as_array()
             .unwrap()
             .iter()
             .find(|rule| {
                 rule["ip"]
                     .as_array()
-                    .is_some_and(|ips| ips.iter().any(|ip| ip == "1.1.1.1"))
+                    .is_some_and(|ips| ips.iter().any(|ip| ip == "8.8.8.8"))
             })
             .unwrap();
-        assert_eq!(doh_rule["balancerTag"], "estonia-balancer");
+        assert_eq!(dns_rule["balancerTag"], "estonia-balancer");
         assert!(cfg.get("burstObservatory").is_some());
-        assert_eq!(cfg["dns"]["servers"][0], "https://1.1.1.1/dns-query");
+        assert_eq!(cfg["dns"]["servers"][0], "8.8.8.8");
         assert!(cfg["routing"]["rules"]
             .as_array()
             .unwrap()
@@ -1962,7 +1977,7 @@ mod tests {
     }
 
     #[test]
-    fn unsafe_provider_dns_falls_back_to_public_doh() {
+    fn provider_plain_dns_is_preserved_and_forced_through_proxy() {
         let body = json!({
             "remarks": "Unsafe DNS",
             "dns": {
@@ -1970,6 +1985,7 @@ mod tests {
                 "servers": [
                     "localhost",
                     "8.8.8.8",
+                    "8.8.4.4",
                     "https+local://1.1.1.1/dns-query",
                     "https://192.168.1.1/dns-query"
                 ]
@@ -1985,9 +2001,18 @@ mod tests {
 
         assert_eq!(
             cfg["dns"]["servers"],
-            json!(["https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"])
+            json!(["8.8.8.8", "8.8.4.4"])
         );
         assert!(cfg["dns"].get("clientIp").is_none());
+        assert!(dns_probe_urls(&server).is_empty());
+        assert!(cfg["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| {
+                rule["ip"] == json!(["8.8.4.4", "8.8.8.8"])
+                    && rule["outboundTag"] == "proxy"
+            }));
     }
 
     #[test]

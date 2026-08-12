@@ -12,9 +12,9 @@ describe("Android bundled Xray core", () => {
     const settings = read("../routes/settings/+page.svelte");
     const version = core.match(/BUNDLED_XRAY_VERSION: &str = "([^"]+)"/)?.[1];
 
-    expect(version).toBe("26.3.27");
+    expect(version).toBe("26.7.28");
     expect(nativeBuild).toContain(`XRAY_VER="${version}"`);
-    expect(nativeBuild).toContain("57149ffd48b629c07bf76938e73ab2729fde5910091497eab3e93d1c190f4c1b");
+    expect(nativeBuild).toContain("a442892c175fa648fc56866ec872aac441c5a6b8946a1b60f0258ae16a7fb402");
     expect(nativeBuild).toContain("libxray.so.version");
     expect(core).toContain("bundled: true");
     expect(core).toContain("Android Xray updates are delivered through Varmlen APK updates");

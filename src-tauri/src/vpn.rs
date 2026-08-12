@@ -1016,10 +1016,17 @@ async fn probe_proxy_port(
         .build()
         .map_err(|e| format!("client: {e}"))?;
 
-    // A location is shown as reachable only when both ordinary web traffic and
-    // the exact DoH endpoint used by the active tunnel work through the SAME
-    // concrete outbound. Running them concurrently keeps the displayed number
-    // as HTTP RTT instead of inflating it by a second sequential round trip.
+    // A location with an explicit DoH resolver is shown as reachable only when
+    // both ordinary web traffic and that resolver work through the SAME
+    // concrete outbound. Plain DNS endpoints cannot be queried through this
+    // HTTP-only validation inbound; the hostname-based HTTP probe still proves
+    // that the selected outbound can resolve names and carry web traffic.
+    if dns_urls.is_empty() {
+        return probe_http_through_proxy(&client).await;
+    }
+
+    // Run both checks concurrently so the displayed value remains HTTP RTT
+    // instead of being inflated by a second sequential round trip.
     let (http_rtt, ()) = tokio::try_join!(
         probe_http_through_proxy(&client),
         probe_dns_through_proxy(&client, dns_urls),
