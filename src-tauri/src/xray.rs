@@ -21,7 +21,10 @@
 //! On Android the OS VpnService owns the TUN descriptor and per-package split;
 //! on desktop Xray creates the interface and matches host process names.
 
+use std::net::IpAddr;
+
 use serde_json::{json, Value};
+use url::Url;
 
 use crate::split::SplitInput;
 use crate::subscription::VlessServer;
@@ -37,6 +40,7 @@ const PROXY_PROTOCOLS: &[&str] = &[
     "wireguard",
 ];
 const RESERVED_OUTBOUND_TAGS: &[&str] = &["direct", "dns-out", "block"];
+const DEFAULT_DOH_URLS: &[&str] = &["https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"];
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct EditorChoice {
@@ -225,6 +229,14 @@ struct OutboundPlan {
     balancers: Option<Value>,
     observatory: Option<Value>,
     burst_observatory: Option<Value>,
+    provider_rules: Vec<Value>,
+}
+
+#[derive(Debug)]
+struct DnsPlan {
+    config: Value,
+    upstream_ips: Vec<String>,
+    probe_urls: Vec<String>,
 }
 
 fn is_proxy_protocol(protocol: &str) -> bool {
@@ -335,6 +347,135 @@ fn provider_proxy_outbounds(profile: &Value) -> Result<Vec<Value>, String> {
     Ok(proxies)
 }
 
+fn safe_provider_route_rules(
+    server: &VlessServer,
+    proxies: &[Value],
+    balancers: Option<&Value>,
+) -> Vec<Value> {
+    let proxy_tags = proxies
+        .iter()
+        .filter_map(|outbound| outbound.get("tag").and_then(Value::as_str))
+        .collect::<std::collections::HashSet<_>>();
+    let balancer_tags = balancers
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|balancer| balancer.get("tag").and_then(Value::as_str))
+        .collect::<std::collections::HashSet<_>>();
+
+    server
+        .raw_profile
+        .as_ref()
+        .and_then(|profile| profile.get("routing"))
+        .and_then(|routing| routing.get("rules"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|rule| {
+            let object = rule.as_object()?;
+            // Provider domain/process policy would fight Varmlen's website and
+            // per-app split controls. Provider inbound tags are unusable after
+            // replacing its listeners with Varmlen's native TUN. Everything
+            // else with a real selector is retained; network-only rules are a
+            // provider catch-all and Varmlen owns the final route.
+            if ["domain", "process", "inboundTag"]
+                .iter()
+                .any(|key| object.contains_key(*key))
+                || ![
+                    "protocol",
+                    "ip",
+                    "port",
+                    "source",
+                    "sourcePort",
+                    "user",
+                    "attrs",
+                ]
+                .iter()
+                .any(|key| object.contains_key(*key))
+            {
+                return None;
+            }
+            // Varmlen intentionally ships no geoip.dat/geosite.dat bundle.
+            // Carrying an asset-backed selector into the generated config
+            // would make Xray reject the entire otherwise valid location.
+            if object
+                .get("ip")
+                .and_then(Value::as_array)
+                .is_some_and(|items| items.iter().any(is_external_route_selector))
+            {
+                return None;
+            }
+            let outbound_ok = object
+                .get("outboundTag")
+                .and_then(Value::as_str)
+                .is_some_and(|tag| matches!(tag, "direct" | "block") || proxy_tags.contains(tag));
+            let balancer_ok = object
+                .get("balancerTag")
+                .and_then(Value::as_str)
+                .is_some_and(|tag| balancer_tags.contains(tag));
+            if !outbound_ok && !balancer_ok {
+                return None;
+            }
+
+            // `allow_lan` remains a client policy. Do not let a subscription
+            // silently turn it on with RFC1918/link-local direct routes.
+            if object.get("outboundTag").and_then(Value::as_str) == Some("direct")
+                && object
+                    .get("ip")
+                    .and_then(Value::as_array)
+                    .is_some_and(|items| items.iter().any(is_local_route_selector))
+            {
+                return None;
+            }
+            Some(rule.clone())
+        })
+        .collect()
+}
+
+fn is_external_route_selector(value: &Value) -> bool {
+    value.as_str().is_some_and(|raw| {
+        let raw = raw.to_ascii_lowercase();
+        raw.starts_with("geoip:") || raw.starts_with("ext:") || raw.starts_with("ext-ip:")
+    })
+}
+
+fn is_local_route_selector(value: &Value) -> bool {
+    let Some(raw) = value.as_str() else {
+        return true;
+    };
+    if raw.eq_ignore_ascii_case("geoip:private") {
+        return true;
+    }
+    let address = raw.split('/').next().unwrap_or(raw);
+    address
+        .parse::<IpAddr>()
+        .is_ok_and(|address| !is_safe_remote_dns_ip(address))
+}
+
+fn apply_provider_routing_options(server: &VlessServer, routing: &mut Value) {
+    let Some(provider) = server
+        .raw_profile
+        .as_ref()
+        .and_then(|profile| profile.get("routing"))
+    else {
+        return;
+    };
+    if let Some(strategy) = provider
+        .get("domainStrategy")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "AsIs" | "IPIfNonMatch" | "IPOnDemand"))
+    {
+        routing["domainStrategy"] = json!(strategy);
+    }
+    if let Some(matcher) = provider
+        .get("domainMatcher")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "linear" | "hybrid"))
+    {
+        routing["domainMatcher"] = json!(matcher);
+    }
+}
+
 fn profile_plan(server: &VlessServer) -> Result<Option<OutboundPlan>, String> {
     let Some(profile) = server.raw_profile.as_ref() else {
         return Ok(None);
@@ -425,6 +566,7 @@ fn profile_plan(server: &VlessServer) -> Result<Option<OutboundPlan>, String> {
         });
 
     Ok(Some(OutboundPlan {
+        provider_rules: safe_provider_route_rules(server, &proxies, balancers.as_ref()),
         proxies,
         target,
         balancers,
@@ -437,8 +579,10 @@ fn outbound_plan(server: &VlessServer) -> Result<OutboundPlan, String> {
     if let Some(plan) = profile_plan(server)? {
         return Ok(plan);
     }
+    let proxies = vec![build_proxy_outbound(server)];
     Ok(OutboundPlan {
-        proxies: vec![build_proxy_outbound(server)],
+        provider_rules: safe_provider_route_rules(server, &proxies, None),
+        proxies,
         target: ProxyTarget::Outbound("proxy".into()),
         balancers: None,
         observatory: None,
@@ -878,11 +1022,142 @@ fn direct_outbound() -> Value {
 /// xray's built-in DNS module: a single DoH resolver. All queries are detoured
 /// through the `proxy` outbound by a routing rule, so DNS egresses from the VPN
 /// node, never the local resolver — the anti-leak invariant.
-fn build_dns() -> Value {
-    json!({
-        "servers": ["https://1.1.1.1/dns-query"],
-        "queryStrategy": "UseIPv4"
-    })
+fn is_safe_remote_dns_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let octets = address.octets();
+            !address.is_private()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_multicast()
+                && !address.is_unspecified()
+                && octets != [255, 255, 255, 255]
+                && !(octets[0] == 100 && (64..=127).contains(&octets[1]))
+        }
+        IpAddr::V6(address) => {
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && !address.is_multicast()
+                && !address.is_unique_local()
+                && !address.is_unicast_link_local()
+        }
+    }
+}
+
+fn safe_doh_url(raw: &str) -> Option<(String, String)> {
+    let url = Url::parse(raw).ok()?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let address = url.host_str()?.parse::<IpAddr>().ok()?;
+    if !is_safe_remote_dns_ip(address) {
+        return None;
+    }
+    Some((url.to_string(), address.to_string()))
+}
+
+fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, String, String)> {
+    let Some(servers) = server
+        .raw_profile
+        .as_ref()
+        .and_then(|profile| profile.get("dns"))
+        .and_then(|dns| dns.get("servers"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    servers
+        .iter()
+        .filter_map(|server| {
+            let raw = match server {
+                Value::String(address) => address.as_str(),
+                Value::Object(object) => object.get("address")?.as_str()?,
+                _ => return None,
+            };
+            let (url, ip) = safe_doh_url(raw)?;
+            let sanitized = match server {
+                Value::String(_) => Value::String(url.clone()),
+                Value::Object(object) => {
+                    let mut object = object.clone();
+                    object.insert("address".into(), Value::String(url.clone()));
+                    Value::Object(object)
+                }
+                _ => unreachable!(),
+            };
+            Some((sanitized, url, ip))
+        })
+        .collect()
+}
+
+/// Use a provider's encrypted resolver for a full JSON location when it is a
+/// public literal-IP DoH endpoint. Local/system/plaintext resolvers and
+/// `https+local` are deliberately ignored: preserving those would let a remote
+/// subscription silently reintroduce the DNS leak Varmlen's TUN prevents.
+fn build_dns_plan(server: &VlessServer) -> DnsPlan {
+    let mut servers = safe_provider_dns_servers(server);
+    if servers.is_empty() {
+        servers = DEFAULT_DOH_URLS
+            .iter()
+            .filter_map(|url| {
+                let (url, ip) = safe_doh_url(url)?;
+                Some((Value::String(url.clone()), url, ip))
+            })
+            .collect();
+    }
+
+    let query_strategy = server
+        .raw_profile
+        .as_ref()
+        .and_then(|profile| profile.get("dns"))
+        .and_then(|dns| dns.get("queryStrategy"))
+        .and_then(Value::as_str)
+        .filter(|strategy| {
+            matches!(
+                *strategy,
+                "UseIP" | "UseIPv4" | "UseIPv6" | "UseIPv4v6" | "UseIPv6v4"
+            )
+        })
+        .unwrap_or("UseIPv4");
+    let mut upstream_ips = servers
+        .iter()
+        .map(|(_, _, ip)| ip.clone())
+        .collect::<Vec<_>>();
+    upstream_ips.sort();
+    upstream_ips.dedup();
+    let probe_urls = servers
+        .iter()
+        .map(|(_, url, _)| url.clone())
+        .collect::<Vec<_>>();
+    let mut config = server
+        .raw_profile
+        .as_ref()
+        .and_then(|profile| profile.get("dns"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    config.remove("clientIp");
+    config.insert(
+        "servers".into(),
+        json!(servers
+            .into_iter()
+            .map(|(server, _, _)| server)
+            .collect::<Vec<_>>()),
+    );
+    config.insert("queryStrategy".into(), json!(query_strategy));
+    DnsPlan {
+        config: Value::Object(config),
+        upstream_ips,
+        probe_urls,
+    }
+}
+
+pub fn dns_probe_urls(server: &VlessServer) -> Vec<String> {
+    build_dns_plan(server).probe_urls
 }
 
 /// Build the single inbound that carries system traffic. Connection startup is
@@ -939,6 +1214,8 @@ fn build_route_rules(
     inbound_tag: &str,
     app_split_owner: AppSplitOwner,
     proxy_target: &ProxyTarget,
+    dns_upstream_ips: &[String],
+    provider_rules: &[Value],
 ) -> Vec<Value> {
     let apps_selective = split.apps_selective();
     let sites_selective = split.sites_selective();
@@ -1005,16 +1282,20 @@ fn build_route_rules(
         rules.push(rule);
     }
 
-    // 5. Force the DNS module's own DoH upstream (1.1.1.1) through the tunnel —
+    // 5. Keep safe non-site policy from a full provider profile. Site and app
+    //    matching remains exclusively owned by Varmlen's split controls.
+    rules.extend(provider_rules.iter().cloned());
+
+    // 6. Force the DNS module's own encrypted upstreams through the tunnel —
     //    anti-leak even in selective/direct-default mode. BELOW the app/site
     //    rules: the internal resolver connection has no source process, so it
     //    falls through to here, while user traffic that matched an exclusion
     //    above is unaffected.
-    let mut doh_rule = json!({ "type": "field", "ip": ["1.1.1.1"] });
+    let mut doh_rule = json!({ "type": "field", "ip": dns_upstream_ips });
     proxy_target.apply(&mut doh_rule);
     rules.push(doh_rule);
 
-    // 6. Everything else.
+    // 7. Everything else.
     let mut default_rule = json!({ "type": "field", "network": "tcp,udp" });
     if default_uses_proxy {
         proxy_target.apply(&mut default_rule);
@@ -1073,6 +1354,7 @@ fn build_xray_config_with_inbound(
         balancers,
         observatory,
         burst_observatory,
+        provider_rules,
     } = outbound_plan(server).expect("server was validated before config generation");
     proxies.push(direct_outbound());
     proxies.push(json!({ "tag": "dns-out", "protocol": "dns" }));
@@ -1081,14 +1363,24 @@ fn build_xray_config_with_inbound(
         remove_android_outbound_marks(&mut proxies);
     }
 
-    let rules = build_route_rules(split, allow_lan, inbound.tag(), app_split_owner, &target);
+    let dns = build_dns_plan(server);
+    let rules = build_route_rules(
+        split,
+        allow_lan,
+        inbound.tag(),
+        app_split_owner,
+        &target,
+        &dns.upstream_ips,
+        &provider_rules,
+    );
     let mut routing = json!({ "rules": rules });
+    apply_provider_routing_options(server, &mut routing);
     if let Some(balancers) = balancers {
         routing["balancers"] = balancers;
     }
     let mut config = json!({
         "log": { "loglevel": loglevel },
-        "dns": build_dns(),
+        "dns": dns.config,
         "inbounds": build_inbounds(inbound),
         "outbounds": proxies,
         "routing": routing
@@ -1255,6 +1547,28 @@ mod tests {
 
     fn split() -> SplitInput {
         SplitInput::default()
+    }
+
+    fn assert_bundled_xray_accepts(name: &str, config: &Value) {
+        let binary = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("cores/xray");
+        if !binary.is_file() {
+            return;
+        }
+        let path =
+            std::env::temp_dir().join(format!("varmlen-xray-{name}-{}.json", std::process::id()));
+        std::fs::write(&path, serde_json::to_vec(config).unwrap()).unwrap();
+        let output = std::process::Command::new(binary)
+            .args(["run", "-test", "-c"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(path);
+        assert!(
+            output.status.success(),
+            "bundled Xray rejected {name}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -1436,11 +1750,22 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|rule| rule["ip"] == json!(["1.1.1.1"]))
+            .find(|rule| {
+                rule["ip"]
+                    .as_array()
+                    .is_some_and(|ips| ips.iter().any(|ip| ip == "1.1.1.1"))
+            })
             .unwrap();
         assert_eq!(doh_rule["balancerTag"], "estonia-balancer");
         assert!(cfg.get("burstObservatory").is_some());
         assert_eq!(cfg["dns"]["servers"][0], "https://1.1.1.1/dns-query");
+        assert!(cfg["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |rule| rule["protocol"] == json!(["bittorrent"]) && rule["outboundTag"] == "direct"
+            ));
         assert!(cfg["inbounds"]
             .as_array()
             .unwrap()
@@ -1537,6 +1862,132 @@ mod tests {
             .unwrap()
             .iter()
             .all(|rule| rule["outboundTag"] != "provider-direct"));
+    }
+
+    #[test]
+    fn full_hysteria_profile_keeps_safe_dns_and_non_site_policy() {
+        let body = json!({
+            "remarks": "Hysteria2",
+            "dns": {
+                "queryStrategy": "UseIPv4",
+                "clientIp": "203.0.113.10",
+                "servers": [
+                    {
+                        "address": "localhost",
+                        "domains": ["domain:ru"],
+                        "skipFallback": true
+                    },
+                    "https://9.9.9.9/dns-query"
+                ]
+            },
+            "inbounds": [{"tag": "provider-socks", "protocol": "socks", "port": 10808}],
+            "outbounds": [
+                {
+                    "tag": "proxy",
+                    "protocol": "hysteria",
+                    "settings": {
+                        "version": 2,
+                        "address": "hy.example",
+                        "port": 443
+                    },
+                    "streamSettings": {
+                        "network": "hysteria",
+                        "security": "tls",
+                        "hysteriaSettings": {"version": 2, "auth": "secret"},
+                        "tlsSettings": {"serverName": "hy.example", "alpn": ["h3"]},
+                        "finalmask": {"quicParams": {"debug": false, "congestion": "bbr"}}
+                    }
+                },
+                {"tag": "direct", "protocol": "freedom"},
+                {"tag": "block", "protocol": "blackhole"}
+            ],
+            "routing": {
+                "domainStrategy": "AsIs",
+                "rules": [
+                    {"type": "field", "protocol": ["bittorrent"], "outboundTag": "direct"},
+                    {"type": "field", "ip": ["8.8.8.8"], "outboundTag": "proxy"},
+                    {"type": "field", "ip": ["geoip:ru"], "outboundTag": "direct"},
+                    {"type": "field", "port": "25", "outboundTag": "block"},
+                    {"type": "field", "ip": ["192.168.0.0/16"], "outboundTag": "direct"},
+                    {"type": "field", "domain": ["domain:ru"], "outboundTag": "direct"},
+                    {"type": "field", "network": "tcp,udp", "outboundTag": "proxy"}
+                ]
+            }
+        });
+        let server = parse_subscription(&body.to_string()).remove(0);
+        let cfg = build_android_xray_config(&server, &split(), false, "warning");
+
+        assert_eq!(cfg["dns"]["servers"], json!(["https://9.9.9.9/dns-query"]));
+        assert_eq!(cfg["dns"]["queryStrategy"], "UseIPv4");
+        assert!(cfg["dns"].get("clientIp").is_none());
+        assert_eq!(cfg["routing"]["domainStrategy"], "AsIs");
+        assert_eq!(dns_probe_urls(&server), vec!["https://9.9.9.9/dns-query"]);
+        assert_eq!(
+            cfg["outbounds"][0]["streamSettings"]["finalmask"]["quicParams"]["congestion"],
+            "bbr"
+        );
+
+        let inbounds = cfg["inbounds"].as_array().unwrap();
+        assert_eq!(inbounds.len(), 1);
+        assert_eq!(inbounds[0]["tag"], "tun-in");
+        assert_eq!(inbounds[0]["protocol"], "tun");
+
+        let rules = cfg["routing"]["rules"].as_array().unwrap();
+        assert!(rules.iter().any(|rule| {
+            rule["protocol"] == json!(["bittorrent"]) && rule["outboundTag"] == "direct"
+        }));
+        assert!(rules.iter().all(|rule| rule.get("domain").is_none()));
+        assert!(rules
+            .iter()
+            .any(|rule| rule["ip"] == json!(["8.8.8.8"]) && rule["outboundTag"] == "proxy"));
+        assert!(rules.iter().all(|rule| rule["ip"] != json!(["geoip:ru"])));
+        assert!(rules
+            .iter()
+            .any(|rule| rule["port"] == "25" && rule["outboundTag"] == "block"));
+        assert!(rules
+            .iter()
+            .all(|rule| rule["ip"] != json!(["192.168.0.0/16"])));
+        assert!(rules
+            .iter()
+            .any(|rule| { rule["ip"] == json!(["9.9.9.9"]) && rule["outboundTag"] == "proxy" }));
+        assert_eq!(rules.last().unwrap()["outboundTag"], "proxy");
+        let validation = build_xray_validation_config(
+            &server,
+            &split(),
+            AppSplitOwner::VpnService,
+            false,
+            "warning",
+        );
+        assert_bundled_xray_accepts("hysteria-provider-dns", &validation);
+    }
+
+    #[test]
+    fn unsafe_provider_dns_falls_back_to_public_doh() {
+        let body = json!({
+            "remarks": "Unsafe DNS",
+            "dns": {
+                "clientIp": "198.51.100.4",
+                "servers": [
+                    "localhost",
+                    "8.8.8.8",
+                    "https+local://1.1.1.1/dns-query",
+                    "https://192.168.1.1/dns-query"
+                ]
+            },
+            "outbounds": [{
+                "tag": "proxy",
+                "protocol": "vless",
+                "settings": {"address": "vpn.example", "port": 443, "id": "uuid"}
+            }]
+        });
+        let server = parse_subscription(&body.to_string()).remove(0);
+        let cfg = build_android_xray_config(&server, &split(), false, "warning");
+
+        assert_eq!(
+            cfg["dns"]["servers"],
+            json!(["https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"])
+        );
+        assert!(cfg["dns"].get("clientIp").is_none());
     }
 
     #[test]

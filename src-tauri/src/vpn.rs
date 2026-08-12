@@ -924,7 +924,6 @@ fn free_local_ports(count: usize) -> Result<Vec<u16>, String> {
 }
 
 const PROXY_PING_URL: &str = "http://www.gstatic.com/generate_204";
-const PROXY_DNS_PROBE_URL: &str = "https://1.1.1.1/dns-query";
 // Standard DNS query for A www.gstatic.com. The fixed transaction ID lets us
 // reject an unrelated/HTML response without pulling a DNS parser into the app.
 const DNS_PROBE_QUERY: &[u8] = &[
@@ -942,9 +941,9 @@ fn build_proxy_ping_request(client: &reqwest::Client) -> reqwest::RequestBuilder
     client.head(PROXY_PING_URL)
 }
 
-fn build_proxy_dns_probe_request(client: &reqwest::Client) -> reqwest::RequestBuilder {
+fn build_proxy_dns_probe_request(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
     client
-        .post(PROXY_DNS_PROBE_URL)
+        .post(url)
         .header(reqwest::header::ACCEPT, "application/dns-message")
         .header(reqwest::header::CONTENT_TYPE, "application/dns-message")
         .body(DNS_PROBE_QUERY)
@@ -978,11 +977,11 @@ async fn probe_http_through_proxy(client: &reqwest::Client) -> Result<u32, Strin
     Ok(started.elapsed().as_millis().min(u32::MAX as u128) as u32)
 }
 
-async fn probe_dns_through_proxy(client: &reqwest::Client) -> Result<(), String> {
-    let resp = build_proxy_dns_probe_request(client)
+async fn probe_dns_url_through_proxy(client: &reqwest::Client, url: &str) -> Result<(), String> {
+    let resp = build_proxy_dns_probe_request(client, url)
         .send()
         .await
-        .map_err(|e| format!("DNS probe: {e}"))?;
+        .map_err(|e| format!("DNS probe {url}: {e}"))?;
     if resp.status().as_u16() != 200 {
         return Err(format!("DNS probe returned HTTP {}", resp.status()));
     }
@@ -993,7 +992,20 @@ async fn probe_dns_through_proxy(client: &reqwest::Client) -> Result<(), String>
     validate_dns_probe_response(&body)
 }
 
-async fn probe_proxy_port(port: u16, timeout: Duration) -> Result<u32, String> {
+async fn probe_dns_through_proxy(client: &reqwest::Client, urls: &[String]) -> Result<(), String> {
+    first_success(
+        urls.iter()
+            .map(|url| probe_dns_url_through_proxy(client, url)),
+    )
+    .await
+    .ok_or_else(|| "all configured DNS resolvers failed".to_string())
+}
+
+async fn probe_proxy_port(
+    port: u16,
+    timeout: Duration,
+    dns_urls: &[String],
+) -> Result<u32, String> {
     let client = reqwest::Client::builder()
         .proxy(
             reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
@@ -1010,7 +1022,7 @@ async fn probe_proxy_port(port: u16, timeout: Duration) -> Result<u32, String> {
     // as HTTP RTT instead of inflating it by a second sequential round trip.
     let (http_rtt, ()) = tokio::try_join!(
         probe_http_through_proxy(&client),
-        probe_dns_through_proxy(&client),
+        probe_dns_through_proxy(&client, dns_urls),
     )?;
     Ok(http_rtt)
 }
@@ -1045,6 +1057,7 @@ pub async fn proxy_get_ping(
     validate_server(&server)?;
     let ms = timeout_ms.unwrap_or(5000) as u64;
     let proxy_count = crate::xray::ping_proxy_count(&server)?;
+    let dns_urls = crate::xray::dns_probe_urls(&server);
     let ports = free_local_ports(proxy_count)?;
     let cfg = serde_json::to_string(&crate::xray::build_ping_config(&server, &ports)?)
         .map_err(|e| e.to_string())?;
@@ -1118,7 +1131,7 @@ pub async fn proxy_get_ping(
             ports
                 .iter()
                 .copied()
-                .map(|port| probe_proxy_port(port, remaining)),
+                .map(|port| probe_proxy_port(port, remaining, &dns_urls)),
         )
         .await
         .ok_or_else(|| "all proxy variants failed the latency probe".to_string())
@@ -1137,7 +1150,7 @@ mod ping_tests {
 
     use super::{
         build_proxy_dns_probe_request, build_proxy_ping_request, first_success,
-        validate_dns_probe_response, DNS_PROBE_QUERY, PROXY_DNS_PROBE_URL, PROXY_PING_URL,
+        validate_dns_probe_response, DNS_PROBE_QUERY, PROXY_PING_URL,
     };
 
     #[test]
@@ -1156,10 +1169,12 @@ mod ping_tests {
     #[test]
     fn proxy_ping_checks_the_active_tunnels_doh_path() {
         let client = reqwest::Client::new();
-        let request = build_proxy_dns_probe_request(&client).build().unwrap();
+        let request = build_proxy_dns_probe_request(&client, "https://9.9.9.9/dns-query")
+            .build()
+            .unwrap();
 
         assert_eq!(request.method(), reqwest::Method::POST);
-        assert_eq!(request.url().as_str(), PROXY_DNS_PROBE_URL);
+        assert_eq!(request.url().as_str(), "https://9.9.9.9/dns-query");
         assert_eq!(
             request.headers()[reqwest::header::CONTENT_TYPE],
             "application/dns-message"

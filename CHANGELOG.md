@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2
+
+- Preserve a full JSON location's safe public DNS-over-HTTPS resolver instead
+  of replacing it with Cloudflare, fixing Hysteria2 profiles whose tunnel can
+  reach the provider resolver but not `1.1.1.1`.
+- Probe the effective resolver from the imported profile before reporting a
+  location as reachable.
+- Keep non-site provider routing such as protocol, public-IP, and port policy;
+  Varmlen still owns website/app split, the final route, native TUN capture,
+  LAN permission, and DNS leak prevention.
+
 ## 0.3.1
 
 - Treat a location as reachable only when ordinary HTTP traffic and the same
