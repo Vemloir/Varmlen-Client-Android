@@ -40,7 +40,17 @@ const PROXY_PROTOCOLS: &[&str] = &[
     "wireguard",
 ];
 const RESERVED_OUTBOUND_TAGS: &[&str] = &["direct", "dns-out", "block"];
-const DEFAULT_DOH_URLS: &[&str] = &["https://1.1.1.1/dns-query", "https://9.9.9.9/dns-query"];
+/// Hostname-based DoH is more widely accepted than an HTTPS request whose URL
+/// host is a bare IP (some HY2 paths silently black-hole the latter).  Each
+/// hostname is bootstrapped below with literal public IPs, so Xray never has to
+/// consult Android's/system DNS before the tunnel is usable.
+const DEFAULT_DOH_SERVERS: &[(&str, &[&str])] = &[
+    (
+        "https://cloudflare-dns.com/dns-query",
+        &["1.1.1.1", "1.0.0.1"],
+    ),
+    ("https://dns.google/dns-query", &["8.8.8.8", "8.8.4.4"]),
+];
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct EditorChoice {
@@ -1019,9 +1029,9 @@ fn direct_outbound() -> Value {
     })
 }
 
-/// xray's built-in DNS module: a single DoH resolver. All queries are detoured
-/// through the `proxy` outbound by a routing rule, so DNS egresses from the VPN
-/// node, never the local resolver — the anti-leak invariant.
+/// Xray's built-in DNS module. All queries are detoured through the `proxy`
+/// outbound by a routing rule, so DNS egresses from the VPN node, never the
+/// local resolver — the anti-leak invariant.
 fn is_safe_remote_dns_ip(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => {
@@ -1049,13 +1059,14 @@ fn is_safe_remote_dns_ip(address: IpAddr) -> bool {
 /// public DNS (for example `8.8.8.8`) rather than DoH; dropping those settings
 /// changes the profile's behaviour and broke otherwise valid Hysteria2 nodes.
 ///
-/// Hostnames and every `+local` scheme stay rejected because bootstrapping them
-/// would use Android/Linux system DNS outside Xray. Local, private and special
-/// addresses are rejected for the same anti-leak reason.
-fn safe_remote_dns_address(raw: &str) -> Option<(String, String, Option<String>)> {
+/// Hostnames without an explicit static bootstrap and every `+local` scheme
+/// stay rejected because resolving them would use Android/Linux system DNS
+/// outside Xray. Local, private and special addresses are rejected for the
+/// same anti-leak reason.
+fn safe_remote_dns_address(raw: &str) -> Option<(String, Vec<String>, Option<String>)> {
     if let Ok(address) = raw.parse::<IpAddr>() {
         return is_safe_remote_dns_ip(address)
-            .then(|| (raw.to_string(), address.to_string(), None));
+            .then(|| (raw.to_string(), vec![address.to_string()], None));
     }
 
     let url = Url::parse(raw).ok()?;
@@ -1072,10 +1083,66 @@ fn safe_remote_dns_address(raw: &str) -> Option<(String, String, Option<String>)
     }
     let normalized = url.to_string();
     let probe_url = (url.scheme() == "https").then(|| normalized.clone());
-    Some((normalized, address.to_string(), probe_url))
+    Some((normalized, vec![address.to_string()], probe_url))
 }
 
-fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, String, Option<String>)> {
+fn provider_dns_host_ips(server: &VlessServer, hostname: &str) -> Vec<String> {
+    let Some(hosts) = server
+        .raw_profile
+        .as_ref()
+        .and_then(|profile| profile.get("dns"))
+        .and_then(|dns| dns.get("hosts"))
+        .and_then(Value::as_object)
+    else {
+        return Vec::new();
+    };
+    let value = hosts
+        .get(hostname)
+        .or_else(|| hosts.get(&format!("full:{hostname}")))
+        .or_else(|| hosts.get(&format!("domain:{hostname}")));
+    let values = match value {
+        Some(Value::String(value)) => vec![value.as_str()],
+        Some(Value::Array(values)) => values.iter().filter_map(Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    let mut ips = values
+        .into_iter()
+        .filter_map(|value| value.parse::<IpAddr>().ok())
+        .filter(|address| is_safe_remote_dns_ip(*address))
+        .map(|address| address.to_string())
+        .collect::<Vec<_>>();
+    ips.sort();
+    ips.dedup();
+    ips
+}
+
+fn safe_provider_dns_address(
+    server: &VlessServer,
+    raw: &str,
+) -> Option<(String, Vec<String>, Option<String>)> {
+    if let Some(address) = safe_remote_dns_address(raw) {
+        return Some(address);
+    }
+
+    let url = Url::parse(raw).ok()?;
+    if !matches!(url.scheme(), "https" | "tls" | "tcp" | "quic")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let hostname = url.host_str()?;
+    let ips = provider_dns_host_ips(server, hostname);
+    if ips.is_empty() {
+        return None;
+    }
+    let normalized = url.to_string();
+    let probe_url = (url.scheme() == "https").then(|| normalized.clone());
+    Some((normalized, ips, probe_url))
+}
+
+fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, Vec<String>, Option<String>)> {
     let Some(servers) = server
         .raw_profile
         .as_ref()
@@ -1088,14 +1155,14 @@ fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, String, Option
 
     servers
         .iter()
-        .filter_map(|server| {
-            let raw = match server {
+        .filter_map(|server_value| {
+            let raw = match server_value {
                 Value::String(address) => address.as_str(),
                 Value::Object(object) => object.get("address")?.as_str()?,
                 _ => return None,
             };
-            let (address, ip, probe_url) = safe_remote_dns_address(raw)?;
-            let sanitized = match server {
+            let (address, ips, probe_url) = safe_provider_dns_address(server, raw)?;
+            let sanitized = match server_value {
                 Value::String(_) => Value::String(address.clone()),
                 Value::Object(object) => {
                     let mut object = object.clone();
@@ -1104,23 +1171,28 @@ fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, String, Option
                 }
                 _ => unreachable!(),
             };
-            Some((sanitized, ip, probe_url))
+            Some((sanitized, ips, probe_url))
         })
         .collect()
 }
 
-/// Preserve a full JSON profile's public literal-IP DNS endpoints exactly,
-/// including ordinary UDP DNS, and force their destination IPs through the
-/// selected proxy. Local/system resolvers and hostname-based bootstrap remain
-/// excluded so a subscription cannot silently reintroduce a DNS leak.
+/// Preserve a full JSON profile's safe DNS endpoints and force their concrete
+/// destination IPs through the selected proxy. A hostname endpoint is accepted
+/// only when the profile also supplies a public literal-IP bootstrap in
+/// `dns.hosts`; local/system resolvers remain excluded so a subscription cannot
+/// silently reintroduce a DNS leak.
 fn build_dns_plan(server: &VlessServer) -> DnsPlan {
     let mut servers = safe_provider_dns_servers(server);
-    if servers.is_empty() {
-        servers = DEFAULT_DOH_URLS
+    let using_defaults = servers.is_empty();
+    if using_defaults {
+        servers = DEFAULT_DOH_SERVERS
             .iter()
-            .filter_map(|url| {
-                let (url, ip, probe_url) = safe_remote_dns_address(url)?;
-                Some((Value::String(url), ip, probe_url))
+            .map(|(url, ips)| {
+                (
+                    Value::String((*url).to_string()),
+                    ips.iter().map(|ip| (*ip).to_string()).collect(),
+                    Some((*url).to_string()),
+                )
             })
             .collect();
     }
@@ -1140,7 +1212,7 @@ fn build_dns_plan(server: &VlessServer) -> DnsPlan {
         .unwrap_or("UseIPv4");
     let mut upstream_ips = servers
         .iter()
-        .map(|(_, ip, _)| ip.clone())
+        .flat_map(|(_, ips, _)| ips.iter().cloned())
         .collect::<Vec<_>>();
     upstream_ips.sort();
     upstream_ips.dedup();
@@ -1164,6 +1236,32 @@ fn build_dns_plan(server: &VlessServer) -> DnsPlan {
             .collect::<Vec<_>>()),
     );
     config.insert("queryStrategy".into(), json!(query_strategy));
+    let hosts = config.entry("hosts").or_insert_with(|| json!({}));
+    if !hosts.is_object() {
+        *hosts = json!({});
+    }
+    let hosts = hosts.as_object_mut().expect("DNS hosts object inserted");
+    if using_defaults {
+        for (url, ips) in DEFAULT_DOH_SERVERS {
+            let hostname = Url::parse(url)
+                .expect("constant DoH URL")
+                .host_str()
+                .expect("constant DoH hostname")
+                .to_string();
+            hosts.entry(hostname).or_insert_with(|| json!(ips));
+        }
+    }
+    // v2rayNG carries this compatibility alias specifically to avoid Play
+    // services being stranded behind resolvers that return googleapis.cn.
+    hosts
+        .entry("domain:googleapis.cn")
+        .or_insert_with(|| json!("googleapis.com"));
+    // A dead first resolver must not serialize all DNS behind a HY2 route.
+    // Respect an explicit provider choice, otherwise query available upstreams
+    // concurrently and use the first valid response.
+    config
+        .entry("enableParallelQuery")
+        .or_insert_with(|| json!(true));
     DnsPlan {
         config: Value::Object(config),
         upstream_ips,
@@ -1871,7 +1969,13 @@ mod tests {
             15
         );
         assert_eq!(proxy["streamSettings"]["sockopt"]["mark"], XRAY_DIAL_MARK);
-        assert_eq!(cfg["dns"]["servers"][0], "https://1.1.1.1/dns-query");
+        assert_eq!(
+            cfg["dns"]["servers"],
+            json!([
+                "https://cloudflare-dns.com/dns-query",
+                "https://dns.google/dns-query"
+            ])
+        );
         assert!(cfg["routing"]["rules"]
             .as_array()
             .unwrap()
@@ -1999,10 +2103,7 @@ mod tests {
         let server = parse_subscription(&body.to_string()).remove(0);
         let cfg = build_android_xray_config(&server, &split(), false, "warning");
 
-        assert_eq!(
-            cfg["dns"]["servers"],
-            json!(["8.8.8.8", "8.8.4.4"])
-        );
+        assert_eq!(cfg["dns"]["servers"], json!(["8.8.8.8", "8.8.4.4"]));
         assert!(cfg["dns"].get("clientIp").is_none());
         assert!(dns_probe_urls(&server).is_empty());
         assert!(cfg["routing"]["rules"]
@@ -2010,7 +2111,48 @@ mod tests {
             .unwrap()
             .iter()
             .any(|rule| {
-                rule["ip"] == json!(["8.8.4.4", "8.8.8.8"])
+                rule["ip"] == json!(["8.8.4.4", "8.8.8.8"]) && rule["outboundTag"] == "proxy"
+            }));
+        assert_eq!(cfg["dns"]["enableParallelQuery"], true);
+        assert_eq!(
+            cfg["dns"]["hosts"]["domain:googleapis.cn"],
+            "googleapis.com"
+        );
+    }
+
+    #[test]
+    fn provider_hostname_doh_requires_and_uses_static_bootstrap() {
+        let body = json!({
+            "remarks": "Provider DoH",
+            "dns": {
+                "hosts": {
+                    "resolver.example": ["203.0.113.53", "2001:4860:4860::8844"]
+                },
+                "servers": ["https://resolver.example/dns-query"]
+            },
+            "outbounds": [{
+                "tag": "proxy",
+                "protocol": "vless",
+                "settings": {"address": "vpn.example", "port": 443, "id": "uuid"}
+            }]
+        });
+        let server = parse_subscription(&body.to_string()).remove(0);
+        let cfg = build_android_xray_config(&server, &split(), false, "warning");
+
+        assert_eq!(
+            cfg["dns"]["servers"],
+            json!(["https://resolver.example/dns-query"])
+        );
+        assert_eq!(
+            dns_probe_urls(&server),
+            vec!["https://resolver.example/dns-query"]
+        );
+        assert!(cfg["routing"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| {
+                rule["ip"] == json!(["2001:4860:4860::8844", "203.0.113.53"])
                     && rule["outboundTag"] == "proxy"
             }));
     }
@@ -2260,7 +2402,29 @@ mod tests {
         let s =
             parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
         let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
-        assert_eq!(cfg["dns"]["servers"][0], "https://1.1.1.1/dns-query");
+        assert_eq!(
+            cfg["dns"]["servers"],
+            json!([
+                "https://cloudflare-dns.com/dns-query",
+                "https://dns.google/dns-query"
+            ])
+        );
+        assert_eq!(
+            cfg["dns"]["hosts"]["cloudflare-dns.com"],
+            json!(["1.1.1.1", "1.0.0.1"])
+        );
+        assert_eq!(
+            cfg["dns"]["hosts"]["dns.google"],
+            json!(["8.8.8.8", "8.8.4.4"])
+        );
+        assert_eq!(cfg["dns"]["enableParallelQuery"], true);
+        assert_eq!(
+            dns_probe_urls(&s),
+            vec![
+                "https://cloudflare-dns.com/dns-query",
+                "https://dns.google/dns-query"
+            ]
+        );
         let inbounds = cfg["inbounds"].as_array().unwrap();
         assert_eq!(inbounds.len(), 1);
         assert!(inbounds.iter().all(|inbound| {
@@ -2280,12 +2444,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|r| {
-                r.get("ip")
-                    .and_then(|v| v.as_array())
-                    .map(|a| a[0] == "1.1.1.1")
-                    .unwrap_or(false)
-            })
+            .find(|r| r.get("ip") == Some(&json!(["1.0.0.1", "1.1.1.1", "8.8.4.4", "8.8.8.8"])))
             .unwrap();
         assert_eq!(doh_rule["outboundTag"], "proxy");
     }

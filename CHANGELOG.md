@@ -2,6 +2,12 @@
 
 ## 0.3.1
 
+- Use hostname-based Cloudflare and Google DoH with static bootstrap addresses
+  and parallel fallback, avoiding DNS stalls on routes that reject HTTPS to a
+  bare IP while keeping every resolver connection inside the VPN.
+- Accept provider hostname DNS only with an explicit public-IP bootstrap,
+  preserve compatible provider DNS fields, and apply the Google APIs hostname
+  compatibility mapping used by established Xray clients.
 - Keep Android latency checks parallel but cap temporary Xray processes, allow
   HY2/QUIC cold starts more time, and use independent HTTP 204 probes to avoid
   false `n/a` results when one connectivity-check host is unavailable.
