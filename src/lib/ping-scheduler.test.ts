@@ -1,19 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { runPingsInParallel } from "./ping-scheduler";
+import {
+  MAX_CONCURRENT_LOCATION_PINGS,
+  runPingsInParallel,
+} from "./ping-scheduler";
 
 describe("ping scheduler", () => {
-  it("starts every location without waiting for an earlier location", async () => {
+  it("keeps several probes parallel without flooding Android with Xray processes", async () => {
     const started: number[] = [];
-    const releases: Array<() => void> = [];
-    const pending = runPingsInParallel([1, 2, 3, 4], async (location) => {
+    const locations = [1, 2, 3, 4, 5, 6];
+    let releaseFirstWave!: () => void;
+    const firstWave = new Promise<void>((resolve) => {
+      releaseFirstWave = resolve;
+    });
+    const pending = runPingsInParallel(locations, async (location) => {
       started.push(location);
-      await new Promise<void>((resolve) => releases.push(resolve));
+      if (location <= MAX_CONCURRENT_LOCATION_PINGS) await firstWave;
     });
 
     await Promise.resolve();
-    expect(started).toEqual([1, 2, 3, 4]);
+    expect(started).toEqual(locations.slice(0, MAX_CONCURRENT_LOCATION_PINGS));
 
-    for (const release of releases) release();
+    releaseFirstWave();
     await pending;
+    expect(started).toEqual(locations);
   });
 });

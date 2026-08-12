@@ -923,7 +923,10 @@ fn free_local_ports(count: usize) -> Result<Vec<u16>, String> {
     Ok(ports)
 }
 
-const PROXY_PING_URL: &str = "http://www.gstatic.com/generate_204";
+const PROXY_PING_URLS: &[&str] = &[
+    "http://www.gstatic.com/generate_204",
+    "http://cp.cloudflare.com/generate_204",
+];
 // Standard DNS query for A www.gstatic.com. The fixed transaction ID lets us
 // reject an unrelated/HTML response without pulling a DNS parser into the app.
 const DNS_PROBE_QUERY: &[u8] = &[
@@ -937,8 +940,8 @@ const DNS_PROBE_QUERY: &[u8] = &[
     0x00, 0x01, // IN
 ];
 
-fn build_proxy_ping_request(client: &reqwest::Client) -> reqwest::RequestBuilder {
-    client.head(PROXY_PING_URL)
+fn build_proxy_ping_request(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
+    client.head(url)
 }
 
 fn build_proxy_dns_probe_request(client: &reqwest::Client, url: &str) -> reqwest::RequestBuilder {
@@ -965,16 +968,26 @@ fn validate_dns_probe_response(body: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-async fn probe_http_through_proxy(client: &reqwest::Client) -> Result<u32, String> {
+async fn probe_http_url_through_proxy(client: &reqwest::Client, url: &str) -> Result<u32, String> {
     let started = Instant::now();
-    let resp = build_proxy_ping_request(client)
+    let resp = build_proxy_ping_request(client, url)
         .send()
         .await
-        .map_err(|e| format!("HEAD: {e}"))?;
+        .map_err(|e| format!("HEAD {url}: {e}"))?;
     if resp.status().as_u16() != 204 {
-        return Err(format!("unexpected status {}", resp.status()));
+        return Err(format!("{url} returned {}", resp.status()));
     }
     Ok(started.elapsed().as_millis().min(u32::MAX as u128) as u32)
+}
+
+async fn probe_http_through_proxy(client: &reqwest::Client) -> Result<u32, String> {
+    first_success(
+        PROXY_PING_URLS
+            .iter()
+            .map(|url| probe_http_url_through_proxy(client, url)),
+    )
+    .await
+    .ok_or_else(|| "all HTTP connectivity probes failed".to_string())
 }
 
 async fn probe_dns_url_through_proxy(client: &reqwest::Client, url: &str) -> Result<(), String> {
@@ -1157,20 +1170,18 @@ mod ping_tests {
 
     use super::{
         build_proxy_dns_probe_request, build_proxy_ping_request, first_success,
-        validate_dns_probe_response, DNS_PROBE_QUERY, PROXY_PING_URL,
+        validate_dns_probe_response, DNS_PROBE_QUERY, PROXY_PING_URLS,
     };
 
     #[test]
     fn proxy_ping_matches_xray_health_check_request() {
         let client = reqwest::Client::new();
-        let request = build_proxy_ping_request(&client).build().unwrap();
-
-        assert_eq!(request.method(), reqwest::Method::HEAD);
-        assert_eq!(request.url().as_str(), PROXY_PING_URL);
-        assert_eq!(
-            request.url().as_str(),
-            "http://www.gstatic.com/generate_204"
-        );
+        assert_eq!(PROXY_PING_URLS.len(), 2);
+        for url in PROXY_PING_URLS {
+            let request = build_proxy_ping_request(&client, url).build().unwrap();
+            assert_eq!(request.method(), reqwest::Method::HEAD);
+            assert_eq!(request.url().as_str(), *url);
+        }
     }
 
     #[test]

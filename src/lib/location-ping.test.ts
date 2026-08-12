@@ -23,7 +23,7 @@ describe("location ping transport selection", () => {
       measureLocationPing(location, "tcp", { tcpPingHost, proxyGetPing }),
     ).resolves.toBe(87);
     expect(tcpPingHost).not.toHaveBeenCalled();
-    expect(proxyGetPing).toHaveBeenCalledWith(location, 8000);
+    expect(proxyGetPing).toHaveBeenCalledWith(location, 15_000);
   });
 
   it("keeps TCP RTT only after a TCP location passes the proxy probe", async () => {

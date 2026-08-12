@@ -2,6 +2,9 @@
 
 ## 0.3.1
 
+- Keep Android latency checks parallel but cap temporary Xray processes, allow
+  HY2/QUIC cold starts more time, and use independent HTTP 204 probes to avoid
+  false `n/a` results when one connectivity-check host is unavailable.
 - Measure Hysteria2, WireGuard, mKCP and QUIC locations through their real
   proxy path instead of failing an inapplicable TCP-connect probe.
 - Replace the obsolete Xray 26.3.27 dataplane with 26.7.28. The old core
