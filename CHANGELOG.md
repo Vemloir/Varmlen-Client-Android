@@ -2,6 +2,8 @@
 
 ## 0.3.1
 
+- Measure Hysteria2, WireGuard, mKCP and QUIC locations through their real
+  proxy path instead of failing an inapplicable TCP-connect probe.
 - Replace the obsolete Xray 26.3.27 dataplane with 26.7.28. The old core
   predates fixes for Hysteria client reuse and native-TUN UDP FullCone, which
   caused Hysteria2 to connect while Google, Claude and other QUIC-heavy apps
