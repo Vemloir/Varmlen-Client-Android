@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import java.io.ByteArrayOutputStream
+import kotlin.jvm.Volatile
 import androidx.activity.result.ActivityResult
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -52,6 +53,12 @@ class ConnectArgs {
     var apps: Array<String> = arrayOf()
     var appsAllow: Boolean = false
     var logLevel: String = "warn"
+    /** In-app kill switch: core death → keep the session (traffic blocked),
+     *  retry the core — instead of tearing the VPN down (fail-open). */
+    var killSwitch: Boolean = true
+    /** Active core binary path (downloaded version or the APK-bundled one).
+     *  Empty/missing → the service falls back to the bundled binary. */
+    var bin: String = ""
 }
 
 @InvokeArg
@@ -87,6 +94,10 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
     private var pendingDisconnect: PendingDisconnect? = null
     private val connectTimeouts = Handler(Looper.getMainLooper())
 
+    // Latest degraded flag from the service (session up, core down, kill
+    // switch holding) — surfaced by status() so Rust can report "dropped".
+    @Volatile private var lastDegraded = false
+
     // Bridges the VpnService's (other-process) state broadcast to a JS event, so
     // the UI updates instantly on a notification/tile/system disconnect.
     private val stateReceiver = object : BroadcastReceiver() {
@@ -94,8 +105,10 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
             val running = i?.getBooleanExtra(VarmlenVpnService.EXTRA_RUNNING, false) ?: false
             val requestId = i?.getStringExtra(VarmlenVpnService.EXTRA_REQUEST_ID)
             val error = i?.getStringExtra(VarmlenVpnService.EXTRA_ERROR)
+            lastDegraded = i?.getBooleanExtra(VarmlenVpnService.EXTRA_DEGRADED, false) ?: false
             val data = JSObject()
             data.put("running", running)
+            data.put("degraded", lastDegraded)
             trigger("vpnState", data)
             val connect = pendingConnect
             when (
@@ -206,7 +219,11 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
     @Command
     fun status(invoke: Invoke) {
         val ret = JSObject()
-        ret.put("running", VarmlenVpnService.isRunning(activity))
+        val running = VarmlenVpnService.isRunning(activity)
+        ret.put("running", running)
+        // degraded only makes sense while the session is up (otherwise the
+        // service is gone and so is its retry state).
+        ret.put("degraded", running && lastDegraded)
         invoke.resolve(ret)
     }
 
@@ -425,8 +442,9 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    /** Paths the Rust side needs to run xray for a proxy ping: the bundled
-     *  binary (in nativeLibraryDir) and a writable config dir (filesDir). */
+    /** Paths the Rust side needs to run xray for a proxy ping: the APK
+     *  BUNDLED binary (in nativeLibraryDir) and a writable config dir
+     *  (filesDir). Rust uses this for the virtual "bundled" core version. */
     @Command
     fun xrayPaths(invoke: Invoke) {
         val ret = JSObject()
@@ -517,6 +535,8 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         intent.putExtra(VarmlenVpnService.EXTRA_APPS, args.apps)
         intent.putExtra(VarmlenVpnService.EXTRA_APPS_ALLOW, args.appsAllow)
         intent.putExtra(VarmlenVpnService.EXTRA_LOG_LEVEL, args.logLevel)
+        intent.putExtra(VarmlenVpnService.EXTRA_KILLSWITCH, args.killSwitch)
+        intent.putExtra(VarmlenVpnService.EXTRA_BIN, args.bin)
         intent.putExtra(VarmlenVpnService.EXTRA_REQUEST_ID, requestId)
         ContextCompat.startForegroundService(activity, intent)
     }

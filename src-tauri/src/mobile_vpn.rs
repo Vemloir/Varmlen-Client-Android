@@ -20,6 +20,14 @@ struct ConnectArgs {
     apps: Vec<String>,
     apps_allow: bool,
     log_level: String,
+    /// In-app kill switch: when the core dies, keep the VPN session alive
+    /// (traffic black-holed, no leak) and retry the core, instead of tearing
+    /// the VPN down.
+    killswitch: bool,
+    /// Absolute path of the xray binary to run (the active core: a downloaded
+    /// version or the APK-bundled one). The service falls back to the bundled
+    /// binary if the file is gone.
+    bin: String,
 }
 
 /// Managed handle to the Android plugin.
@@ -72,6 +80,8 @@ pub fn connect<R: Runtime>(
     apps: Vec<String>,
     apps_allow: bool,
     log_level: String,
+    killswitch: bool,
+    bin: String,
 ) -> Result<(), String> {
     let vpn = app.state::<Vpn<R>>();
     vpn.0
@@ -84,6 +94,8 @@ pub fn connect<R: Runtime>(
                 apps,
                 apps_allow,
                 log_level,
+                killswitch,
+                bin,
             },
         )
         .map(|_| ())
@@ -306,4 +318,23 @@ pub fn is_running<R: Runtime>(app: &AppHandle<R>) -> bool {
         .ok()
         .and_then(|v| v.get("running").and_then(|r| r.as_bool()))
         .unwrap_or(false)
+}
+
+/// (VPN session alive, tunnel degraded). `degraded` = the VPN session is up
+/// (traffic is being captured/black-holed) but the xray core is down while the
+/// kill switch holds — the app-level equivalent of the desktop "dropped"
+/// phase.
+#[derive(serde::Deserialize)]
+struct StatusDetailResp {
+    running: bool,
+    #[serde(default)]
+    degraded: bool,
+}
+
+pub fn status_detail<R: Runtime>(app: &AppHandle<R>) -> Result<(bool, bool), String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<StatusDetailResp>("status", ())
+        .map(|s| (s.running, s.degraded))
+        .map_err(|e| e.to_string())
 }

@@ -30,10 +30,19 @@ import org.json.JSONObject
 class VarmlenVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     private var xrayStarted = false
+    private var xrayBinPath: String = ""
 
     /** Set during an intentional teardown so the xray-exit watcher doesn't treat
      *  a deliberate kill as a crash. */
     @Volatile private var stopping = false
+
+    /** In-app kill switch: when the core dies, hold the VPN session (traffic is
+     *  black-holed — no leak) and retry the core, instead of tearing the VPN
+     *  down (fail-open). */
+    @Volatile private var killSwitch = true
+    /** Backoff bookkeeping for the core retry (kill switch ON). */
+    @Volatile private var lastCoreRetryAt = 0L
+    @Volatile private var coreDeadSince = 0L
 
     // Live notification (speed + uptime), refreshed once a second.
     private val notifHandler = Handler(Looper.getMainLooper())
@@ -65,8 +74,14 @@ class VarmlenVpnService : VpnService() {
         const val EXTRA_APPS = "apps"
         const val EXTRA_APPS_ALLOW = "appsAllow"
         const val EXTRA_LOG_LEVEL = "logLevel"
+        const val EXTRA_KILLSWITCH = "killSwitch"
+        /** Active core binary path (downloaded version or the APK-bundled
+         *  one); empty → fall back to the bundled binary. */
+        const val EXTRA_BIN = "bin"
         const val EXTRA_REQUEST_ID = "requestId"
         const val EXTRA_ERROR = "error"
+        /** Session is up but the core is down while the kill switch holds. */
+        const val EXTRA_DEGRADED = "degraded"
         const val LOG_FILE = "varmlen.log"
         /** Bound on what any single read (IPC response / log viewer) ever
          *  loads into memory, independent of how large the file is. */
@@ -105,6 +120,9 @@ class VarmlenVpnService : VpnService() {
         private const val MTU = 1500
         private const val PREFS = "varmlen_vpn"
         private const val WANT_FILE = "vpn_want.flag"
+        /** Min gap between kill-switch core retries (the core may crash-loop
+         *  on a broken location — never hammer it). */
+        private const val CORE_RETRY_BACKOFF_MS = 15_000L
 
         /** Actual running state — the SOURCE OF TRUTH for the UI/tile. Checks the
          *  app's running services (works cross-process for our own service)
@@ -154,6 +172,8 @@ class VarmlenVpnService : VpnService() {
             i.putExtra(EXTRA_APPS, (p.getStringSet("apps", emptySet()) ?: emptySet()).toTypedArray())
             i.putExtra(EXTRA_APPS_ALLOW, p.getBoolean("appsAllow", false))
             i.putExtra(EXTRA_LOG_LEVEL, p.getString("logLevel", "warn"))
+            i.putExtra(EXTRA_KILLSWITCH, p.getBoolean("killSwitch", true))
+            i.putExtra(EXTRA_BIN, p.getString("bin", "") ?: "")
             ContextCompat.startForegroundService(ctx, i)
         }
 
@@ -199,6 +219,8 @@ class VarmlenVpnService : VpnService() {
                         intent.getStringArrayExtra(EXTRA_APPS) ?: emptyArray(),
                         intent.getBooleanExtra(EXTRA_APPS_ALLOW, false),
                         intent.getStringExtra(EXTRA_LOG_LEVEL) ?: "warn",
+                        intent.getBooleanExtra(EXTRA_KILLSWITCH, true),
+                        intent.getStringExtra(EXTRA_BIN) ?: "",
                         requestId
                     )
                 } catch (e: Throwable) {
@@ -232,6 +254,7 @@ class VarmlenVpnService : VpnService() {
     private fun startAll(
         config: String, validationConfig: String, dns: String,
         apps: Array<String>, appsAllow: Boolean, logLevel: String,
+        killSwitch: Boolean, binPath: String,
         requestId: String?
     ) {
         // A reconnect may reach this same Service instance before Android has
@@ -239,11 +262,28 @@ class VarmlenVpnService : VpnService() {
         // idempotency guard into the new data plane or its next Disconnect
         // action would be ignored forever.
         stopAllInProgress = false
-        log("startAll nativeTun dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel")
-        val xrayBin = File(applicationInfo.nativeLibraryDir, "libxray.so")
-        require(xrayBin.isFile && xrayBin.canExecute()) {
-            "Bundled Xray executable is missing"
+        log("startAll nativeTun dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel killswitch=$killSwitch bin=$binPath")
+        // The active core: a user-downloaded version or the APK-bundled one.
+        // A missing selected binary (e.g. the version dir was cleaned) must
+        // never break a connect — fall back to the bundled core.
+        val bundledBin = File(applicationInfo.nativeLibraryDir, "libxray.so")
+        val xrayBin = if (binPath.isNotBlank()) {
+            val f = File(binPath)
+            if (f.isFile && f.canExecute()) f
+            else {
+                log("selected core binary missing ($binPath) — falling back to bundled")
+                bundledBin
+            }
+        } else {
+            bundledBin
         }
+        require(xrayBin.isFile && xrayBin.canExecute()) {
+            "Xray executable is missing"
+        }
+        xrayBinPath = xrayBin.absolutePath
+        this.killSwitch = killSwitch
+        lastCoreRetryAt = 0L
+        coreDeadSince = 0L
 
         // Android lockdown blocks packages that bypass the VPN. Normally this
         // package is excluded to keep Xray's own sockets out of its TUN. In
@@ -363,6 +403,8 @@ class VarmlenVpnService : VpnService() {
             .putStringSet("apps", apps.toSet())
             .putBoolean("appsAllow", appsAllow)
             .putString("logLevel", logLevel)
+            .putBoolean("killSwitch", killSwitch)
+            .putString("bin", xrayBin.absolutePath)
             .apply()
         setWant(this, true)
         broadcastState(true, requestId = requestId)
@@ -419,12 +461,14 @@ class VarmlenVpnService : VpnService() {
     private fun broadcastState(
         running: Boolean,
         error: String? = null,
-        requestId: String? = null
+        requestId: String? = null,
+        degraded: Boolean = false
     ) {
         try {
             val intent = Intent(ACTION_STATE)
                 .setPackage(packageName)
                 .putExtra(EXTRA_RUNNING, running)
+                .putExtra(EXTRA_DEGRADED, degraded)
             if (error != null) intent.putExtra(EXTRA_ERROR, error)
             if (requestId != null) intent.putExtra(EXTRA_REQUEST_ID, requestId)
             sendBroadcast(intent)
@@ -465,6 +509,10 @@ class VarmlenVpnService : VpnService() {
         }
         stopAllInProgress = true
         setWant(this, false)
+        // Clear kill-switch retry state so a fresh connect never inherits a
+        // stale "core dead" flag from a previous session.
+        coreDeadSince = 0L
+        lastCoreRetryAt = 0L
         teardown()
         try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Throwable) {}
         // Confirm only after every data-plane component is down. The plugin
@@ -530,9 +578,16 @@ class VarmlenVpnService : VpnService() {
             .build()
     }
 
-    /** Refresh the notification with the current up/down speed and uptime. */
+    /** Refresh the notification with the current up/down speed and uptime.
+     *  Also watches the core: on an unexpected exit the kill switch decides
+     *  whether we fail closed (hold the session, traffic blocked, retry the
+     *  core) or fail open (tear the VPN down so direct connectivity returns). */
     private fun updateNotification() {
         if (!stopping && xrayStarted && !XrayCore.isRunning()) {
+            if (killSwitch) {
+                onCoreCrashed()
+                return
+            }
             log("xray exited unexpectedly — disconnecting")
             stopAll("Xray exited unexpectedly")
             return
@@ -556,6 +611,65 @@ class VarmlenVpnService : VpnService() {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
                 .notify(NOTIF_ID, buildNotif(text))
         } catch (_: Throwable) {}
+    }
+
+    /** Core died while the kill switch is ON: fail closed. The TUN descriptor
+     *  stays open, so captured traffic is black-holed (nothing leaks out the
+     *  physical NIC) while we retry launching the core against the same TUN.
+     *  Retries are backed off so a crash-looping core can't spin the CPU. */
+    private fun onCoreCrashed() {
+        if (coreDeadSince == 0L) {
+            coreDeadSince = System.currentTimeMillis()
+            log("xray exited unexpectedly — kill switch holding, traffic blocked")
+            broadcastState(true, degraded = true)
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastCoreRetryAt >= CORE_RETRY_BACKOFF_MS) {
+            lastCoreRetryAt = now
+            restartCore()
+        }
+        // Reflect the blocked state in the notification (speed is meaningless
+        // while no core is running).
+        try {
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(NOTIF_ID, buildNotif("Tunnel down — traffic blocked, retrying…"))
+        } catch (_: Throwable) {}
+    }
+
+    /** Re-launch the core against the still-open TUN descriptor using the
+     *  last runtime config (it already reached a connected state, so no
+     *  re-validation is needed). */
+    private fun restartCore() {
+        val cfgFile = File(filesDir, "xray.json")
+        val fd = tun?.fd
+        if (stopping || fd == null || !cfgFile.isFile) {
+            log("core restart skipped (no live TUN/config)")
+            return
+        }
+        val ok = try {
+            XrayCore.start(
+                xrayBinPath,
+                cfgFile.absolutePath,
+                filesDir.absolutePath,
+                File(filesDir, LOG_FILE).absolutePath,
+                fd,
+            )
+        } catch (e: Throwable) {
+            log("core restart failed", e)
+            false
+        }
+        if (ok) {
+            coreDeadSince = 0L
+            lastTx = 0L; lastRx = 0L; lastStatsAt = 0L
+            log("xray restarted after crash")
+            broadcastState(true, degraded = false)
+        } else {
+            // Keep the death-watcher armed (it requires xrayStarted) so the
+            // next tick retries instead of leaving the session blocked with no
+            // core and no further attempts.
+            xrayStarted = true
+            log("xray restart failed — will retry")
+        }
     }
 
     private fun speed(bps: Long): String {

@@ -476,13 +476,13 @@ pub async fn vpn_connect(
     allow_lan: bool,
     log_level: Option<String>,
 ) -> Result<HelperResponse, String> {
-    // Android: VpnService gives its TUN descriptor directly to bundled Xray;
-    // Android owns the per-package split and OS kill-switch semantics.
+    // Android: VpnService gives its TUN descriptor directly to Xray; Android
+    // owns the per-package split and the in-app kill switch (core-death →
+    // hold the session, black-hole traffic, retry the core).
     let level = log_level.unwrap_or_else(|| "warn".to_string());
     validate_server(&server)?;
     #[cfg(target_os = "android")]
     {
-        let _ = killswitch;
         // The real candidate config: native TUN inbound whose descriptor is
         // handed to Xray by VpnService. Startup requires structural validation
         // and a live Xray process, but never a synthetic Internet destination.
@@ -501,6 +501,10 @@ pub async fn vpn_connect(
         // apps_allow = whitelist apps (only listed apps enter the TUN). App and
         // site split modes remain independent.
         let apps_allow = split.apps_selective();
+        // The active core: a user-downloaded version or the APK-bundled one.
+        let xray_bin = crate::core::active_core_bin(&app, CoreKind::Xray)
+            .await
+            .map_err(|e| format!("xray core: {e}"))?;
         crate::mobile_vpn::connect(
             &app,
             xray_cfg,
@@ -508,6 +512,8 @@ pub async fn vpn_connect(
             split.apps.clone(),
             apps_allow,
             level,
+            killswitch,
+            xray_bin.to_string_lossy().into_owned(),
         )?;
         return Ok(HelperResponse::connected(0));
     }
@@ -690,11 +696,14 @@ pub async fn vpn_disconnect(app: tauri::AppHandle) -> Result<HelperResponse, Str
 pub async fn vpn_status(app: tauri::AppHandle) -> Result<HelperResponse, String> {
     #[cfg(target_os = "android")]
     {
-        return Ok(if crate::mobile_vpn::is_running(&app) {
-            HelperResponse::connected(0)
-        } else {
-            HelperResponse::disconnected()
-        });
+        // Session up + core down + kill switch holding = the app-level
+        // "dropped" phase: traffic is blocked, not flowing direct.
+        return match crate::mobile_vpn::status_detail(&app) {
+            Ok((true, true)) => Ok(HelperResponse::dropped()),
+            Ok((true, false)) => Ok(HelperResponse::connected(0)),
+            Ok((false, _)) => Ok(HelperResponse::disconnected()),
+            Err(e) => Err(e),
+        };
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -1082,12 +1091,17 @@ pub async fn proxy_get_ping(
     let cfg = serde_json::to_string(&crate::xray::build_ping_config(&server, &ports)?)
         .map_err(|e| e.to_string())?;
 
-    // Android: exec the bundled xray from nativeLibraryDir, config in filesDir.
+    // Android: exec the ACTIVE core (downloaded version or the APK-bundled
+    // one), config in filesDir.
     #[cfg(target_os = "android")]
     let (xray_bin, cfg_path) = {
         let (bin, dir) = crate::mobile_vpn::xray_paths(&app)?;
+        let xray_bin = crate::core::active_core_bin(&app, CoreKind::Xray)
+            .await
+            .map_err(|e| format!("xray core: {e}"))?;
+        let _ = bin;
         (
-            std::path::PathBuf::from(bin),
+            xray_bin,
             std::path::PathBuf::from(dir).join(format!("ping-{}.json", ports[0])),
         )
     };

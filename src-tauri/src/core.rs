@@ -15,6 +15,9 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
+/// The Xray version pinned into the APK (scripts/android-native.sh). Runtime
+/// discovery (`bundled_tag`) reads the actual version from the binary, so this
+/// constant is documentation + the contract-test anchor, not a live source.
 #[cfg(target_os = "android")]
 const BUNDLED_XRAY_VERSION: &str = "26.3.27";
 
@@ -129,6 +132,7 @@ fn valid_tag(tag: &str) -> bool {
 /// The xray binary shipped as a Tauri resource (None if absent, e.g. in some
 /// dev runs). Bundled so the app has a working core on first launch without
 /// reaching GitHub — vital in censored networks where the download is blocked.
+#[cfg(not(target_os = "android"))]
 fn bundled_core_path(app: &AppHandle, kind: CoreKind) -> Option<PathBuf> {
     if kind != CoreKind::Xray {
         return None;
@@ -157,34 +161,42 @@ fn core_version_of(bin: &PathBuf) -> Option<String> {
 /// the app works offline on first launch. Idempotent + best-effort: a no-op
 /// when a usable core already exists or no bundled binary is present. The
 /// seeded binary still gets its caps via the normal grant flow.
+///
+/// Android: no seeding needed — the APK's jniLibs binary is the virtual
+/// "bundled" version and resolves in place (see `active_core_bin`).
 pub fn seed_bundled_core(app: &AppHandle) {
-    let kind = CoreKind::Xray;
-    if binary_path(app, kind).is_ok() {
-        return; // already have a usable, active core
-    }
-    let Some(src) = bundled_core_path(app, kind) else {
-        return;
-    };
-    let Some(tag) = core_version_of(&src).filter(|t| valid_tag(t)) else {
-        return;
-    };
-    let Ok(dest) = version_binary(app, kind, &tag) else {
-        return;
-    };
-    if let Some(parent) = dest.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
+    #[cfg(not(target_os = "android"))]
+    {
+        let kind = CoreKind::Xray;
+        if binary_path(app, kind).is_ok() {
+            return; // already have a usable, active core
+        }
+        let Some(src) = bundled_core_path(app, kind) else {
+            return;
+        };
+        let Some(tag) = core_version_of(&src).filter(|t| valid_tag(t)) else {
+            return;
+        };
+        let Ok(dest) = version_binary(app, kind, &tag) else {
+            return;
+        };
+        if let Some(parent) = dest.parent() {
+            if std::fs::create_dir_all(parent).is_err() {
+                return;
+            }
+        }
+        if std::fs::copy(&src, &dest).is_err() {
             return;
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+        }
+        let _ = write_active(app, kind, &tag);
     }
-    if std::fs::copy(&src, &dest).is_err() {
-        return;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
-    }
-    let _ = write_active(app, kind, &tag);
+    #[cfg(target_os = "android")]
+    let _ = app;
 }
 
 pub fn binary_path(app: &AppHandle, kind: CoreKind) -> Result<PathBuf, String> {
@@ -225,6 +237,92 @@ fn clear_active(app: &AppHandle, kind: CoreKind) -> Result<(), String> {
         std::fs::remove_file(p).map_err(|e| format!("remove active file: {e}"))?;
     }
     Ok(())
+}
+
+// --- Android: replaceable core ---------------------------------------------
+//
+// The APK ships one Xray binary as a jniLib (extracted to nativeLibraryDir and
+// executed in place — no copy). It is the virtual "bundled" version: it always
+// counts as installed, it can be activated, it updates only with the APK, and
+// it can never be deleted. Downloaded versions live in the versions dir like on
+// desktop and win whenever they are the active selection.
+
+#[cfg(target_os = "android")]
+#[derive(Clone)]
+struct BundledCore {
+    bin: PathBuf,
+    tag: String,
+}
+
+#[cfg(target_os = "android")]
+static BUNDLED: std::sync::OnceLock<Option<BundledCore>> = std::sync::OnceLock::new();
+
+/// The APK-bundled xray binary: ask the Kotlin VpnPlugin for the path it
+/// launches (nativeLibraryDir/libxray.so) and require it to exist. The APK is
+/// immutable for the process lifetime, so the result is cached.
+#[cfg(target_os = "android")]
+async fn bundled_core(app: &AppHandle) -> Option<BundledCore> {
+    if let Some(cached) = BUNDLED.get().cloned() {
+        return cached;
+    }
+    let resolved = match crate::mobile_vpn::xray_paths(app) {
+        Ok((bin, _dir)) => {
+            let p = PathBuf::from(bin);
+            if !p.exists() {
+                None
+            } else {
+                core_version_of(&p)
+                    .filter(|t| valid_tag(t))
+                    .map(|tag| BundledCore {
+                        bin: p,
+                        tag,
+                    })
+            }
+        }
+        Err(_) => None,
+    };
+    let _ = BUNDLED.set(resolved.clone());
+    resolved
+}
+
+/// The xray binary that a connect/ping should actually run for `kind`:
+/// the explicitly active downloaded version, or the APK-bundled one when
+/// nothing (valid) is selected. Self-heals a stale selection (e.g. the version
+/// dir was cleaned) by falling back to the bundled core.
+/// (Desktop keeps `binary_path` — the bundled-in-APK case is Android-only.)
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub async fn active_core_bin(app: &AppHandle, kind: CoreKind) -> Result<PathBuf, String> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = kind;
+        if let Some(tag) = active_tag(app, kind) {
+            let p = version_binary(app, kind, &tag)?;
+            if p.exists() {
+                return Ok(p);
+            }
+            // Stale selection — fall through to the bundled core.
+        }
+        return bundled_core(app)
+            .await
+            .map(|b| b.bin)
+            .ok_or_else(|| "bundled Xray executable is missing (damaged APK?)".into());
+    }
+    #[cfg(not(target_os = "android"))]
+    binary_path(app, kind)
+}
+
+/// (binary, tag, is_bundled) of the core that would run right now.
+#[cfg(target_os = "android")]
+async fn resolved_active(app: &AppHandle, kind: CoreKind) -> Option<(PathBuf, String, bool)> {
+    if let Some(tag) = active_tag(app, kind) {
+        let p = version_binary(app, kind, &tag).ok()?;
+        if p.exists() {
+            return Some((p, tag, false));
+        }
+    }
+    bundled_core(app)
+        .await
+        .map(|b| (b.bin, b.tag, true))
 }
 
 /// One-time cleanup of stale sing-box artifacts from the dual-core era. xray is
@@ -356,19 +454,6 @@ pub struct CoreRelease {
     pub prerelease: bool,
 }
 
-#[cfg(target_os = "android")]
-#[tauri::command]
-pub async fn list_core_releases(kind: String) -> Result<Vec<CoreRelease>, String> {
-    CoreKind::parse(&kind)?;
-    Ok(vec![CoreRelease {
-        tag: BUNDLED_XRAY_VERSION.into(),
-        name: format!("Xray {BUNDLED_XRAY_VERSION} (bundled)"),
-        date: None,
-        prerelease: false,
-    }])
-}
-
-#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn list_core_releases(kind: String) -> Result<Vec<CoreRelease>, String> {
     let kind = CoreKind::parse(&kind)?;
@@ -427,6 +512,15 @@ pub async fn list_core_releases(kind: String) -> Result<Vec<CoreRelease>, String
 fn asset_matches(kind: CoreKind, name: &str) -> bool {
     match kind {
         CoreKind::Xray => {
+            // Android: the official android/arm64 asset (Xray's CI builds it
+            // with NDK + CGO, exactly like the one scripts/android-native.sh
+            // pins for the APK).
+            #[cfg(target_os = "android")]
+            {
+                return std::env::consts::ARCH == "aarch64"
+                    && name == "Xray-android-arm64-v8a.zip";
+            }
+            #[cfg(not(target_os = "android"))]
             // The native-TUN host is Linux only.
             match std::env::consts::ARCH {
                 "x86_64" => name == "Xray-linux-64.zip",
@@ -629,71 +723,88 @@ fn extract_binary_zip(zip_bytes: &[u8], dest: &PathBuf, member: &str) -> Result<
 
 // --- public API ------------------------------------------------------------
 
-#[cfg(target_os = "android")]
-#[tauri::command]
-pub async fn core_info(_app: AppHandle, kind: String) -> Result<CoreInfo, String> {
-    CoreKind::parse(&kind)?;
-    Ok(CoreInfo {
-        installed: vec![InstalledVersion {
-            tag: BUNDLED_XRAY_VERSION.into(),
-            active: true,
-            bundled: true,
-        }],
-        active: Some(BUNDLED_XRAY_VERSION.into()),
-        latest: Some(BUNDLED_XRAY_VERSION.into()),
-        has_update: false,
-    })
-}
-
-#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn core_info(app: AppHandle, kind: String) -> Result<CoreInfo, String> {
     let kind = CoreKind::parse(&kind)?;
-    let active = active_tag(&app, kind);
-    let installed: Vec<InstalledVersion> = installed_tags(&app, kind)
-        .into_iter()
-        .map(|tag| InstalledVersion {
-            active: active.as_deref() == Some(tag.as_str()),
-            bundled: false,
-            tag,
-        })
-        .collect();
-    let latest = latest_version(kind).await.ok();
-    let has_update = match (&active, &latest) {
-        (_, None) => false,
-        (None, Some(_)) => true,
-        (Some(a), Some(l)) => version_cmp(l, a) == std::cmp::Ordering::Greater,
-    };
-    Ok(CoreInfo {
-        installed,
-        active,
-        latest,
-        has_update,
-    })
-}
 
-/// Download `version` (or latest when null) for `kind`. First install for a
-/// kind auto-activates it. xray installs trigger a setcap prompt: its native TUN
-/// needs CAP_NET_ADMIN (file caps are cleared whenever the binary is rewritten).
-#[cfg(target_os = "android")]
-#[tauri::command]
-pub async fn core_install(
-    _app: AppHandle,
-    kind: String,
-    version: Option<String>,
-) -> Result<String, String> {
-    CoreKind::parse(&kind)?;
-    if version
-        .as_deref()
-        .is_none_or(|tag| strip_v(tag) == BUNDLED_XRAY_VERSION)
+    // Android: the APK-bundled binary is always "installed" (virtual, in
+    // nativeLibraryDir) and is the fallback active core; downloaded versions
+    // are listed alongside it.
+    #[cfg(target_os = "android")]
     {
-        Ok(BUNDLED_XRAY_VERSION.into())
-    } else {
-        Err("Android Xray updates are delivered through Varmlen APK updates".into())
+        let bundled = bundled_core(&app).await;
+        let (active_bin, active_tag_str, _) = resolved_active(&app, kind).await.unwrap_or((
+            PathBuf::new(),
+            String::new(),
+            false,
+        ));
+        let _ = active_bin;
+        let installed: Vec<InstalledVersion> = {
+            let mut v: Vec<InstalledVersion> = bundled
+                .iter()
+                .map(|b| InstalledVersion {
+                    tag: b.tag.clone(),
+                    active: b.tag == active_tag_str,
+                    bundled: true,
+                })
+                .collect();
+            for tag in installed_tags(&app, kind) {
+                if bundled.as_ref().is_some_and(|b| b.tag == tag) {
+                    continue; // same version as the APK core — one row
+                }
+                v.push(InstalledVersion {
+                    tag: tag.clone(),
+                    active: tag == active_tag_str,
+                    bundled: false,
+                });
+            }
+            v.sort_by(|a, b| version_cmp(&b.tag, &a.tag));
+            v
+        };
+        let latest = latest_version(kind).await.ok();
+        let has_update = match (&active_tag_str, &latest) {
+            (a, Some(l)) if !a.is_empty() => version_cmp(l, a) == std::cmp::Ordering::Greater,
+            _ => false,
+        };
+        return Ok(CoreInfo {
+            installed,
+            active: (!active_tag_str.is_empty()).then_some(active_tag_str),
+            latest,
+            has_update,
+        });
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let active = active_tag(&app, kind);
+        let installed: Vec<InstalledVersion> = installed_tags(&app, kind)
+            .into_iter()
+            .map(|tag| InstalledVersion {
+                active: active.as_deref() == Some(tag.as_str()),
+                bundled: false,
+                tag,
+            })
+            .collect();
+        let latest = latest_version(kind).await.ok();
+        let has_update = match (&active, &latest) {
+            (_, None) => false,
+            (None, Some(_)) => true,
+            (Some(a), Some(l)) => version_cmp(l, a) == std::cmp::Ordering::Greater,
+        };
+        Ok(CoreInfo {
+            installed,
+            active,
+            latest,
+            has_update,
+        })
     }
 }
 
-#[cfg(not(target_os = "android"))]
+/// Download `version` (or latest when null) for `kind`. First install for a
+/// kind auto-activates it. On desktop, xray installs trigger a setcap prompt:
+/// its native TUN needs CAP_NET_ADMIN (file caps are cleared whenever the
+/// binary is rewritten). Android needs no caps — VpnService hands the core a
+/// TUN descriptor — so there is no prompt there.
 #[tauri::command]
 pub async fn core_install(
     app: AppHandle,
@@ -709,6 +820,7 @@ pub async fn core_install(
 
     download_and_install(&app, kind, &tag, &release).await?;
 
+    #[cfg_attr(target_os = "android", allow(unused_variables))]
     let became_active = if active_tag(&app, kind).is_none() {
         write_active(&app, kind, &tag)?;
         true
@@ -717,6 +829,9 @@ pub async fn core_install(
     };
     // File capabilities are cleared whenever the binary is (re)written, so the
     // active xray must be re-capped after any download of the active tag.
+    // Desktop only: Android has no file capabilities (VpnService passes the
+    // TUN descriptor to the core directly).
+    #[cfg(not(target_os = "android"))]
     if became_active && kind == CoreKind::Xray {
         let app2 = app.clone();
         let _ =
@@ -725,28 +840,30 @@ pub async fn core_install(
     Ok(tag)
 }
 
-/// Switch the active version for `kind`. Re-cap xray afterwards (its native TUN
-/// needs CAP_NET_ADMIN and caps are bound to the specific binary).
-#[cfg(target_os = "android")]
-#[tauri::command]
-pub async fn core_activate(_app: AppHandle, kind: String, tag: String) -> Result<(), String> {
-    CoreKind::parse(&kind)?;
-    if strip_v(&tag) == BUNDLED_XRAY_VERSION {
-        Ok(())
-    } else {
-        Err("this Xray version is not bundled with the installed APK".into())
-    }
-}
-
-#[cfg(not(target_os = "android"))]
+/// Switch the active version for `kind`. On desktop, re-cap xray afterwards
+/// (its native TUN needs CAP_NET_ADMIN and caps are bound to the specific
+/// binary). On Android, activating the bundled tag clears the selection so the
+/// APK core (virtual, always present) runs again.
 #[tauri::command]
 pub async fn core_activate(app: AppHandle, kind: String, tag: String) -> Result<(), String> {
     let kind = CoreKind::parse(&kind)?;
+    // Android: the bundled version is not on disk — selecting it means
+    // "use the APK core", i.e. drop the explicit selection.
+    #[cfg(target_os = "android")]
+    {
+        if let Some(b) = bundled_core(&app).await {
+            if strip_v(&tag) == b.tag {
+                return clear_active(&app, kind);
+            }
+        }
+    }
     let bin = version_binary(&app, kind, &tag)?;
     if !bin.exists() {
         return Err(format!("version {tag} isn't downloaded"));
     }
     write_active(&app, kind, &tag)?;
+    // Desktop only — see core_install for why Android skips the re-cap.
+    #[cfg(not(target_os = "android"))]
     if kind == CoreKind::Xray {
         let app2 = app.clone();
         let _ =
@@ -755,19 +872,22 @@ pub async fn core_activate(app: AppHandle, kind: String, tag: String) -> Result<
     Ok(())
 }
 
-#[cfg(target_os = "android")]
-#[tauri::command]
-pub async fn core_uninstall(_app: AppHandle, kind: String, _tag: String) -> Result<(), String> {
-    CoreKind::parse(&kind)?;
-    Err("the bundled Android Xray can only be removed with Varmlen".into())
-}
-
-#[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub async fn core_uninstall(app: AppHandle, kind: String, tag: String) -> Result<(), String> {
     let kind = CoreKind::parse(&kind)?;
     if !valid_tag(&tag) {
         return Err(format!("invalid version tag: {tag}"));
+    }
+    // Android: the APK-bundled version is virtual and can never be deleted.
+    #[cfg(target_os = "android")]
+    {
+        if let Some(b) = bundled_core(&app).await {
+            if strip_v(&tag) == b.tag {
+                return Err(
+                    "the bundled Xray ships with the Varmlen APK and can't be removed".into(),
+                );
+            }
+        }
     }
     let was_active = active_tag(&app, kind).as_deref() == Some(strip_v(&tag));
     let dir = versions_dir(&app, kind)?.join(strip_v(&tag));

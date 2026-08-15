@@ -2,6 +2,19 @@
 
 ## 0.3.1
 
+- Android: the Xray core is now replaceable like in the other Varmlen clients —
+  download, switch and remove Xray versions in Settings → VPN core (the
+  APK-bundled version stays installed, is marked "Bundled" and can only be
+  removed with a new Varmlen APK). Connects and latency probes always run the
+  selected core; a deleted/stale selection self-heals to the bundled one.
+- Android: a real in-app kill switch (Settings → General, on by default). When
+  the core dies unexpectedly, Varmlen now keeps the VPN session alive — captured
+  traffic is blocked, nothing leaks direct — and retries the core every 15 s,
+  with the notification showing "Tunnel down — traffic blocked, retrying…" and
+  the UI reporting the blocked "dropped" state. With the kill switch off the
+  old fail-open behaviour is kept (VPN tears down, traffic goes direct).
+  Android's system-level Always-on VPN / Block connections without VPN remains
+  available as an optional extra (it also covers Varmlen being closed).
 - Use hostname-based Cloudflare and Google DoH with static bootstrap addresses
   and parallel fallback, avoiding DNS stalls on routes that reject HTTPS to a
   bare IP while keeping every resolver connection inside the VPN.
