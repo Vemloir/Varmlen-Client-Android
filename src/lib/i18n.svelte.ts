@@ -396,7 +396,6 @@ const RU: Dict = {
   "core.currentlyInstalled": "сейчас установлена",
   "core.active": "Активна",
   "core.bundled": "Встроенная",
-  "core.androidManaged": "Встроено в APK; обновите Varmlen, чтобы обновить Xray.",
   "core.use": "Выбрать",
   "core.download": "Скачать",
   "core.reinstall": "Перекачать",
