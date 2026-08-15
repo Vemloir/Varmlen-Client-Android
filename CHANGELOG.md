@@ -13,10 +13,11 @@
   false `n/a` results when one connectivity-check host is unavailable.
 - Measure Hysteria2, WireGuard, mKCP and QUIC locations through their real
   proxy path instead of failing an inapplicable TCP-connect probe.
-- Replace the obsolete Xray 26.3.27 dataplane with 26.7.28. The old core
-  predates fixes for Hysteria client reuse and native-TUN UDP FullCone, which
-  caused Hysteria2 to connect while Google, Claude and other QUIC-heavy apps
-  remained partially offline.
+- Keep the APK-bundled core on stable Xray 26.3.27. The first 0.3.1 asset
+  briefly bundled prerelease 26.7.28 and was replaced (versionCode 3013
+  updates it on installed devices). Known trade-off: 26.3.27 predates the
+  Hysteria client-reuse and native-TUN UDP FullCone dataplane fixes, so
+  QUIC-heavy apps on HY2 locations may remain partially offline.
 - Preserve public literal-IP DNS servers from full JSON profiles, including
   ordinary UDP DNS such as `8.8.8.8`, and force them through the selected
   proxy instead of silently replacing them with Cloudflare DoH.

@@ -16,7 +16,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(target_os = "android")]
-const BUNDLED_XRAY_VERSION: &str = "26.7.28";
+const BUNDLED_XRAY_VERSION: &str = "26.3.27";
 
 /// Which core a request targets. xray is now the sole core: its native tun does
 /// TUN capture, its routing does the per-app/site split + DNS, and its outbound
