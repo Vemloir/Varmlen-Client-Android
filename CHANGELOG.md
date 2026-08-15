@@ -2,11 +2,18 @@
 
 ## 0.3.1
 
-- Android: the Xray core is now replaceable like in the other Varmlen clients —
-  download, switch and remove Xray versions in Settings → VPN core (the
-  APK-bundled version stays installed, is marked "Bundled" and can only be
-  removed with a new Varmlen APK). Connects and latency probes always run the
-  selected core; a deleted/stale selection self-heals to the bundled one.
+- Android: the TUN is now IPv4-only (the same default as v2rayNG). On the vast
+  majority of proxy servers — which have IPv4-only egress — apps that prefer
+  IPv6 (YouTube, Google Play, ...) were getting AAAA records from their own
+  DoH/DoT resolvers, and every IPv6 attempt died at the remote server with
+  "network is unreachable". Without an IPv6 address/route on the TUN, an app's
+  IPv6 attempt is dropped locally in milliseconds and Happy-Eyeballs falls
+  back to IPv4, fixing Google/YouTube on HY2 locations.
+- Android: the Xray core stays bundled with the APK (marked "Bundled",
+  immutable). Android 10+ refuses to execute binaries downloaded into the app's
+  private storage (the OS W^X policy), so the version manager is hidden on
+  Android; a stale downloaded-core selection self-heals to the bundled core
+  instead of breaking the connect.
 - Android: a real in-app kill switch (Settings → General, on by default). When
   the core dies unexpectedly, Varmlen now keeps the VPN session alive — captured
   traffic is blocked, nothing leaks direct — and retries the core every 15 s,

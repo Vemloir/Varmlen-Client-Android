@@ -116,7 +116,6 @@ class VarmlenVpnService : VpnService() {
         private const val CHANNEL = "varmlen_vpn"
         private const val NOTIF_ID = 1
         private const val TUN_ADDR = "10.10.10.2"
-        private const val TUN_ADDR_V6 = "fd00:7661:726d:6c65::2"
         private const val MTU = 1500
         private const val PREFS = "varmlen_vpn"
         private const val WANT_FILE = "vpn_want.flag"
@@ -280,7 +279,6 @@ class VarmlenVpnService : VpnService() {
         require(xrayBin.isFile && xrayBin.canExecute()) {
             "Xray executable is missing"
         }
-        xrayBinPath = xrayBin.absolutePath
         this.killSwitch = killSwitch
         lastCoreRetryAt = 0L
         coreDeadSince = 0L
@@ -310,12 +308,19 @@ class VarmlenVpnService : VpnService() {
         val validationFile = File(filesDir, "xray-validate.json").apply {
             writeText(runtimeValidationConfig)
         }
-        val validated = XrayCore.validate(
-            xrayBin.absolutePath,
-            validationFile.absolutePath,
-            File(filesDir, LOG_FILE).absolutePath,
-        )
+        var activeBin = xrayBin
+        var validated = runValidation(activeBin, validationFile)
+        if (!validated && activeBin.absolutePath != bundledBin.absolutePath) {
+            // Android 10+ (targetSdk 29+) refuses exec() on files in the app's
+            // private storage (W^X policy), so a previously selected downloaded
+            // core can be structurally fine yet unrunnable. A connect must never
+            // be broken by that — heal the selection to the bundled core.
+            log("selected core ${activeBin.absolutePath} could not run — falling back to the bundled core")
+            activeBin = bundledBin
+            validated = runValidation(activeBin, validationFile)
+        }
         check(validated) { "Xray rejected the generated config (see log for details)" }
+        xrayBinPath = activeBin.absolutePath
 
         startForegroundOrThrow()
         val cfgFile = File(filesDir, "xray.json").apply { writeText(runtimeConfig) }
@@ -323,13 +328,19 @@ class VarmlenVpnService : VpnService() {
         // Establish the replacement TUN before stopping an existing data plane.
         // Android atomically switches VPN routing to the new descriptor, so a
         // reconnect can briefly block while Xray starts but cannot leak traffic.
+        // IPv4-only TUN (deliberately, the same default as v2rayNG): the vast
+        // majority of proxy servers have IPv4-only egress. With an IPv6 address
+        // on the TUN, apps that prefer IPv6 (YouTube, Play, ...) get AAAA
+        // records from their own DoH/DoT resolvers and every v6 attempt dies at
+        // the remote server ("network is unreachable") instead of failing fast
+        // locally. Without a v6 address/route here, an app's v6 attempt is
+        // dropped by gVisor in milliseconds and Happy-Eyeballs falls back to
+        // IPv4 — which the proxy can actually serve.
         val builder = Builder()
             .setSession("Varmlen")
             .setMtu(MTU)
             .addAddress(TUN_ADDR, 30)
-            .addAddress(TUN_ADDR_V6, 126)
             .addRoute("0.0.0.0", 0)
-            .addRoute("::", 0)
             .addDnsServer(dns)
         if (underlying != null) builder.setUnderlyingNetworks(arrayOf(underlying.first))
         val appPolicy = vpnAppPolicy(apps, appsAllow, packageName)
@@ -378,9 +389,9 @@ class VarmlenVpnService : VpnService() {
 
         // Rust duplicates the descriptor and launches Xray natively. Android's
         // Java process launcher closes arbitrary descriptors before exec.
-        log("exec xray native TUN: ${xrayBin.absolutePath} fd=${fd.fd}")
+        log("exec xray native TUN: $xrayBinPath fd=${fd.fd}")
         val started = XrayCore.start(
-            xrayBin.absolutePath,
+            xrayBinPath,
             cfgFile.absolutePath,
             filesDir.absolutePath,
             File(filesDir, LOG_FILE).absolutePath,
@@ -404,7 +415,7 @@ class VarmlenVpnService : VpnService() {
             .putBoolean("appsAllow", appsAllow)
             .putString("logLevel", logLevel)
             .putBoolean("killSwitch", killSwitch)
-            .putString("bin", xrayBin.absolutePath)
+            .putString("bin", xrayBinPath)
             .apply()
         setWant(this, true)
         broadcastState(true, requestId = requestId)
@@ -617,6 +628,13 @@ class VarmlenVpnService : VpnService() {
      *  stays open, so captured traffic is black-holed (nothing leaks out the
      *  physical NIC) while we retry launching the core against the same TUN.
      *  Retries are backed off so a crash-looping core can't spin the CPU. */
+    private fun runValidation(bin: File, validationFile: File): Boolean =
+        XrayCore.validate(
+            bin.absolutePath,
+            validationFile.absolutePath,
+            File(filesDir, LOG_FILE).absolutePath,
+        )
+
     private fun onCoreCrashed() {
         if (coreDeadSince == 0L) {
             coreDeadSince = System.currentTimeMillis()

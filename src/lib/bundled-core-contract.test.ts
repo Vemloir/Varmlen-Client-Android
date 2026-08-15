@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const read = (relative: string) =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
-describe("Android replaceable Xray core + in-app kill switch", () => {
+describe("Android bundled Xray core + in-app kill switch", () => {
   it("keeps the APK-bundled core in sync with the native build script", () => {
     const core = read("../../src-tauri/src/core.rs");
     const nativeBuild = read("../../scripts/android-native.sh");
@@ -17,23 +17,36 @@ describe("Android replaceable Xray core + in-app kill switch", () => {
     expect(nativeBuild).toContain("libxray.so.version");
   });
 
-  it("lets Android manage core versions like the other Varmlen clients", () => {
-    const core = read("../../src-tauri/src/core.rs");
+  it("keeps the Android core bundled-only (OS W^X blocks exec of downloaded binaries)", () => {
+    const page = read("../routes/settings/+page.svelte");
+    const i18n = read("i18n.svelte.ts");
+    const service = read(
+      "../../src-tauri/gen/android/app/src/main/java/app/varmlen/client/VarmlenVpnService.kt",
+    );
 
-    // Downloads the official android/arm64 asset, exactly like the APK pin.
-    expect(core).toContain('name == "Xray-android-arm64-v8a.zip"');
-    // The bundled core is virtual (jniLibs, in place) and can never be deleted.
-    expect(core).toContain("bundled_core(app)");
-    expect(core).toContain(
-      "the bundled Xray ships with the Varmlen APK and can't be removed",
+    // Android 10+ (targetSdk 29+) refuses exec() on files in the app's private
+    // storage, so downloaded cores cannot run. The UI says so and hides the
+    // version manager on Android only.
+    expect(page).toContain("{#if showVersions && !isAndroid}");
+    expect(page).toContain("{t(\"core.androidManaged\")}");
+    expect(i18n).toContain('"core.androidManaged"');
+    // A stale selection (e.g. from a build that allowed downloads) must never
+    // break a connect: validation failure heals to the bundled core.
+    expect(service).toContain("falling back to the bundled core");
+  });
+
+  it("keeps the Android TUN IPv4-only so IPv4-only proxy servers serve v6-preferring apps", () => {
+    const service = read(
+      "../../src-tauri/gen/android/app/src/main/java/app/varmlen/client/VarmlenVpnService.kt",
     );
-    // A downloaded version runs whenever it is the active selection; a stale
-    // selection self-heals back to the bundled core.
-    expect(core).toContain("pub async fn active_core_bin");
-    // Desktop-only setcap must not fire on Android.
-    expect(core).toMatch(
-      /#\[cfg\(not\(target_os = "android"\)\)\]\s+if became_active && kind == CoreKind::Xray/,
-    );
+
+    // No IPv6 address / no ::/0 route on the TUN: an app's IPv6 attempt is
+    // dropped locally in milliseconds and Happy-Eyeballs falls back to IPv4,
+    // instead of dying at an IPv4-only remote server ("network is unreachable").
+    expect(service).not.toContain(".addAddress(TUN_ADDR_V6");
+    expect(service).not.toContain('.addRoute("::", 0)');
+    expect(service).toContain('.addAddress(TUN_ADDR, 30)');
+    expect(service).toContain('.addRoute("0.0.0.0", 0)');
   });
 
   it("exposes the kill switch as a real in-app toggle on Android", () => {
@@ -58,14 +71,5 @@ describe("Android replaceable Xray core + in-app kill switch", () => {
     expect(service).toContain("restartCore");
     expect(service).toContain("CORE_RETRY_BACKOFF_MS");
     expect(service).toContain("EXTRA_KILLSWITCH");
-  });
-
-  it("lets Android open the core versions modal (like desktop)", () => {
-    const page = read("../routes/settings/+page.svelte");
-    expect(page).not.toContain("{#if showVersions && !isAndroid}");
-    expect(page).not.toContain("core.androidManaged");
-    // Bundled row stays identifiable inside the shared modal.
-    expect(page).toContain('t("core.bundled")');
-    expect(page).toContain("{#if !v.bundled}{@render delBtn(v.tag, isSwitching)}{/if}");
   });
 });
