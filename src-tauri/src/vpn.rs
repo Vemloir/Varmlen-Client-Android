@@ -982,7 +982,9 @@ async fn probe_http_url_through_proxy(client: &reqwest::Client, url: &str) -> Re
     let resp = build_proxy_ping_request(client, url)
         .send()
         .await
-        .map_err(|e| format!("HEAD {url}: {e}"))?;
+        // Debug, not Display: reqwest repeats the URL and hides the transport
+        // reason, and the reason is the only useful half of a failed probe.
+        .map_err(|e| format!("HEAD {url}: {e:?}"))?;
     if resp.status().as_u16() != 204 {
         return Err(format!("{url} returned {}", resp.status()));
     }
@@ -1003,7 +1005,7 @@ async fn probe_dns_url_through_proxy(client: &reqwest::Client, url: &str) -> Res
     let resp = build_proxy_dns_probe_request(client, url)
         .send()
         .await
-        .map_err(|e| format!("DNS probe {url}: {e}"))?;
+        .map_err(|e| format!("DNS probe {url}: {e:?}"))?;
     if resp.status().as_u16() != 200 {
         return Err(format!("DNS probe returned HTTP {}", resp.status()));
     }
