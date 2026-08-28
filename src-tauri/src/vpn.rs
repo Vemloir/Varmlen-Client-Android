@@ -1023,10 +1023,17 @@ async fn probe_dns_through_proxy(client: &reqwest::Client, urls: &[String]) -> R
     .ok_or_else(|| "all configured DNS resolvers failed".to_string())
 }
 
+/// How long the profile's resolver may take before the strict probe round stops
+/// waiting for it. A provider that refuses the resolver is common; the second
+/// round measures the location either way, so the resolver must not eat the
+/// whole latency budget.
+const RESOLVER_PROBE_BUDGET: Duration = Duration::from_secs(5);
+
 async fn probe_proxy_port(
     port: u16,
     timeout: Duration,
     dns_urls: &[String],
+    require_dns: bool,
 ) -> Result<u32, String> {
     let client = reqwest::Client::builder()
         .proxy(
@@ -1043,16 +1050,29 @@ async fn probe_proxy_port(
     // concrete outbound. Plain DNS endpoints cannot be queried through this
     // HTTP-only validation inbound; the hostname-based HTTP probe still proves
     // that the selected outbound can resolve names and carry web traffic.
-    if dns_urls.is_empty() {
+    if dns_urls.is_empty() || !require_dns {
         return probe_http_through_proxy(&client).await;
     }
 
     // Run both checks concurrently so the displayed value remains HTTP RTT
-    // instead of being inflated by a second sequential round trip.
-    let (http_rtt, ()) = tokio::try_join!(
-        probe_http_through_proxy(&client),
-        probe_dns_through_proxy(&client, dns_urls),
-    )?;
+    // instead of being inflated by a second sequential round trip. The resolver
+    // leg has its own shorter budget, and `try_join!` drops the whole path the
+    // moment it refuses to answer: a path that cannot pass the strict round has
+    // nothing left to prove by finishing a web request.
+    let resolver = async {
+        tokio::time::timeout(
+            timeout.min(RESOLVER_PROBE_BUDGET),
+            probe_dns_through_proxy(&client, dns_urls),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "the profile's resolver did not answer within {} s through this path",
+                RESOLVER_PROBE_BUDGET.as_secs()
+            )
+        })?
+    };
+    let (http_rtt, ()) = tokio::try_join!(probe_http_through_proxy(&client), resolver)?;
     Ok(http_rtt)
 }
 
@@ -1161,11 +1181,30 @@ pub async fn proxy_get_ping(
         if remaining.is_zero() {
             return Err("proxy ping timed out before probing".to_string());
         }
+        // Two rounds. The first requires the profile's resolver to answer
+        // through the same path; a round that fails can mean the path carried
+        // nothing, or that it carried everything except that resolver. Only the
+        // second reading is a healthy location, so the second round asks for
+        // the web request alone and reports its latency.
+        if let Some(rtt) = first_success(
+            ports
+                .iter()
+                .copied()
+                .map(|port| probe_proxy_port(port, remaining, &dns_urls, true)),
+        )
+        .await
+        {
+            return Ok(rtt);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err("proxy ping timed out before the resolver-free round".to_string());
+        }
         first_success(
             ports
                 .iter()
                 .copied()
-                .map(|port| probe_proxy_port(port, remaining, &dns_urls)),
+                .map(|port| probe_proxy_port(port, remaining, &dns_urls, false)),
         )
         .await
         .ok_or_else(|| "all proxy variants failed the latency probe".to_string())
@@ -1186,6 +1225,22 @@ mod ping_tests {
         build_proxy_dns_probe_request, build_proxy_ping_request, first_success,
         validate_dns_probe_response, DNS_PROBE_QUERY, PROXY_PING_URLS,
     };
+
+    /// The resolver leg speaks DNS over HTTPS, and Quad9 -- the resolver every
+    /// profile without an explicit one falls back to -- answers a HTTP/1.1
+    /// `application/dns-message` POST with `505`. Both legs have to pass for a
+    /// location to look alive, so while ALPN never offered h2 every location on
+    /// the default resolver read as n/a through a proxy carrying its traffic
+    /// fine. `http2_prior_knowledge` exists only with reqwest's `http2`
+    /// feature, which makes this test a compile-time guard on Cargo.toml.
+    #[test]
+    fn the_probe_client_offers_http2_to_doh_resolvers() {
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .expect("a DoH-capable probe client");
+        drop(client);
+    }
 
     #[test]
     fn proxy_ping_matches_xray_health_check_request() {

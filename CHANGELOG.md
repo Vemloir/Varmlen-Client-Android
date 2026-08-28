@@ -2,6 +2,15 @@
 
 ## 0.3.1
 
+- Android: a location whose profile resolves through Quad9 reported n/a while
+  it carried traffic normally. Latency is only shown when both an ordinary web
+  request and the profile's own DNS-over-HTTPS resolver answer through the same
+  path, but `reqwest` was built without `http2` and `9.9.9.9/dns-query` -- the
+  default resolver -- rejects a HTTP/1.1 `application/dns-message` POST with
+  `505`, so no location on the default resolver ever showed a number. The
+  resolver is now asked in the first probe round and dropped in the second,
+  which measures the proxy path alone: a provider that refuses it costs the
+  probe five seconds and not its latency.
 - Android: the TUN is now IPv4-only (the same default as v2rayNG). On the vast
   majority of proxy servers — which have IPv4-only egress — apps that prefer
   IPv6 (YouTube, Google Play, ...) were getting AAAA records from their own
