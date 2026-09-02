@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.1
+## 0.3.2
 
 - Android: a location whose profile resolves through Quad9 reported n/a while
   it carried traffic normally. Latency is only shown when both an ordinary web
@@ -31,6 +31,9 @@
   old fail-open behaviour is kept (VPN tears down, traffic goes direct).
   Android's system-level Always-on VPN / Block connections without VPN remains
   available as an optional extra (it also covers Varmlen being closed).
+
+## 0.3.1
+
 - Use hostname-based Cloudflare and Google DoH with static bootstrap addresses
   and parallel fallback, avoiding DNS stalls on routes that reject HTTPS to a
   bare IP while keeping every resolver connection inside the VPN.
