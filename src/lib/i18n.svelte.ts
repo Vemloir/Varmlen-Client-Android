@@ -23,6 +23,7 @@ const EN: Dict = {
   "home.empty": "No subscriptions yet. Tap + in the top-right corner.",
   "home.autoUpdate": "auto-update {h}h",
   "home.expires": "Expires: {date}",
+  "home.selectionLost": "“{name}” is no longer in the subscription. Nothing else was selected automatically — pick a location.",
   "home.variants": "{n} variants",
 
   // subscription menu
@@ -198,7 +199,6 @@ const EN: Dict = {
   "core.currentlyInstalled": "currently installed",
   "core.active": "Active",
   "core.bundled": "Bundled",
-  "core.androidManaged": "Bundled with the APK. Android blocks apps from running downloaded binaries (OS W^X restriction), so Xray updates with Varmlen.",
   "core.use": "Use",
   "core.download": "Download",
   "core.reinstall": "Re-download",
@@ -231,6 +231,7 @@ const RU: Dict = {
   "home.empty": "Пока нет подписок. Нажмите + в правом верхнем углу.",
   "home.autoUpdate": "автообновление {h}ч",
   "home.expires": "Истекает: {date}",
+  "home.selectionLost": "«{name}» больше нет в подписке. Ничего другое вместо неё не выбирали — выбери локацию сам.",
   "home.variants": "вариантов: {n}",
 
   "menu.info": "Информация о подписке",
@@ -397,7 +398,6 @@ const RU: Dict = {
   "core.currentlyInstalled": "сейчас установлена",
   "core.active": "Активна",
   "core.bundled": "Встроенная",
-  "core.androidManaged": "Встроена в APK. Android не даёт приложению запускать скачанные бинарники (системное ограничение W^X), поэтому Xray обновляется вместе с Varmlen.",
   "core.use": "Выбрать",
   "core.download": "Скачать",
   "core.reinstall": "Перекачать",

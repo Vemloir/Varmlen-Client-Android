@@ -25,11 +25,12 @@ describe("Android bundled Xray core + in-app kill switch", () => {
     );
 
     // Android 10+ (targetSdk 29+) refuses exec() on files in the app's private
-    // storage, so downloaded cores cannot run. The UI says so and hides the
-    // version manager on Android only.
+    // storage, so downloaded cores cannot run: the version manager stays hidden.
+    // The core row shows only its status — no OS-restriction essay (the user
+    // cannot act on it, and it read as noise).
     expect(page).toContain("{#if showVersions && !isAndroid}");
-    expect(page).toContain("{t(\"core.androidManaged\")}");
-    expect(i18n).toContain('"core.androidManaged"');
+    expect(page).not.toContain("core.androidManaged");
+    expect(i18n).not.toContain('"core.androidManaged"');
     // A stale selection (e.g. from a build that allowed downloads) must never
     // break a connect: validation failure heals to the bundled core.
     expect(service).toContain("falling back to the bundled core");

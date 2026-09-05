@@ -26,6 +26,11 @@ import {
 } from "$lib/location-draft";
 import { transportSummary } from "$lib/server-label";
 import {
+  resolveSelection,
+  serverKey,
+  type SelectionIdentity,
+} from "$lib/subscription-selection";
+import {
   nextFutureRefresh,
   nextRefreshBatch,
 } from "$lib/subscription-refresh";
@@ -86,20 +91,12 @@ interface Persisted {
   /** Stable host:port of the selection — survives a refresh (which reassigns the
    *  per-entry random ids) so the chosen location stays chosen. */
   selectedKey: string | null;
-}
-
-/** Stable identity of a server entry (random `id` changes on every parse). */
-function serverKey(srv: ServerEntry): string {
-  return srv.raw
-    ? [
-        srv.raw.protocol,
-        srv.raw.host,
-        srv.raw.port,
-        srv.raw.uuid,
-        srv.raw.password ?? "",
-        srv.raw.method ?? "",
-      ].join("\u0000")
-    : srv.id;
+  /** Which subscription and which location label the user picked. A provider
+   *  rotates the endpoint hosts inside a profile (a composite profile's host is
+   *  its first proxy outbound), so `selectedKey` alone can stop matching after a
+   *  refresh while the location the user chose is still there. */
+  selectedSubId: string | null;
+  selectedLabel: string | null;
 }
 
 const KEY = "varmlen.subs";
@@ -152,10 +149,17 @@ function migrateIds(subs: Subscription[]): { subs: Subscription[]; remapped: Rec
 }
 
 function load(): Persisted {
-  if (!browser) return { subs: [], selectedServerId: null, selectedKey: null };
+  const empty: Persisted = {
+    subs: [],
+    selectedServerId: null,
+    selectedKey: null,
+    selectedSubId: null,
+    selectedLabel: null,
+  };
+  if (!browser) return empty;
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return { subs: [], selectedServerId: null, selectedKey: null };
+    if (!raw) return empty;
     const parsed = JSON.parse(raw) as Partial<Persisted>;
     const rawSubs = Array.isArray(parsed.subs) ? parsed.subs : [];
     const { subs, remapped } = migrateIds(rawSubs);
@@ -169,9 +173,19 @@ function load(): Persisted {
     }
     const selectedKey =
       typeof parsed.selectedKey === "string" ? parsed.selectedKey : null;
-    return { subs, selectedServerId: selected, selectedKey };
+    const selectedSubId =
+      typeof parsed.selectedSubId === "string" ? parsed.selectedSubId : null;
+    const selectedLabel =
+      typeof parsed.selectedLabel === "string" ? parsed.selectedLabel : null;
+    return {
+      subs,
+      selectedServerId: selected,
+      selectedKey,
+      selectedSubId,
+      selectedLabel,
+    };
   } catch {
-    return { subs: [], selectedServerId: null, selectedKey: null };
+    return empty;
   }
 }
 
@@ -206,6 +220,11 @@ class SubsStore {
   list = $state<Subscription[]>(_initialSubs.subs);
   selectedServerId = $state<string | null>(_initialSubs.selectedServerId);
   selectedKey = $state<string | null>(_initialSubs.selectedKey);
+  selectedSubId = $state<string | null>(_initialSubs.selectedSubId);
+  selectedLabel = $state<string | null>(_initialSubs.selectedLabel);
+  /** The chosen location is missing from the subscription right now. Set by
+   *  reconcileSelection; the UI says so instead of another location being picked. */
+  selectionLost = $state(false);
   importing = $state(false);
   /** Increments when provider data is applied. ConnStore uses it to absorb the
    * new config without reconnecting an already-running tunnel. */
@@ -228,6 +247,8 @@ class SubsStore {
         subs: this.list,
         selectedServerId: this.selectedServerId,
         selectedKey: this.selectedKey,
+        selectedSubId: this.selectedSubId,
+        selectedLabel: this.selectedLabel,
       }),
     );
     this.rescheduleAutoRefresh();
@@ -235,30 +256,49 @@ class SubsStore {
 
   selectServer(id: string): void {
     this.selectedServerId = id;
-    const srv = this.list.flatMap((s) => s.servers).find((s) => s.id === id);
-    if (srv) this.selectedKey = serverKey(srv);
+    for (const sub of this.list) {
+      const srv = sub.servers.find((s) => s.id === id);
+      if (!srv) continue;
+      this.selectedKey = serverKey(srv);
+      this.selectedSubId = sub.id;
+      this.selectedLabel = srv.name;
+      this.selectionLost = false;
+      break;
+    }
     this.persist();
   }
 
-  /** Keep a location selected: the per-entry `id` is regenerated on every parse
-   *  (refresh/re-import), so resolve the selection by its stable host:port key,
-   *  and auto-pick the first location when nothing is selected. */
+  /** Where the selection came from, before and after a refresh. */
+  private selectionIdentity(): SelectionIdentity {
+    return {
+      serverId: this.selectedServerId,
+      key: this.selectedKey,
+      subId: this.selectedSubId,
+      label: this.selectedLabel,
+    };
+  }
+
+  /** Keep a location selected across a refresh: the per-entry `id` is
+   *  regenerated on every parse, so fall back to the stable host key and then to
+   *  the same label inside the same subscription. A location that vanished leaves
+   *  nothing selected instead of jumping the user to another country. */
   reconcileSelection(): void {
-    const all = this.list.flatMap((s) => s.servers);
-    if (all.length === 0) {
-      this.selectedServerId = null;
-      this.selectedKey = null;
+    const before = this.selectionIdentity();
+    const resolved = resolveSelection(this.list, before);
+    this.selectedServerId = resolved.serverId;
+    this.selectedKey = resolved.key;
+    this.selectedSubId = resolved.subId;
+    this.selectedLabel = resolved.label;
+    this.selectionLost = resolved.lost;
+    if (
+      resolved.serverId !== before.serverId ||
+      resolved.key !== before.key ||
+      resolved.subId !== before.subId ||
+      resolved.label !== before.label ||
+      resolved.lost
+    ) {
       this.persist();
-      return;
     }
-    let current = all.find((s) => s.id === this.selectedServerId);
-    if (!current && this.selectedKey) {
-      current = all.find((s) => serverKey(s) === this.selectedKey);
-    }
-    if (!current) current = all[0];
-    this.selectedServerId = current.id;
-    this.selectedKey = serverKey(current);
-    this.persist();
   }
 
   /** Compile the persisted edit draft for the current selection. Draft text is

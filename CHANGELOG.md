@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Android: the client no longer picks a different country by itself. A refresh
+  regenerates every location id, so the chosen one was re-found by its endpoint
+  (`protocol:host:port:uuid`) -- and a composite JSON profile exposes its FIRST
+  proxy outbound as that host, which is exactly what a provider rotates: when
+  Proxen moved the primary of «США», the stored endpoint matched nothing and the
+  selection fell back to the first location of the first subscription, so the
+  active location jumped to another country on its own. The selection is now
+  re-found by endpoint and then by the location label inside the same
+  subscription; a location that really vanished leaves nothing selected and says
+  so instead of choosing another one, and its identity is kept, so an update that
+  brings it back restores the choice.
+- Android: the xray row in Settings states its status without the essay about
+  why the core version cannot be changed there; the version manager stays
+  hidden, since there is nothing on that screen for the user to act on.
+
 ## 0.3.2
 
 - Android: a location whose profile resolves through Quad9 reported n/a while

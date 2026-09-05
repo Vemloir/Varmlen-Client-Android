@@ -488,6 +488,8 @@
 
   {#if subs.list.length === 0}
     <div class="empty muted">{t("home.empty")}</div>
+  {:else if subs.selectionLost && subs.selectedServerId === null && subs.selectedLabel}
+    <div class="empty muted">{t("home.selectionLost", { name: subs.selectedLabel })}</div>
   {/if}
 </main>
 </div>

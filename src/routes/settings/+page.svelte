@@ -480,7 +480,6 @@
         <div class="row-text">
           <div class="row-title">xray <span class="muted" style="font-weight:400">· TUN</span></div>
           <div class="row-sub muted">{coreStatus(core)}</div>
-          {#if isAndroid}<div class="row-sub muted">{t("core.androidManaged")}</div>{/if}
         </div>
         {#if !isAndroid}
         <button class="btn versions-btn" onclick={() => openVersions(core)} title={t("core.versionsTitle")}>
