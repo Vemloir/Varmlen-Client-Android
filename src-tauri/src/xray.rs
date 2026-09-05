@@ -52,6 +52,29 @@ const DEFAULT_DOH_SERVERS: &[(&str, &[&str])] = &[
     ("https://dns.google/dns-query", &["8.8.8.8", "8.8.4.4"]),
 ];
 
+/// Public resolvers by the plain IP a profile tends to name, with the DoH
+/// endpoint of the SAME operator and the bootstrap addresses for it. Profiles
+/// hard-wire `8.8.8.8`-style UDP resolvers; see `prefer_doh_transports`.
+const DOH_BY_RESOLVER_IP: &[(&[&str], &str, &[&str])] = &[
+    (&["8.8.8.8", "8.8.4.4"], "https://dns.google/dns-query", &["8.8.8.8", "8.8.4.4"]),
+    (
+        &["1.1.1.1", "1.0.0.1"],
+        "https://cloudflare-dns.com/dns-query",
+        &["1.1.1.1", "1.0.0.1"],
+    ),
+    (
+        &["9.9.9.9", "149.112.112.112"],
+        "https://dns.quad9.net/dns-query",
+        &["9.9.9.9", "149.112.112.112"],
+    ),
+    (
+        &["77.88.8.8", "77.88.8.1"],
+        "https://common.dot.dns.yandex.net/dns-query",
+        &["77.88.8.8", "77.88.8.1"],
+    ),
+];
+
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct EditorChoice {
     pub value: &'static str,
@@ -1181,9 +1204,106 @@ fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, Vec<String>, O
 /// only when the profile also supplies a public literal-IP bootstrap in
 /// `dns.hosts`; local/system resolvers remain excluded so a subscription cannot
 /// silently reintroduce a DNS leak.
+/// The `address` of a DNS server entry, string or object form.
+fn dns_entry_address(entry: &Value) -> Option<String> {
+    match entry {
+        Value::String(address) => Some(address.clone()),
+        Value::Object(object) => object
+            .get("address")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+/// Ask a profile's classic UDP resolver over transports that survive a proxy.
+///
+/// UDP/53 is the least reliable thing a profile can ask for: proxy servers
+/// forward TCP on 443 as a matter of course and routinely drop forwarded UDP
+/// DNS, and the first datagram after a tunnel comes up is lost while the server
+/// side opens its UDP association. Measured across Proxen's fleet with the
+/// resolver forced through the proxy (one resolver, one path, transport only
+/// varying): UDP answered on 9 of 23 endpoints, TCP on 16, DoH on 16 -- every
+/// endpoint that carried proxy traffic at all. "Ping is green, nothing works"
+/// is exactly this: the tunnel is up, the resolver is not, so the observatory
+/// cannot resolve its own probe URL and the balancer keeps the profile's
+/// fallback outbound.
+///
+/// So a bare IP resolver becomes DoH of the same operator first (TLS on 443),
+/// then the same IP over TCP, then the provider's own UDP entry last. Same
+/// operator, same forced-through-proxy path, nothing leaks and nothing is
+/// substituted behind the provider's back. One set per operator: `8.8.8.8` and
+/// `8.8.4.4` are one anycast network, and five probes per query would only
+/// spend the provider's rate limit. `enableParallelQuery` keeps every transport
+/// in flight, so a server that ignores one of them costs nothing.
+fn prefer_doh_transports(
+    entries: Vec<(Value, Vec<String>, Option<String>)>,
+) -> Vec<(Value, Vec<String>, Option<String>)> {
+    fn with_address(entry: &Value, address: String) -> Value {
+        match entry {
+            Value::String(_) => Value::String(address),
+            Value::Object(object) => {
+                let mut object = object.clone();
+                object.insert("address".into(), Value::String(address));
+                Value::Object(object)
+            }
+            other => other.clone(),
+        }
+    }
+
+    let mut out = Vec::with_capacity(entries.len() * 3);
+    let mut covered: Vec<String> = Vec::new();
+    for (entry, ips, probe) in entries {
+        let address = dns_entry_address(&entry);
+        let resolver = match address.as_deref().filter(|raw| raw.parse::<IpAddr>().is_ok()) {
+            Some(resolver) => resolver,
+            // Already DoH/DoT/TCP: a transport the proxy can carry.
+            None => {
+                out.push((entry, ips, probe));
+                continue;
+            }
+        };
+        let operator = DOH_BY_RESOLVER_IP
+            .iter()
+            .find(|(addresses, _, _)| addresses.contains(&resolver));
+        let key = operator.map_or_else(
+            || resolver.to_string(),
+            |(_, url, _)| (*url).to_string(),
+        );
+        if covered.contains(&key) {
+            continue;
+        }
+        covered.push(key);
+
+        let mut variants: Vec<(Value, Vec<String>, Option<String>)> = Vec::new();
+        if let Some((_, url, bootstrap)) = operator {
+            variants.push((
+                with_address(&entry, (*url).to_string()),
+                bootstrap.iter().map(|ip| (*ip).to_string()).collect(),
+                Some((*url).to_string()),
+            ));
+        }
+        variants.push((
+            with_address(&entry, format!("tcp://{resolver}")),
+            vec![resolver.to_string()],
+            None,
+        ));
+        variants.push((entry, vec![resolver.to_string()], probe));
+        out.extend(variants);
+    }
+    out
+}
+
+/// Preserve a full JSON profile's safe DNS endpoints and force their concrete
+/// destination IPs through the selected proxy. Hostname DNS is accepted only
+/// with a public literal-IP bootstrap in `dns.hosts`; local/system resolvers
+/// remain excluded so a subscription cannot silently reintroduce a DNS leak.
 fn build_dns_plan(server: &VlessServer) -> DnsPlan {
     let mut servers = safe_provider_dns_servers(server);
     let using_defaults = servers.is_empty();
+    if !using_defaults {
+        servers = prefer_doh_transports(servers);
+    }
     if using_defaults {
         servers = DEFAULT_DOH_SERVERS
             .iter()
@@ -1220,6 +1340,16 @@ fn build_dns_plan(server: &VlessServer) -> DnsPlan {
         .iter()
         .filter_map(|(_, _, url)| url.clone())
         .collect::<Vec<_>>();
+    // Every DoH endpoint needs a literal-IP bootstrap, or xray would resolve its
+    // own hostname through the host resolver.
+    let bootstraps = servers
+        .iter()
+        .filter_map(|(_, ips, url)| {
+            let hostname = Url::parse(url.as_deref()?).ok()?.host_str()?.to_string();
+            Some((hostname, ips.clone()))
+        })
+        .collect::<Vec<_>>();
+
     let mut config = server
         .raw_profile
         .as_ref()
@@ -1241,16 +1371,10 @@ fn build_dns_plan(server: &VlessServer) -> DnsPlan {
         *hosts = json!({});
     }
     let hosts = hosts.as_object_mut().expect("DNS hosts object inserted");
-    if using_defaults {
-        for (url, ips) in DEFAULT_DOH_SERVERS {
-            let hostname = Url::parse(url)
-                .expect("constant DoH URL")
-                .host_str()
-                .expect("constant DoH hostname")
-                .to_string();
-            hosts.entry(hostname).or_insert_with(|| json!(ips));
-        }
+    for (hostname, ips) in bootstraps {
+        hosts.entry(hostname).or_insert_with(|| json!(ips));
     }
+
     // v2rayNG carries this compatibility alias specifically to avoid Play
     // services being stranded behind resolvers that return googleapis.cn.
     hosts
@@ -1871,7 +1995,13 @@ mod tests {
             .unwrap();
         assert_eq!(dns_rule["balancerTag"], "estonia-balancer");
         assert!(cfg.get("burstObservatory").is_some());
-        assert_eq!(cfg["dns"]["servers"][0], "8.8.8.8");
+        // The profile's resolver is still the resolver, but a proxy that drops
+        // forwarded UDP/53 no longer takes the location down with it.
+        assert_eq!(
+            cfg["dns"]["servers"],
+            json!(["https://dns.google/dns-query", "tcp://8.8.8.8", "8.8.8.8"])
+        );
+
         assert!(cfg["routing"]["rules"]
             .as_array()
             .unwrap()
@@ -2081,6 +2211,37 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_udp_resolver_still_gets_tcp_before_udp() {
+        // No DoH mapping is invented for an operator we do not know, but TCP is
+        // still tried before the datagram that Proxen's servers drop.
+        let body = json!({
+            "remarks": "Odd resolver",
+            "dns": {"servers": [{ "address": "213.180.204.203", "domains": ["domain:ya.ru"] }]},
+            "outbounds": [{
+                "tag": "proxy",
+                "protocol": "vless",
+                "settings": {"address": "vpn.example", "port": 443, "id": "uuid"}
+            }]
+        });
+        let server = parse_subscription(&body.to_string()).remove(0);
+        let cfg = build_xray_config(
+            &server,
+            &split(),
+            AppSplitOwner::VpnService,
+            false,
+            "warning",
+        );
+
+        let servers = cfg["dns"]["servers"].as_array().unwrap();
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0]["address"], "tcp://213.180.204.203");
+        // The domain scope the provider wrote survives the rewrite.
+        assert_eq!(servers[0]["domains"], json!(["domain:ya.ru"]));
+        assert_eq!(servers[1]["address"], "213.180.204.203");
+        assert!(dns_probe_urls(&server).is_empty());
+    }
+
+    #[test]
     fn provider_plain_dns_is_preserved_and_forced_through_proxy() {
         let body = json!({
             "remarks": "Unsafe DNS",
@@ -2103,9 +2264,22 @@ mod tests {
         let server = parse_subscription(&body.to_string()).remove(0);
         let cfg = build_android_xray_config(&server, &split(), false, "warning");
 
-        assert_eq!(cfg["dns"]["servers"], json!(["8.8.8.8", "8.8.4.4"]));
+        // One set per operator: 8.8.8.8 and 8.8.4.4 are one anycast network, so
+        // DoH once (its bootstrap covers both) plus the provider's own endpoints.
+        assert_eq!(
+            cfg["dns"]["servers"],
+            json!(["https://dns.google/dns-query", "tcp://8.8.8.8", "8.8.8.8"])
+        );
         assert!(cfg["dns"].get("clientIp").is_none());
-        assert!(dns_probe_urls(&server).is_empty());
+        assert_eq!(
+            dns_probe_urls(&server),
+            vec!["https://dns.google/dns-query"]
+        );
+        assert_eq!(
+            cfg["dns"]["hosts"]["dns.google"],
+            json!(["8.8.8.8", "8.8.4.4"])
+        );
+
         assert!(cfg["routing"]["rules"]
             .as_array()
             .unwrap()

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Android: ask a profile's resolver over a transport the proxy actually carries.
+  Full JSON profiles hard-wire `8.8.8.8`-style UDP resolvers and the client
+  forces every resolver connection through the selected proxy -- the anti-leak
+  invariant -- but forwarded UDP/53 is what proxy servers routinely drop. A
+  client log said it exactly: `from DNS accepted udp:8.8.8.8:53 [... -> proxy]`
+  followed by `app/observatory/burst: error ping
+  http://www.gstatic.com/generate_204 with proxy: context deadline exceeded` for
+  every member of the profile. The tunnel is up, the resolver is not, so the
+  observatory cannot resolve its own probe URL, the balancer keeps the profile's
+  fallback outbound, and every lookup in every app hangs -- "latency is green,
+  nothing works", working again on its own once a UDP query happens through.
+  Across Proxen's fleet UDP DNS answered on 9 of 23 endpoints, TCP on 16 and DoH
+  on 16. A plain IP resolver now becomes DoH of the same operator first, then the
+  same IP over TCP, then the provider's own UDP entry: one set per operator,
+  still forced through the proxy, nothing substituted. With UDP/53 blocked in a
+  test config, the old plan resolved 0 of 11 endpoints and the new one resolved 9
+  of 11 -- the two remaining do not carry proxy traffic either.
 - Android: the client no longer picks a different country by itself. A refresh
   regenerates every location id, so the chosen one was re-found by its endpoint
   (`protocol:host:port:uuid`) -- and a composite JSON profile exposes its FIRST
