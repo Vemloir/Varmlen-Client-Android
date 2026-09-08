@@ -9,7 +9,9 @@
   import { releaseActiveControl } from "$lib/modal-lifecycle";
   import { modalActionFromTarget } from "$lib/modal-events";
   import { isAndroid } from "$lib/platform";
-  import { placePopup, portal } from "$lib/popup";
+  import { placeAtPoint, placePopup, portal } from "$lib/popup";
+  import type { LocationAction } from "$lib/location-actions";
+  import { tick } from "svelte";
   import FlagIcon from "$lib/components/FlagIcon.svelte";
   import LocationEditor from "$lib/components/LocationEditor.svelte";
   import ServerList from "$lib/components/ServerList.svelte";
@@ -160,6 +162,118 @@
       locationSaving = false;
     }
   }
+
+  let revealedHidden = $state<Set<string>>(new Set());
+
+  function toggleRevealed(subId: string): void {
+    const next = new Set(revealedHidden);
+    if (next.has(subId)) next.delete(subId);
+    else next.add(subId);
+    revealedHidden = next;
+  }
+
+  /** THE location menu. One instance for the whole page: a state per card left
+   *  several menus open when the user opened one in two subscriptions. */
+  let locMenu = $state<{
+    sub: Subscription;
+    server: ServerEntry;
+    items: LocationAction[];
+    x: number;
+    y: number;
+  } | null>(null);
+  let locMenuPos = $state({ top: 0, left: 0 });
+  let locMenuWidth = $state(0);
+  let locMenuEl = $state<HTMLDivElement | undefined>();
+  let locMenuOpenedAt = 0;
+
+  const LOCATION_MENU_LABELS: Record<LocationAction, () => string> = {
+    ping: () => t("menu.ping"),
+    rename: () => t("menu.rename"),
+    pin: () => t("menu.pinLocation"),
+    unpin: () => t("menu.unpinLocation"),
+    hide: () => t("menu.hide"),
+    unhide: () => t("menu.unhide"),
+    delete: () => t("menu.deleteLocation"),
+  };
+
+  /** Opens at the pointer (its top-left corner under the cursor, flipping left or
+   *  above near an edge) and is as wide as its longest item. `max-content` is not
+   *  honoured the same way in every WebView, so the width is measured from the
+   *  text and set. */
+  async function openLocationMenu(
+    sub: Subscription,
+    server: ServerEntry,
+    point: { x: number; y: number },
+  ): Promise<void> {
+    const items = subs.locationActionsFor(sub, server);
+    locMenu = { sub, server, items, x: point.x, y: point.y };
+    locMenuOpenedAt = Date.now();
+    locMenuWidth = 160;
+    locMenuPos = placeAtPoint(point.x, point.y, 160, items.length * 44 + 10);
+    await tick();
+    if (!locMenu || locMenu.server.id !== server.id || !locMenuEl) return;
+    let widest = 0;
+    for (const item of locMenuEl.querySelectorAll<HTMLElement>(".loc-menu-item")) {
+      widest = Math.max(widest, item.scrollWidth);
+    }
+    // item padding 12+12, menu padding 4+4, border 1+1
+    const width = Math.max(120, Math.min(widest + 34, window.innerWidth - 24));
+    locMenuWidth = width;
+    await tick();
+    const height =
+      locMenuEl?.getBoundingClientRect().height ?? items.length * 44 + 10;
+    locMenuPos = placeAtPoint(point.x, point.y, width, height);
+  }
+
+  function closeLocationMenu(): void {
+    locMenu = null;
+  }
+
+  function runLocationAction(action: LocationAction): void {
+    if (!locMenu) return;
+    const { sub, server } = locMenu;
+    closeLocationMenu();
+    switch (action) {
+      case "ping":
+        void subs.pingServer(server);
+        break;
+      case "rename":
+        // The name lives in the location sheet along with the rest of the entry.
+        openDetails(server);
+        break;
+      case "pin":
+      case "unpin":
+        subs.togglePinLocation(sub.id, server);
+        break;
+      case "hide":
+      case "unhide":
+        subs.toggleHideLocation(sub.id, server);
+        break;
+      case "delete":
+        subs.deleteLocation(sub.id, server.id);
+        break;
+    }
+  }
+
+  $effect(() => {
+    if (!locMenu) return;
+    const onDocClick = (event: Event) => {
+      const node = event.target as Node | null;
+      if (node && (locMenuEl?.contains(node) ?? false)) return;
+      // The touch that ends our own long press must not close the menu it opened.
+      if (Date.now() - locMenuOpenedAt < 250) return;
+      closeLocationMenu();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeLocationMenu();
+    };
+    document.addEventListener("click", onDocClick, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("click", onDocClick, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  });
 
   function handleModalAction(action: string): void {
     switch (action) {
@@ -476,12 +590,22 @@
 
       {#if !sub.collapsed}
         <ServerList
-          servers={sub.servers}
+          servers={subs.visibleLocations(sub, revealedHidden.has(sub.id))}
           selectedServerId={subs.selectedServerId}
           pings={subs.pings}
+          hiddenIds={subs.hiddenLocationIds(sub)}
+          pinnedIds={subs.locationPinnedIds(sub)}
           onSelect={(id) => subs.selectServer(id)}
           onDetails={openDetails}
+          onMenu={(server, point) => void openLocationMenu(sub, server, point)}
         />
+        {#if subs.hiddenCount(sub) > 0}
+          <button class="link-btn hidden-toggle" onclick={() => toggleRevealed(sub.id)}>
+            {revealedHidden.has(sub.id)
+              ? t("home.hideHiddenLocations")
+              : t("home.hiddenLocations", { n: subs.hiddenCount(sub) })}
+          </button>
+        {/if}
       {/if}
     </section>
   {/each}
@@ -493,6 +617,28 @@
   {/if}
 </main>
 </div>
+
+{#if locMenu}
+  <div
+    class="loc-menu"
+    class:loc-menu--animated={isAndroid}
+    role="menu"
+    use:portal
+    style="top: {locMenuPos.top}px; left: {locMenuPos.left}px; width: {locMenuWidth}px;"
+    bind:this={locMenuEl}
+  >
+    {#each locMenu.items as action (action)}
+      <button
+        role="menuitem"
+        class="loc-menu-item"
+        class:danger={action === "delete"}
+        onclick={() => runLocationAction(action)}
+      >
+        {LOCATION_MENU_LABELS[action]()}
+      </button>
+    {/each}
+  </div>
+{/if}
 
 {#if activeModal === "info" && infoFor}
   <div class="modal-backdrop" data-modal-action="close" role="presentation">
@@ -1156,6 +1302,49 @@
     gap: 8px;
     margin-top: 4px;
   }
+  /* The location menu. Width is set in JS from the longest item, so a Russian
+     menu does not pay for an English one and vice versa. */
+  .loc-menu {
+    position: fixed;
+    box-sizing: border-box;
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow);
+    padding: 4px;
+    z-index: 210;
+  }
+  /* Android: the menu answers a press, so it should arrive with motion. */
+  .loc-menu--animated {
+    animation: loc-menu-in 140ms ease-out;
+    transform-origin: top left;
+  }
+  @keyframes loc-menu-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .loc-menu--animated { animation: none; }
+  }
+  .loc-menu-item {
+    display: block;
+    width: 100%;
+    white-space: nowrap;
+    text-align: left;
+    /* A menu opened by a finger needs finger-sized targets, not the 8px padding
+       a desktop pointer is happy with. */
+    padding: 12px 12px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 14px;
+  }
+  .loc-menu-item.danger { color: var(--danger); }
+  .hidden-toggle {
+    margin: 4px 14px 6px;
+  }
+
   .location-actions {
     flex-shrink: 0;
     margin-top: 16px;

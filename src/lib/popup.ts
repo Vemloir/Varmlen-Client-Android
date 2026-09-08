@@ -46,3 +46,34 @@ export function placePopup(
 
   return { top, right };
 }
+
+/** Place a `position: fixed` popup with its top-left corner AT the pointer, and
+ *  return `left`/`top` (a cursor-anchored popup follows the cursor, not a trigger
+ *  element, so right-alignment to a row is wrong). If the cursor sits too close
+ *  to the right edge the popup opens to the LEFT of the cursor; too close to the
+ *  bottom, it opens ABOVE it. */
+export function placeAtPoint(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  gap = 6,
+): { top: number; left: number } {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const margin = 8;
+
+  let left = x + gap;
+  if (left + width > vw - margin) left = x - gap - width;
+  // Still overflowing after the flip (a popup nearly as wide as the viewport):
+  // pull it back rather than let it hang off the screen.
+  if (left + width > vw - margin) left = vw - margin - width;
+  if (left < margin) left = margin;
+
+  let top = y + gap;
+  if (top + height > vh - margin) top = y - gap - height;
+  if (top + height > vh - margin) top = vh - margin - height;
+  if (top < margin) top = margin;
+
+  return { top, left };
+}

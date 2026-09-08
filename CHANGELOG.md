@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Long-press a location for its menu: ping, rename, pin, hide -- or delete, for a
+  location of a manually added configuration. The gesture dies the moment it stops
+  being a press: a finger that wanders more than 10 px, a list that scrolls under
+  it, or a lift before 500 ms opens nothing, and the click a long press ends with
+  no longer selects the location behind the menu. The list text is no longer
+  selectable either, so the WebView's own "select text" haptics do not compete
+  with it. Hidden locations drop out of the card and come back on the card's own
+  "N hidden" line; how long they stay away is a setting (until I refresh it
+  myself, until the next update, until I show it again), and pinned ones move to
+  the top of the list with the same pin mark a pinned card carries. The menu is
+  one per app and as wide as its longest item, measured from the text, because
+  `max-content` is not honoured the same way in every WebView.
 - Android: ask a profile's resolver over a transport the proxy actually carries.
   Full JSON profiles hard-wire `8.8.8.8`-style UDP resolvers and the client
   forces every resolver connection through the selected proxy -- the anti-leak

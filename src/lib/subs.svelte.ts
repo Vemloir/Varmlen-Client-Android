@@ -36,6 +36,12 @@ import {
 } from "$lib/subscription-refresh";
 import { runPingsInParallel } from "$lib/ping-scheduler";
 import { measureLocationPing } from "$lib/location-ping";
+import {
+  hiddenCount as countHidden,
+  locationActions as menuForLocation,
+  orderLocations,
+  type LocationAction,
+} from "$lib/location-actions";
 export { transportSummary } from "$lib/server-label";
 
 /** Ping result for a server entry. `null` = unknown / not yet measured,
@@ -81,6 +87,12 @@ export interface Subscription {
   collapsed: boolean;
   /** Pinned subscriptions sort to the top of the list. */
   pinned: boolean;
+  /** Endpoint keys of locations the user hid from this card. Keyed by
+   *  `serverKey`, never by the entry id: a refresh regenerates every id. */
+  hiddenKeys?: string[];
+  /** Endpoint key -> the moment it was pinned, so the pinned block can be
+   *  ordered by pin time instead of by latency. */
+  pinnedLocations?: Record<string, number>;
   /** True while refresh() is in flight. Not persisted. */
   refreshing?: boolean;
 }
@@ -352,10 +364,135 @@ class SubsStore {
     this.persist();
   }
 
-  /** Pinned subscriptions first, otherwise insertion order (Array.sort is
-   *  stable, so unpinned entries keep their relative order). */
+  /** Pinned subscriptions first, then the manually added configurations (they are
+   *  the things the user reaches for when a provider fleet is down), then every
+   *  other subscription. Array.sort is stable, so each group keeps its own order. */
   get ordered(): Subscription[] {
-    return [...this.list].sort((a, b) => Number(b.pinned) - Number(a.pinned));
+    const rank = (sub: Subscription): number =>
+      sub.pinned ? 0 : this.isManualCard(sub) ? 1 : 2;
+    return [...this.list].sort((a, b) => rank(a) - rank(b));
+  }
+
+  /** A manually added configuration: nothing fetches it, so it has no refresh,
+   *  no expiry and no quota, and its locations can be deleted for real. */
+  isManualCard(sub: Subscription): boolean {
+    return !isRemoteConfiguration(sub.url);
+  }
+
+  /** The list for the card: hidden locations drop out, pinned ones move to the
+   *  TOP (ordered by pin time). `revealHidden` shows the hidden ones again
+   *  without un-hiding them. */
+  visibleLocations(sub: Subscription, revealHidden = false): ServerEntry[] {
+    return orderLocations(sub.servers, {
+      keyOf: (server) => serverKey(server),
+      hiddenKeys: sub.hiddenKeys ?? [],
+      pinnedAt: sub.pinnedLocations ?? {},
+      hideMode: settings.hideLocations,
+      revealHidden,
+      pinOrder: settings.pinOrder,
+    }).visible;
+  }
+
+  hiddenCount(sub: Subscription): number {
+    return countHidden(
+      sub.servers,
+      (server) => serverKey(server),
+      sub.hiddenKeys ?? [],
+      settings.hideLocations,
+    );
+  }
+
+  /** Hidden endpoint keys resolved to the entries they match right now, so the
+   *  list can dim them while the card reveals them. */
+  hiddenLocationIds(sub: Subscription): string[] {
+    const hidden = sub.hiddenKeys ?? [];
+    if (hidden.length === 0) return [];
+    return sub.servers
+      .filter((s) => hidden.includes(serverKey(s)))
+      .map((s) => s.id);
+  }
+
+  /** Pinned endpoint keys resolved to the entries they match right now, so the
+   *  row can show the same pin mark a pinned card shows. */
+  locationPinnedIds(sub: Subscription): string[] {
+    const pinned = sub.pinnedLocations ?? {};
+    if (Object.keys(pinned).length === 0) return [];
+    return sub.servers
+      .filter((s) => serverKey(s) in pinned)
+      .map((s) => s.id);
+  }
+
+  isLocationHidden(sub: Subscription, server: ServerEntry): boolean {
+    return (sub.hiddenKeys ?? []).includes(serverKey(server));
+  }
+
+  isLocationPinned(sub: Subscription, server: ServerEntry): boolean {
+    return serverKey(server) in (sub.pinnedLocations ?? {});
+  }
+
+  /** The action set for one location: hide for a subscription, delete for a
+   *  manually added configuration. */
+  locationActionsFor(sub: Subscription, server: ServerEntry): LocationAction[] {
+    return menuForLocation({
+      fromSubscription: !this.isManualCard(sub),
+      hidden: this.isLocationHidden(sub, server),
+      pinned: this.isLocationPinned(sub, server),
+      hideMode: settings.hideLocations,
+    });
+  }
+
+  toggleHideLocation(subId: string, server: ServerEntry): void {
+    const key = serverKey(server);
+    this.list = this.list.map((s) => {
+      if (s.id !== subId) return s;
+      const hidden = s.hiddenKeys ?? [];
+      return {
+        ...s,
+        hiddenKeys: hidden.includes(key)
+          ? hidden.filter((k) => k !== key)
+          : [...hidden, key],
+      };
+    });
+    this.persist();
+  }
+
+  togglePinLocation(subId: string, server: ServerEntry): void {
+    const key = serverKey(server);
+    this.list = this.list.map((s) => {
+      if (s.id !== subId) return s;
+      const pinned = { ...(s.pinnedLocations ?? {}) };
+      if (key in pinned) delete pinned[key];
+      else pinned[key] = Date.now();
+      return { ...s, pinnedLocations: pinned };
+    });
+    this.persist();
+  }
+
+  /** Remove a manually added location for good. When the last one goes, the card
+   *  that only held it goes with it -- a configuration has no other way to be
+   *  deleted, since its card carries no menu. */
+  deleteLocation(subId: string, serverId: string): void {
+    const sub = this.list.find((s) => s.id === subId);
+    if (!sub || !this.isManualCard(sub)) return;
+    const kept = sub.servers.filter((s) => s.id !== serverId);
+    this.list =
+      kept.length === 0
+        ? this.list.filter((s) => s.id !== subId)
+        : this.list.map((s) => (s.id === subId ? { ...s, servers: kept } : s));
+    this.reconcileSelection();
+    this.prunePings();
+    this.persist();
+  }
+
+  /** Restore every hidden location of a card. Called by an explicit Refresh when
+   *  the user chose "hidden until I refresh myself". */
+  clearHiddenLocations(subId: string): void {
+    this.list = this.list.map((s) =>
+      s.id === subId && (s.hiddenKeys?.length ?? 0) > 0
+        ? { ...s, hiddenKeys: [] }
+        : s,
+    );
+    this.persist();
   }
 
   togglePin(subId: string): void {
@@ -448,7 +585,11 @@ class SubsStore {
     }
   }
 
-  async refresh(subId: string, reschedule = true): Promise<void> {
+  async refresh(
+    subId: string,
+    reschedule = true,
+    manual = true,
+  ): Promise<void> {
     const idx = this.list.findIndex((s) => s.id === subId);
     if (idx < 0) return;
     const sub = this.list[idx];
@@ -468,6 +609,15 @@ class SubsStore {
         return;
       }
       this.applyProviderResult(subId, result, new Date().toISOString());
+      // "Hidden until I refresh myself": an explicit Refresh is the user asking
+      // for the provider's current list, so hidden locations come back. The
+      // background refresh is not, and keeps them hidden.
+      if (
+        settings.hideLocations === "untilRefresh" ||
+        (manual && settings.hideLocations === "untilManualRefresh")
+      ) {
+        this.clearHiddenLocations(subId);
+      }
     } catch (e) {
       console.error("refresh failed:", e);
       this.list = this.list.map((s) =>
@@ -665,7 +815,7 @@ class SubsStore {
   private async refreshAutoBatch(ids: string[]): Promise<void> {
     for (const id of ids) {
       if (!this.autoRefreshStarted || !settings.subscriptionAutoUpdate) break;
-      await this.refresh(id, false);
+      await this.refresh(id, false, false);
     }
     this.rescheduleAutoRefresh();
   }

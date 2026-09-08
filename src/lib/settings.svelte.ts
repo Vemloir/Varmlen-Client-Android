@@ -3,6 +3,7 @@ import {
   normalizeSubscriptionUserAgent,
   type SubscriptionUserAgent,
 } from "./subscription-user-agent";
+import type { HideLocationsMode, PinOrder } from "./location-actions";
 
 /** How server latency is measured. `tcp` = raw TCP connect to the endpoint
  *  (bypasses the tunnel, works disconnected). `proxy` = an HTTP GET routed
@@ -21,6 +22,10 @@ interface Persisted {
   /** Identity advertised only while importing/refreshing subscriptions. */
   subscriptionUserAgent: SubscriptionUserAgent;
   subscriptionAutoUpdate: boolean;
+  /** How long a hidden location stays out of the list. */
+  hideLocations: HideLocationsMode;
+  /** Order of the pinned locations among themselves. */
+  pinOrder: PinOrder;
 }
 
 const KEY = "varmlen.settings";
@@ -32,9 +37,26 @@ const DEFAULTS: Persisted = {
   logLevel: "warn",
   subscriptionUserAgent: "varmlen",
   subscriptionAutoUpdate: true,
+  hideLocations: "untilManualRefresh",
+  pinOrder: "newestLast",
 };
 
 const LOG_LEVELS: LogLevel[] = ["debug", "warn", "error"];
+const HIDE_MODES: HideLocationsMode[] = [
+  "untilManualRefresh",
+  "untilRefresh",
+  "never",
+];
+
+/** An earlier build offered `always` and `off`. `always` is now `never`, and "do
+ *  not hide anything" is not a hiding mode, so it falls back to the default. */
+function migrateHideMode(value: unknown): HideLocationsMode {
+  if (value === "always") return "never";
+  return HIDE_MODES.includes(value as HideLocationsMode)
+    ? (value as HideLocationsMode)
+    : DEFAULTS.hideLocations;
+}
+const PIN_ORDERS: PinOrder[] = ["newestLast", "newestFirst"];
 
 function load(): Persisted {
   if (!browser) return DEFAULTS;
@@ -55,6 +77,10 @@ function load(): Persisted {
       ),
       subscriptionAutoUpdate:
         parsed.subscriptionAutoUpdate ?? DEFAULTS.subscriptionAutoUpdate,
+      hideLocations: migrateHideMode(parsed.hideLocations),
+      pinOrder: PIN_ORDERS.includes(parsed.pinOrder as PinOrder)
+        ? (parsed.pinOrder as PinOrder)
+        : DEFAULTS.pinOrder,
     };
   } catch {
     return DEFAULTS;
@@ -73,6 +99,8 @@ class SettingsStore {
     _initialSettings.subscriptionUserAgent,
   );
   subscriptionAutoUpdate = $state(_initialSettings.subscriptionAutoUpdate);
+  hideLocations = $state<HideLocationsMode>(_initialSettings.hideLocations);
+  pinOrder = $state<PinOrder>(_initialSettings.pinOrder);
 
   private persist(): void {
     if (!browser) return;
@@ -86,6 +114,8 @@ class SettingsStore {
         logLevel: this.logLevel,
         subscriptionUserAgent: this.subscriptionUserAgent,
         subscriptionAutoUpdate: this.subscriptionAutoUpdate,
+        hideLocations: this.hideLocations,
+        pinOrder: this.pinOrder,
       }),
     );
   }
@@ -101,6 +131,14 @@ class SettingsStore {
   }
   setSubscriptionAutoUpdate(v: boolean): void {
     this.subscriptionAutoUpdate = v;
+    this.persist();
+  }
+  setHideLocations(v: HideLocationsMode): void {
+    this.hideLocations = migrateHideMode(v);
+    this.persist();
+  }
+  setPinOrder(v: PinOrder): void {
+    this.pinOrder = PIN_ORDERS.includes(v) ? v : DEFAULTS.pinOrder;
     this.persist();
   }
 }

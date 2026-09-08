@@ -1,6 +1,7 @@
 <script lang="ts">
   import { theme } from "$lib/theme.svelte";
   import { settings, type PingMethod, type LogLevel } from "$lib/settings.svelte";
+  import type { HideLocationsMode, PinOrder } from "$lib/location-actions";
   import type { SubscriptionUserAgent } from "$lib/subscription-user-agent";
   import { i18n, t, LANGUAGES, type Lang } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
@@ -172,6 +173,20 @@
   const pingOptions = $derived([
     { value: "tcp", label: t("ping.tcp") },
     { value: "proxy", label: t("ping.proxy") },
+  ]);
+
+  const hideModeOptions = $derived([
+    {
+      value: "untilManualRefresh",
+      label: t("settings.hideMode.untilManualRefresh"),
+    },
+    { value: "untilRefresh", label: t("settings.hideMode.untilRefresh") },
+    { value: "never", label: t("settings.hideMode.never") },
+  ]);
+
+  const pinOrderOptions = $derived([
+    { value: "newestLast", label: t("settings.pinOrder.newestLast") },
+    { value: "newestFirst", label: t("settings.pinOrder.newestFirst") },
   ]);
 
   const subscriptionUaOptions = [
@@ -438,6 +453,30 @@
           options={pingOptions}
           onChange={(v) => settings.setPingMethod(v as PingMethod)}
           ariaLabel={t("settings.pingMethod")}
+        />
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-title">{t("settings.hideLocations")}</div>
+          <div class="row-sub muted">{t("settings.hideLocationsSub")}</div>
+        </div>
+        <Dropdown
+          value={settings.hideLocations}
+          options={hideModeOptions}
+          onChange={(v) => settings.setHideLocations(v as HideLocationsMode)}
+          ariaLabel={t("settings.hideLocations")}
+        />
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-title">{t("settings.pinOrder")}</div>
+          <div class="row-sub muted">{t("settings.pinOrderSub")}</div>
+        </div>
+        <Dropdown
+          value={settings.pinOrder}
+          options={pinOrderOptions}
+          onChange={(v) => settings.setPinOrder(v as PinOrder)}
+          ariaLabel={t("settings.pinOrder")}
         />
       </div>
       <div class="row">
