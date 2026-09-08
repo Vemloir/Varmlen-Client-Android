@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- A manually added configuration no longer pretends to be a subscription: its card
+  carries no refresh (nothing fetches it) and no ⋮ menu (rename, JSON, pin and
+  remove are subscription actions), only the ping. Its locations are deleted for
+  real from the row menu, and when the last one goes, the card goes with it.
+
 - Long-press a location for its menu: ping, rename, pin, hide -- or delete, for a
   location of a manually added configuration. The gesture dies the moment it stops
   being a press: a finger that wanders more than 10 px, a list that scrolls under

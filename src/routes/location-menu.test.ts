@@ -194,6 +194,25 @@ async function longPress(row: HTMLElement): Promise<void> {
   await Promise.resolve();
 }
 
+describe("card header", () => {
+  it("keeps refresh and the ⋮ menu on a real subscription", () => {
+    const view = render(Page);
+    const card = cardOf(view.getByText("Proxen") as HTMLElement);
+    expect(within(card).getByLabelText("Refresh")).toBeTruthy();
+    expect(within(card).getByLabelText("Subscription menu")).toBeTruthy();
+  });
+
+  it("gives a manually added configuration neither refresh nor ⋮", () => {
+    const view = render(Page);
+    const card = cardOf(view.getByText("Configuration") as HTMLElement);
+    // Nothing fetches it, so a refresh would be a lie, and its locations are
+    // deleted from the row menu instead.
+    expect(within(card).queryByLabelText("Refresh")).toBeNull();
+    expect(within(card).queryByLabelText("Subscription menu")).toBeNull();
+    expect(within(card).getByLabelText("Ping")).toBeTruthy();
+  });
+});
+
 describe("location menu (Android long press)", () => {
   it("opens on a long press and hides a subscription location", async () => {
     const view = render(Page);

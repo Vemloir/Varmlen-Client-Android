@@ -457,6 +457,7 @@
   <main class="scroll fade-y">
 
   {#each subs.ordered as sub (sub.id)}
+    {@const isManual = subs.isManualCard(sub)}
     <section class="sub-card" class:pinned={sub.pinned}>
       <header class="sub-head">
         <button
@@ -488,6 +489,7 @@
           {/if}
         </div>
 
+        {#if !isManual}
         <button
           class="head-btn"
           class:spinning={sub.refreshing}
@@ -499,6 +501,7 @@
             <path d="M21 12a9 9 0 1 1-3.13-6.84M21 4v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
+        {/if}
         <button
           class="head-btn"
           onclick={() => subs.pingSub(sub.id)}
@@ -512,6 +515,7 @@
             <circle cx="12" cy="12" r="1.4" fill="currentColor" />
           </svg>
         </button>
+        {#if !isManual}
         <div class="menu-wrap">
           <button
             class="head-btn"
@@ -552,6 +556,7 @@
             </div>
           {/if}
         </div>
+      {/if}
       </header>
 
       {#if subs.hasTraffic(sub) || sub.webPageUrl || sub.supportUrl}

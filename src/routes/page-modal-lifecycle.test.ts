@@ -128,6 +128,7 @@ vi.mock("$lib/subs.svelte", () => ({
     hasTraffic: vi.fn(() => false),
     expiresText: vi.fn(() => null),
     trafficText: vi.fn(() => ""),
+    isManualCard: vi.fn(() => false),
     isSubPinging: vi.fn(() => false),
     visibleLocations: vi.fn((sub) => sub.servers),
     hiddenLocationIds: vi.fn(() => []),
