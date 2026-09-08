@@ -64,7 +64,7 @@ describe("location menu", () => {
   });
 
   it("offers hide in every mode -- the modes differ in what restores it", () => {
-    for (const hideMode of ["untilManualRefresh", "untilRefresh", "never"] as const) {
+    for (const hideMode of ["untilManualRefresh", "never"] as const) {
       expect(
         locationActions({
           fromSubscription: true,
@@ -90,7 +90,7 @@ describe("hidden locations", () => {
   it("keeps the location hidden in every mode", () => {
     const servers = [row("a"), row("b")];
     const hiddenKeys = [servers[1].key];
-    for (const hideMode of ["untilManualRefresh", "untilRefresh", "never"] as const) {
+    for (const hideMode of ["untilManualRefresh", "never"] as const) {
       expect(isHiddenLocation(servers[1].key, hiddenKeys, hideMode, false)).toBe(
         true,
       );

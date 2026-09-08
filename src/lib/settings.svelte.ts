@@ -42,14 +42,12 @@ const DEFAULTS: Persisted = {
 };
 
 const LOG_LEVELS: LogLevel[] = ["debug", "warn", "error"];
-const HIDE_MODES: HideLocationsMode[] = [
-  "untilManualRefresh",
-  "untilRefresh",
-  "never",
-];
+const HIDE_MODES: HideLocationsMode[] = ["untilManualRefresh", "never"];
 
-/** An earlier build offered `always` and `off`. `always` is now `never`, and "do
- *  not hide anything" is not a hiding mode, so it falls back to the default. */
+/** Earlier builds offered `always`, `off` and `untilRefresh`. `always` is now
+ *  `never`; "do not hide anything" is not a hiding mode; and a location hidden
+ *  "until the next update" that came back by itself was the complaint, so
+ *  `untilRefresh` falls back to the default, where only the user restores it. */
 function migrateHideMode(value: unknown): HideLocationsMode {
   if (value === "always") return "never";
   return HIDE_MODES.includes(value as HideLocationsMode)

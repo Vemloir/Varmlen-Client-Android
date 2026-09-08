@@ -12,16 +12,18 @@
  *  verb there, and how long it lasts is a user setting.
  */
 
-/** How long a hidden subscription location stays hidden. All three hide; they
- *  differ in what brings the location back.
+/** How long a hidden subscription location stays hidden. Both hide; they differ
+ *  in what brings the location back.
  *  `untilManualRefresh` — the background update keeps it hidden, an explicit
- *  Refresh restores the list;
- *  `untilRefresh` — the next successful update of any kind restores it;
- *  `never` — only showing it again by hand brings it back. */
-export type HideLocationsMode =
-  | "untilManualRefresh"
-  | "untilRefresh"
-  | "never";
+ *  Refresh on that card restores the list;
+ *  `never` — only showing it again by hand brings it back.
+ *
+ *  There is deliberately no "until the next update": a background update is not
+ *  something the user did, so locations would come back by themselves while he
+ *  uses the app. Removing the subscription and importing it again always brings
+ *  every location back -- that is a new subscription, not a refresh of the old
+ *  one -- so hiding can stay durable without becoming unrecoverable. */
+export type HideLocationsMode = "untilManualRefresh" | "never";
 
 /** Order of the pinned locations among themselves. Unpinned locations always
  *  keep the provider's own order. */

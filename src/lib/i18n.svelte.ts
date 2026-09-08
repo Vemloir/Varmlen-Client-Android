@@ -181,7 +181,6 @@ const EN: Dict = {
   "settings.hideLocationsSub":
     "How long a hidden location stays out of the list.",
   "settings.hideMode.untilManualRefresh": "Until I refresh it myself",
-  "settings.hideMode.untilRefresh": "Until the next update",
   "settings.hideMode.never": "Until I show it again",
   "settings.pinOrder": "Pinned locations",
   "settings.pinOrderSub": "Order of the pinned locations.",
@@ -398,7 +397,6 @@ const RU: Dict = {
   "settings.hideLocations": "Скрытие локаций",
   "settings.hideLocationsSub": "Как долго скрытая локация отсутствует в списке.",
   "settings.hideMode.untilManualRefresh": "Пока сам не обновлю",
-  "settings.hideMode.untilRefresh": "До ближайшего обновления",
   "settings.hideMode.never": "Пока сам не покажу",
   "settings.pinOrder": "Закреплённые локации",
   "settings.pinOrderSub": "Порядок закреплённых локаций.",

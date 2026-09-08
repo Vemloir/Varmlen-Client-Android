@@ -7,6 +7,14 @@
   remove are subscription actions), only the ping. Its locations are deleted for
   real from the row menu, and when the last one goes, the card goes with it.
 
+- "Until the next update" is gone as a hiding mode. A background update is not
+  something the user did, so hiding a location could undo itself while the app was
+  simply open. Two modes are left: hidden until I refresh that card myself, and
+  hidden until I show it again. Removing the subscription and importing it again
+  always brings every location back -- a re-import is a new subscription, not a
+  refresh of the old one -- so hiding stays durable without becoming
+  unrecoverable. A stored `untilRefresh` falls back to the default.
+
 - Hiding one location no longer hides the location behind it. Hiding and pinning
   were keyed by the ENDPOINT, and a provider can put two rows on one endpoint
   exactly -- the "auto choice" balancer of a JSON profile exposes the same first
