@@ -35,6 +35,7 @@ import {
   nextRefreshBatch,
 } from "$lib/subscription-refresh";
 import { runPingsInParallel } from "$lib/ping-scheduler";
+import { locationKey, migrateLocationKeys } from "$lib/location-identity";
 import { measureLocationPing } from "$lib/location-ping";
 import {
   hiddenCount as countHidden,
@@ -87,8 +88,9 @@ export interface Subscription {
   collapsed: boolean;
   /** Pinned subscriptions sort to the top of the list. */
   pinned: boolean;
-  /** Endpoint keys of locations the user hid from this card. Keyed by
-   *  `serverKey`, never by the entry id: a refresh regenerates every id. */
+  /** Row keys (`locationKey`: endpoint + label) the user hid from this card. Not
+   *  entry ids -- a refresh regenerates every id -- and not the bare endpoint,
+   *  because two rows can share one endpoint. */
   hiddenKeys?: string[];
   /** Endpoint key -> the moment it was pinned, so the pinned block can be
    *  ordered by pin time instead of by latency. */
@@ -150,6 +152,8 @@ function migrateIds(subs: Subscription[]): { subs: Subscription[]; remapped: Rec
       if (srv.raw && srv.raw.raw_profile === undefined) srv.raw.raw_profile = null;
       if (srv.editDraft === undefined) srv.editDraft = null;
     }
+    // Hidden/pinned keys were endpoint-only before rows were told apart by label.
+    migrateLocationKeys(sub);
     if (sub.description === undefined) sub.description = null;
     if (sub.webPageUrl === undefined) sub.webPageUrl = null;
     if (sub.sourceJson === undefined) sub.sourceJson = null;
@@ -384,7 +388,7 @@ class SubsStore {
    *  without un-hiding them. */
   visibleLocations(sub: Subscription, revealHidden = false): ServerEntry[] {
     return orderLocations(sub.servers, {
-      keyOf: (server) => serverKey(server),
+      keyOf: (server) => locationKey(server),
       hiddenKeys: sub.hiddenKeys ?? [],
       pinnedAt: sub.pinnedLocations ?? {},
       hideMode: settings.hideLocations,
@@ -396,7 +400,7 @@ class SubsStore {
   hiddenCount(sub: Subscription): number {
     return countHidden(
       sub.servers,
-      (server) => serverKey(server),
+      (server) => locationKey(server),
       sub.hiddenKeys ?? [],
       settings.hideLocations,
     );
@@ -408,7 +412,7 @@ class SubsStore {
     const hidden = sub.hiddenKeys ?? [];
     if (hidden.length === 0) return [];
     return sub.servers
-      .filter((s) => hidden.includes(serverKey(s)))
+      .filter((s) => hidden.includes(locationKey(s)))
       .map((s) => s.id);
   }
 
@@ -418,16 +422,16 @@ class SubsStore {
     const pinned = sub.pinnedLocations ?? {};
     if (Object.keys(pinned).length === 0) return [];
     return sub.servers
-      .filter((s) => serverKey(s) in pinned)
+      .filter((s) => locationKey(s) in pinned)
       .map((s) => s.id);
   }
 
   isLocationHidden(sub: Subscription, server: ServerEntry): boolean {
-    return (sub.hiddenKeys ?? []).includes(serverKey(server));
+    return (sub.hiddenKeys ?? []).includes(locationKey(server));
   }
 
   isLocationPinned(sub: Subscription, server: ServerEntry): boolean {
-    return serverKey(server) in (sub.pinnedLocations ?? {});
+    return locationKey(server) in (sub.pinnedLocations ?? {});
   }
 
   /** The action set for one location: hide for a subscription, delete for a
@@ -442,7 +446,7 @@ class SubsStore {
   }
 
   toggleHideLocation(subId: string, server: ServerEntry): void {
-    const key = serverKey(server);
+    const key = locationKey(server);
     this.list = this.list.map((s) => {
       if (s.id !== subId) return s;
       const hidden = s.hiddenKeys ?? [];
@@ -457,7 +461,7 @@ class SubsStore {
   }
 
   togglePinLocation(subId: string, server: ServerEntry): void {
-    const key = serverKey(server);
+    const key = locationKey(server);
     this.list = this.list.map((s) => {
       if (s.id !== subId) return s;
       const pinned = { ...(s.pinnedLocations ?? {}) };

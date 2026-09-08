@@ -7,6 +7,17 @@
   remove are subscription actions), only the ping. Its locations are deleted for
   real from the row menu, and when the last one goes, the card goes with it.
 
+- Hiding one location no longer hides the location behind it. Hiding and pinning
+  were keyed by the ENDPOINT, and a provider can put two rows on one endpoint
+  exactly -- the "auto choice" balancer of a JSON profile exposes the same first
+  proxy outbound as the location behind it, so hiding one row hid its neighbour.
+  A row is now keyed by endpoint AND label, the way the selection already resolves
+  it: the row you pointed at is the row that goes away. Renaming a location brings
+  back a hidden one and unpins a pinned one, because that row is gone under a new
+  name. Keys written by older builds are rewritten to the row they can only have
+  meant; when several rows share the old key the intent is lost, so those locations
+  show again rather than stay hidden.
+
 - Long-press a location for its menu: ping, rename, pin, hide -- or delete, for a
   location of a manually added configuration. The gesture dies the moment it stops
   being a press: a finger that wanders more than 10 px, a list that scrolls under
