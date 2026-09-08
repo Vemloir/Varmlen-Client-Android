@@ -25,6 +25,16 @@ export interface SelectableServer {
     uuid: string;
     password?: string | null;
     method?: string | null;
+    /** Providers put several locations on ONE endpoint and separate them by
+     *  transport, path, SNI or flow. A key without them cannot tell an ordinary
+     *  location from the profile's "auto choice", so they are part of it. */
+    transport?: string | null;
+    security?: string | null;
+    sni?: string | null;
+    flow?: string | null;
+    path?: string | null;
+    public_key?: string | null;
+    short_id?: string | null;
   } | null;
 }
 
@@ -59,6 +69,13 @@ export function serverKey(srv: SelectableServer): string {
         srv.raw.uuid,
         srv.raw.password ?? "",
         srv.raw.method ?? "",
+        srv.raw.transport ?? "",
+        srv.raw.security ?? "",
+        srv.raw.sni ?? "",
+        srv.raw.flow ?? "",
+        srv.raw.path ?? "",
+        srv.raw.public_key ?? "",
+        srv.raw.short_id ?? "",
       ].join("\u0000")
     : srv.id;
 }
@@ -69,8 +86,17 @@ export function normalizeLocationLabel(name: string): string {
   return stripLeadingFlag(name).trim().toLowerCase();
 }
 
-/** Re-find the chosen location: exact entry id → stable endpoint key (same
- *  subscription first) → the same label inside the same subscription.
+/** Re-find the chosen location: exact entry id → stable endpoint key → the same
+ *  label, all of them INSIDE the card the user picked from while that card
+ *  exists.
+ *
+ *  Scoping to the card is the whole point. The same endpoint can sit in two cards
+ *  (a pasted configuration and a provider profile, or the same subscription
+ *  imported twice), so resolving an endpoint or a label across every card is how
+ *  refreshing one subscription moved the selection into another one -- the
+ *  provider rotates the endpoint of the chosen location, the key no longer
+ *  matches at home, and a global search happily finds that old endpoint living
+ *  somewhere else.
  *
  *  Never returns a different location than the one that was chosen. When nothing
  *  matches, the identity is passed through untouched, so a later refresh that
@@ -95,32 +121,44 @@ export function resolveSelection(
     lost: false,
   });
 
-  const byId = entries.find(({ srv }) => srv.id === current.serverId);
+  // The card the choice came from owns it. Only when that card is gone (the
+  // user removed it) may the choice be re-found in another one.
+  const home = current.subId
+    ? subs.find((sub) => sub.id === current.subId)
+    : undefined;
+  const pool = home
+    ? entries.filter(({ sub }) => sub.id === home.id)
+    : entries;
+
+  const byId = pool.find(({ srv }) => srv.id === current.serverId);
   if (byId) return chosen(byId.sub, byId.srv);
 
+  const wanted = current.label ? normalizeLocationLabel(current.label) : null;
+
   if (current.key) {
-    const sameSub =
-      current.subId === null
-        ? undefined
-        : entries.find(
-            ({ sub, srv }) =>
-              sub.id === current.subId && serverKey(srv) === current.key,
-          );
-    const match =
-      sameSub ?? entries.find(({ srv }) => serverKey(srv) === current.key);
-    if (match) return chosen(match.sub, match.srv);
+    const matches = pool.filter(({ srv }) => serverKey(srv) === current.key);
+    if (matches.length > 0) {
+      // Several locations of one provider can share an endpoint exactly and be
+      // told apart only by their label (an "auto choice" profile in front of the
+      // same servers). Taking the first match in that case is how a refresh moved
+      // the user from the location he picked onto the balancer.
+      const match =
+        matches.length === 1 || wanted === null
+          ? matches[0]
+          : (matches.find(({ srv }) => normalizeLocationLabel(srv.name) === wanted) ??
+            matches[0]);
+      return chosen(match.sub, match.srv);
+    }
   }
 
-  if (current.subId && current.label) {
-    const wanted = normalizeLocationLabel(current.label);
-    const match = entries.find(
-      ({ sub, srv }) =>
-        sub.id === current.subId && normalizeLocationLabel(srv.name) === wanted,
+  if (wanted !== null) {
+    const match = pool.find(
+      ({ srv }) => normalizeLocationLabel(srv.name) === wanted,
     );
     if (match) return chosen(match.sub, match.srv);
   }
 
-  if (!current.key && !current.label) {
+  if (!current.serverId && !current.key && !current.label) {
     const first = entries[0];
     return chosen(first.sub, first.srv);
   }

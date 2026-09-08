@@ -14,6 +14,15 @@
   the top of the list with the same pin mark a pinned card carries. The menu is
   one per app and as wide as its longest item, measured from the text, because
   `max-content` is not honoured the same way in every WebView.
+- The ✕ of a modal answered only when the user missed the icon. An icon-only
+  button is clicked on its `<svg>`, and an `SVGElement` is not an `HTMLElement`,
+  so the old filter dropped exactly the clicks that were meant to close it.
+- A refresh no longer moves the chosen location into another card. The card the
+  user picked from owns the choice while it exists; the endpoint key now carries
+  transport, security, SNI, flow, path and the two REALITY fields, because
+  providers put several locations on one endpoint and separate them only by those;
+  when several locations still share a key, the tie is broken by the label the
+  user chose rather than by the order in the provider's list.
 - Android: ask a profile's resolver over a transport the proxy actually carries.
   Full JSON profiles hard-wire `8.8.8.8`-style UDP resolvers and the client
   forces every resolver connection through the selected proxy -- the anti-leak

@@ -139,4 +139,84 @@ describe("subscription location selection", () => {
   it("compares labels ignoring flag, spacing and case", () => {
     expect(normalizeLocationLabel("🇺🇸 США")).toBe(normalizeLocationLabel(" сша "));
   });
+
+  it("never moves the choice into another card when the endpoint rotated", () => {
+    // The same old endpoint still lives in a second card (a pasted link, a
+    // duplicated import). A global endpoint search would jump there.
+    const home = sub("proxen", [server("p-1", "🇺🇸 США", "oanql1.example.com")]);
+    const other = sub("paste", [server("m-1", "🇺🇸 США", "old.example.com")]);
+    const next = resolveSelection(subs([home, other]), {
+      serverId: "p-old",
+      key: serverKey(server("x", "🇺🇸 США", "old.example.com")),
+      subId: "proxen",
+      label: "🇺🇸 США",
+    });
+
+    expect(next.serverId).toBe("p-1");
+    expect(next.subId).toBe("proxen");
+    expect(next.lost).toBe(false);
+  });
+
+  it("reports a loss instead of picking the same label in another card", () => {
+    const home = sub("proxen", [server("p-1", "🇩🇪 Германия", "ksakj2.example.com")]);
+    const other = sub("paste", [server("m-1", "🇺🇸 США", "oanql1.example.com")]);
+    const next = resolveSelection(subs([home, other]), {
+      serverId: "m-old",
+      key: serverKey(server("x", "🇺🇸 США", "old.example.com")),
+      subId: "proxen",
+      label: "🇺🇸 США",
+    });
+
+    expect(next.serverId).toBeNull();
+    expect(next.lost).toBe(true);
+    // The identity survives, so a later update that brings it back re-picks it.
+    expect(next.label).toBe("🇺🇸 США");
+  });
+
+  it("keeps the chosen location when every entry shares one endpoint", () => {
+    // The AegisVPN shape: four locations and an "auto choice" profile in front of
+    // the SAME endpoint, told apart by label only. A refresh regenerates the ids,
+    // and matching the key by "first hit" landed the user on Автовыбор.
+    const shared = sub("aegis", [
+      server("auto", "⚡ Автовыбор", "same.example.com"),
+      server("nl", "🇳🇱 Нидерланды", "same.example.com"),
+      server("de", "🇩🇪 Германия", "same.example.com"),
+    ]);
+    const next = resolveSelection(subs([shared]), {
+      serverId: "stale-id",
+      key: serverKey(shared.servers[1]),
+      subId: "aegis",
+      label: "🇳🇱 Нидерланды",
+    });
+
+    expect(next.serverId).toBe("nl");
+    expect(next.lost).toBe(false);
+  });
+
+  it("tells locations apart when only the transport differs", () => {
+    const withPath = { ...server("a", "Первая", "one.example.com"), raw: {
+      protocol: "vless", host: "one.example.com", port: 443,
+      uuid: "uuid-one.example.com", password: null, method: null,
+      transport: "ws", security: "tls", sni: "one.example.com", path: "/ws",
+    }};
+    const plain = { ...server("b", "Вторая", "one.example.com"), raw: {
+      protocol: "vless", host: "one.example.com", port: 443,
+      uuid: "uuid-one.example.com", password: null, method: null,
+      transport: "tcp", security: "tls", sni: "one.example.com", path: null,
+    }};
+    expect(serverKey(withPath)).not.toBe(serverKey(plain));
+  });
+
+  it("re-finds the choice in another card once its own card is gone", () => {
+    const other = sub("paste", [server("m-1", "🇺🇸 США", "oanql1.example.com")]);
+    const next = resolveSelection(subs([other]), {
+      serverId: "p-old",
+      key: serverKey(other.servers[0]),
+      subId: "proxen",
+      label: "🇺🇸 США",
+    });
+
+    expect(next.serverId).toBe("m-1");
+    expect(next.subId).toBe("paste");
+  });
 });
