@@ -28,8 +28,12 @@ describe("card surface contract", () => {
     );
     expect(split).toMatch(/\.empty-state\s*\{[^}]*border:\s*none;/s);
     expect(split).toMatch(/\.picker\s*\{[^}]*border:\s*none;/s);
+    // The separator is one step off the plate it is drawn on. The picker plate took
+    // the application background in the Linux pass (a plate inside a card reads as
+    // cut out of it, not as a box glued on top), so the line has to be the lighter
+    // colour now -- a separator the same colour as its surface is not a separator.
     expect(split).toMatch(
-      /\.picker-row \+ \.picker-row\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
+      /\.picker-row \+ \.picker-row\s*\{[^}]*border-top:\s*1px solid var\(--bg-elev\);/s,
     );
   });
 
@@ -140,6 +144,12 @@ describe("card surface contract", () => {
     );
     expect(css).toMatch(
       /\.is-android \.modal-backdrop > \.modal\s*\{[^}]*max-height:\s*100%\s*!important;/s,
+    );
+    // The pages centre their dialogs for the desktop; on Android the sheet must come
+    // back to the bottom edge, or a dialog floats in the middle of the screen with
+    // nothing holding it there.
+    expect(css).toMatch(
+      /\.is-android \.modal-backdrop\s*\{[^}]*align-items:\s*flex-end;/s,
     );
     expect(dropdown).toContain("field?: boolean");
     expect(dropdown).toContain("class:field");

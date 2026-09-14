@@ -193,6 +193,10 @@ a {
    second class, so `.is-android .modal-backdrop` tied with them and lost by
    source order. This selector always keeps the system-inset padding. */
 html.is-android .modal-backdrop {
+  /* The page centres its dialogs, because on a desktop a dialog belongs in the
+     middle of the window it came from. A phone has no window to centre in: the
+     sheet comes from the bottom edge and rides the keyboard up. */
+  align-items: flex-end;
   padding-top: calc(var(--sat) + 12px);
   padding-right: 12px;
   padding-bottom: calc(env(safe-area-inset-bottom) + 12px);
