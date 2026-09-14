@@ -22,7 +22,6 @@ const order = (
     keyOf,
     hiddenKeys: [],
     pinnedAt: {},
-    hideMode: "untilManualRefresh",
     revealHidden: false,
     pinOrder: "newestLast",
     ...over,
@@ -35,7 +34,6 @@ describe("location menu", () => {
         fromSubscription: true,
         hidden: false,
         pinned: false,
-        hideMode: "untilManualRefresh",
       }),
     ).toEqual(["ping", "rename", "pin", "hide"]);
   });
@@ -47,7 +45,6 @@ describe("location menu", () => {
         fromSubscription: false,
         hidden: false,
         pinned: true,
-        hideMode: "never",
       }),
     ).toEqual(["ping", "rename", "unpin", "delete"]);
   });
@@ -58,22 +55,15 @@ describe("location menu", () => {
         fromSubscription: true,
         hidden: true,
         pinned: true,
-        hideMode: "never",
       }),
     ).toEqual(["ping", "rename", "unpin", "unhide"]);
   });
 
-  it("offers hide in every mode -- the modes differ in what restores it", () => {
-    for (const hideMode of ["untilManualRefresh", "never"] as const) {
-      expect(
-        locationActions({
-          fromSubscription: true,
-          hidden: false,
-          pinned: false,
-          hideMode,
-        }),
-      ).toContain("hide");
-    }
+  it("offers hide without any duration setting to choose", () => {
+    // Hiding used to come in modes; the row either stays hidden or it does not.
+    expect(locationActions({ fromSubscription: true, hidden: false, pinned: false })).toContain(
+      "hide",
+    );
   });
 });
 
@@ -84,19 +74,19 @@ describe("hidden locations", () => {
     const out = order(servers, { hiddenKeys });
     expect(out.visible.map((s) => s.id)).toEqual(["a", "c"]);
     expect(out.hidden.map((s) => s.id)).toEqual(["b"]);
-    expect(hiddenCount(servers, keyOf, hiddenKeys, "untilManualRefresh")).toBe(1);
+    expect(hiddenCount(servers, keyOf, hiddenKeys)).toBe(1);
   });
 
-  it("keeps the location hidden in every mode", () => {
+  it("keeps the location hidden until the card reveals it", () => {
     const servers = [row("a"), row("b")];
     const hiddenKeys = [servers[1].key];
-    for (const hideMode of ["untilManualRefresh", "never"] as const) {
-      expect(isHiddenLocation(servers[1].key, hiddenKeys, hideMode, false)).toBe(
-        true,
-      );
-      expect(order(servers, { hiddenKeys, hideMode }).visible).toHaveLength(1);
-      expect(hiddenCount(servers, keyOf, hiddenKeys, hideMode)).toBe(1);
-    }
+    expect(isHiddenLocation(servers[1].key, hiddenKeys, false)).toBe(true);
+    expect(order(servers, { hiddenKeys }).visible).toHaveLength(1);
+    expect(hiddenCount(servers, keyOf, hiddenKeys)).toBe(1);
+    // revealing shows them dimmed without un-hiding anything
+    expect(isHiddenLocation(servers[1].key, hiddenKeys, true)).toBe(false);
+    expect(order(servers, { hiddenKeys, revealHidden: true }).visible).toHaveLength(2);
+    expect(hiddenCount(servers, keyOf, hiddenKeys)).toBe(1);
   });
 
   it("reveals hidden locations on request without un-hiding them", () => {
@@ -106,7 +96,7 @@ describe("hidden locations", () => {
     expect(out.visible.map((s) => s.id)).toEqual(["a", "b"]);
     expect(out.hidden).toHaveLength(0);
     // Still counted, so the card keeps offering the way to hide them again.
-    expect(hiddenCount(servers, keyOf, hiddenKeys, "never")).toBe(1);
+    expect(hiddenCount(servers, keyOf, hiddenKeys)).toBe(1);
   });
 });
 

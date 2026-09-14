@@ -28,6 +28,11 @@ struct ConnectArgs {
     /// version or the APK-bundled one). The service falls back to the bundled
     /// binary if the file is gone.
     bin: String,
+    /// MTU for the interface VpnService is about to create. The number is decided
+    /// in the frontend and clamped twice (here, and in Kotlin, where the interface
+    /// is actually built), because a saved preference also reaches the service
+    /// through the Quick Settings tile without passing this process at all.
+    mtu: u32,
 }
 
 /// Managed handle to the Android plugin.
@@ -82,6 +87,7 @@ pub fn connect<R: Runtime>(
     log_level: String,
     killswitch: bool,
     bin: String,
+    mtu: u32,
 ) -> Result<(), String> {
     let vpn = app.state::<Vpn<R>>();
     vpn.0
@@ -96,6 +102,7 @@ pub fn connect<R: Runtime>(
                 log_level,
                 killswitch,
                 bin,
+                mtu,
             },
         )
         .map(|_| ())

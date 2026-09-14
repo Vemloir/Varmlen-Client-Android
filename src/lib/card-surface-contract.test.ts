@@ -49,7 +49,7 @@ describe("card surface contract", () => {
       /\.trigger\s*\{[^}]*background:\s*var\(--bg-elev-2\);[^}]*border:\s*none;/s,
     );
     expect(settings).toMatch(
-      /\.versions-btn\s*\{[^}]*background:\s*var\(--bg-elev-2\);[^}]*border:\s*none;/s,
+      /\.versions-btn\s*\{[^}]*background:\s*var\(--bg\);[^}]*border:\s*none;/s,
     );
   });
 

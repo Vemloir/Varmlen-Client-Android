@@ -132,8 +132,14 @@ vi.mock("$lib/subs.svelte", () => ({
     pings: {},
     importing: false,
     hasTraffic: vi.fn(() => false),
+    // The traffic strip is drawn even with nothing to show, so the page asks for a
+    // fraction on every card: an unknown total is 0% with a "no data" label, never
+    // an infinite bar.
+    trafficPercent: vi.fn(() => 0),
     expiresText: vi.fn(() => null),
     trafficText: vi.fn(() => ""),
+    isRevealed: vi.fn(() => false),
+    toggleRevealed: vi.fn(),
     isSubPinging: vi.fn(() => false),
     isManualCard: vi.fn(fixtures.isManualCard),
     visibleLocations: vi.fn((sub: { servers: unknown[] }) => sub.servers),

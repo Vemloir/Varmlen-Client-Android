@@ -36,6 +36,7 @@ import {
 } from "$lib/subscription-refresh";
 import { runPingsInParallel } from "$lib/ping-scheduler";
 import { locationKey, migrateLocationKeys } from "$lib/location-identity";
+import { hasTraffic, trafficPercent } from "$lib/traffic";
 import { measureLocationPing } from "$lib/location-ping";
 import {
   hiddenCount as countHidden,
@@ -95,6 +96,11 @@ export interface Subscription {
   /** Endpoint key -> the moment it was pinned, so the pinned block can be
    *  ordered by pin time instead of by latency. */
   pinnedLocations?: Record<string, number>;
+  /** Why the last update failed, or null/absent when the last update worked. A
+   *  failed update keeps the previous locations, so without this the subscription
+   *  simply grows stale with no trace of why. Optional because it did not exist
+   *  before 0.4.0, and it describes the last attempt this window made. */
+  lastError?: string | null;
   /** True while refresh() is in flight. Not persisted. */
   refreshing?: boolean;
 }
@@ -114,6 +120,19 @@ interface Persisted {
 }
 
 const KEY = "varmlen.subs";
+
+/** Shown when the fetch worked but yielded nothing usable -- the usual sign of a
+ *  provider that answered with an error page or a format we cannot parse. */
+export const NO_LOCATIONS_ERROR = "subscription returned no locations";
+
+/** A fetch error is a transport string; keep the URL out of it and keep the
+ *  message short enough to render in the subscription card. */
+function describeError(e: unknown, url: string): string {
+  const raw =
+    e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+  const text = (raw || "unknown error").replace(url, "<subscription>").trim();
+  return text.length > 180 ? `${text.slice(0, 177)}...` : text;
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -391,7 +410,6 @@ class SubsStore {
       keyOf: (server) => locationKey(server),
       hiddenKeys: sub.hiddenKeys ?? [],
       pinnedAt: sub.pinnedLocations ?? {},
-      hideMode: settings.hideLocations,
       revealHidden,
       pinOrder: settings.pinOrder,
     }).visible;
@@ -402,7 +420,6 @@ class SubsStore {
       sub.servers,
       (server) => locationKey(server),
       sub.hiddenKeys ?? [],
-      settings.hideLocations,
     );
   }
 
@@ -441,7 +458,6 @@ class SubsStore {
       fromSubscription: !this.isManualCard(sub),
       hidden: this.isLocationHidden(sub, server),
       pinned: this.isLocationPinned(sub, server),
-      hideMode: settings.hideLocations,
     });
   }
 
@@ -488,17 +504,6 @@ class SubsStore {
     this.persist();
   }
 
-  /** Restore every hidden location of a card. Called by an explicit Refresh when
-   *  the user chose "hidden until I refresh myself". */
-  clearHiddenLocations(subId: string): void {
-    this.list = this.list.map((s) =>
-      s.id === subId && (s.hiddenKeys?.length ?? 0) > 0
-        ? { ...s, hiddenKeys: [] }
-        : s,
-    );
-    this.persist();
-  }
-
   togglePin(subId: string): void {
     // Only one subscription may be pinned: pinning one unpins every other.
     const willPin = !this.list.find((s) => s.id === subId)?.pinned;
@@ -508,10 +513,34 @@ class SubsStore {
     this.persist();
   }
 
-  /** Whether the provider sent any traffic figures — gates the traffic pill, so
-   *  a bare config (no quota/usage) doesn't show a meaningless "0B". */
+  /** Cards whose hidden locations the user is looking at right now. Revealing is
+   *  temporary and per card -- it shows them dimmed without un-hiding anything --
+   *  and it lives in the store rather than in the page, because switching to
+   *  Settings and back re-creates the page component and the card started
+   *  pretending the user had never asked to see them. */
+  revealedHidden = $state<Set<string>>(new Set());
+
+  isRevealed(subId: string): boolean {
+    return this.revealedHidden.has(subId);
+  }
+
+  toggleRevealed(subId: string): void {
+    const next = new Set(this.revealedHidden);
+    if (next.has(subId)) next.delete(subId);
+    else next.add(subId);
+    this.revealedHidden = next;
+  }
+
+  /** Whether the provider sent any traffic figures. The strip is drawn either way;
+   *  this only decides whether it shows numbers or says there are none. */
   hasTraffic(sub: Subscription): boolean {
-    return sub.totalBytes > 0 || sub.usedBytes > 0;
+    return hasTraffic(sub.usedBytes, sub.totalBytes);
+  }
+
+  /** How full the strip is, 0-100. No quota means no fraction to draw: an unknown
+   *  total is not an infinite bar, it is a bar with nothing known about it. */
+  trafficPercent(sub: Subscription): number {
+    return trafficPercent(sub.usedBytes, sub.totalBytes);
   }
 
   trafficText(sub: Subscription): string {
@@ -608,22 +637,23 @@ class SubsStore {
       );
       if (result.servers.length === 0) {
         this.list = this.list.map((s) =>
-          s.id === subId ? { ...s, refreshing: false } : s,
+          s.id === subId
+            ? { ...s, refreshing: false, lastError: NO_LOCATIONS_ERROR }
+            : s,
         );
         return;
       }
       this.applyProviderResult(subId, result, new Date().toISOString());
-      // "Hidden until I refresh myself": an explicit Refresh is the user asking
-      // for the provider's current list, so hidden locations come back. The
-      // background refresh is not, and keeps them hidden -- locations must not
-      // return by themselves while the app is merely open.
-      if (manual && settings.hideLocations === "untilManualRefresh") {
-        this.clearHiddenLocations(subId);
-      }
+      // Nothing here restores a hidden location, not even an explicit Refresh: the
+      // user hid that row and only he brings it back (the card's "N hidden" line),
+      // or he removes the subscription and imports it again. A refresh is the
+      // provider's business, not the user's undo button.
     } catch (e) {
       console.error("refresh failed:", e);
       this.list = this.list.map((s) =>
-        s.id === subId ? { ...s, refreshing: false } : s,
+        s.id === subId
+          ? { ...s, refreshing: false, lastError: describeError(e, sub.url) }
+          : s,
       );
     } finally {
       if (reschedule) this.rescheduleAutoRefresh();
@@ -720,6 +750,9 @@ class SubsStore {
             jsonEdited: false,
             importedAt,
             refreshing: false,
+            // The locations the card shows came from this response, so whatever
+            // the previous attempt complained about is no longer true.
+            lastError: null,
           }
         : sub,
     );

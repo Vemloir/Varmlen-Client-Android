@@ -25,6 +25,10 @@
   --accent-hover: #ffffff;
   --accent-faint: rgba(255, 255, 255, 0.12);
   --accent-on: #0d0d0d;
+  /* The tab pill's plate: the panel colour -- the one every card and the session
+     pill wear -- darkened. Derived rather than a literal, so it stays a darkened
+     panel in the light theme too. */
+  --nav-bg: color-mix(in srgb, var(--bg-elev) 93%, #000000);
 }
 
 [data-theme="light"] {
@@ -53,6 +57,26 @@
   --danger-faint: rgba(229, 72, 77, 0.14);
   --danger-faint-2: rgba(229, 72, 77, 0.26);
   --warn: #f5a524;
+
+  /* The tab pill floats over the pages instead of taking a row of its own, so
+     every scrolling page has to keep this much room at the bottom -- otherwise
+     the last row hides under it for good. */
+  --nav-height: 48px;
+  --nav-inset: 10px;
+  /* The bottom fade ends this far above the pill's top edge. */
+  --fade-lift: 12px;
+  --fade-height: calc(var(--nav-inset) + var(--nav-height) + var(--fade-lift));
+  /* The pill's box. The fade at the bottom edge is drawn from the measured
+     element, not from these, but the tab bar and the pages' clearance both come
+     from here. */
+  --nav-width: min(300px, calc(100% - 48px));
+  /* On a phone the pill lifts itself above the system gesture bar, so the room the
+     pages keep has to grow by the same amount: the pill is pinned to
+     `max(--nav-inset, safe-area-inset-bottom)`, and a clearance that ignores the
+     inset hides the last row under the pill on exactly the devices that need it. */
+  --nav-clearance: calc(
+    var(--nav-height) + var(--nav-inset) + 16px + env(safe-area-inset-bottom)
+  );
 
   /* One rounding family, scaled up: a control that is a third of a card should
      look like it belongs to the same object, not like a different shape. */
@@ -87,6 +111,17 @@
      location menu is trying to make. */
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* The user's own text stays selectable: fields, the JSON editor, anything that
+   says otherwise. Taking that away would be tidying up somebody's clipboard. */
+input,
+textarea,
+select,
+[contenteditable],
+.selectable {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 html,
@@ -414,24 +449,4 @@ input[type="search"]::-webkit-search-cancel-button {
   .list-row.tappable:hover {
     background: var(--bg-elev-2);
   }
-}
-
-/* ---------- soft fade at the top/bottom of scroll panels ----------
-   Replaces the hard clip where content meets the top bar / tab bar with a
-   gentle fade. Apply alongside a scroll container (.scroll / .page). */
-.fade-y {
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 10px,
-    #000 calc(100% - 10px),
-    transparent 100%
-  );
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    #000 10px,
-    #000 calc(100% - 10px),
-    transparent 100%
-  );
 }

@@ -32,6 +32,9 @@ describe("session pill numbers", () => {
     expect(formatRate(0)).toBe("0 B/s");
     expect(formatRate(2 * 1024)).toBe("2 KB/s");
     expect(formatRate(1.5 * 1024 ** 2)).toBe("1.5 MB/s");
+    // A zero is a reading (the tunnel carried nothing); null is "nobody was
+    // allowed to look", and the two must not render the same way.
+    expect(formatRate(null)).toBe("—/s");
   });
 
   it("grows seconds into minutes, hours and days", () => {

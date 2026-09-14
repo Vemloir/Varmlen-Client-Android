@@ -26,7 +26,7 @@
     onSelect: (id: string) => void;
     onDetails: (server: ServerEntry) => void;
     /** Ask the page to open the location menu at a point. The page owns THE menu:
-     *  a state per card left several of them on screen when the user opened one in
+     *  a state per card left two of them on screen when the user right-clicked in
      *  two different subscriptions. */
     onMenu: (server: ServerEntry, point: { x: number; y: number }) => void;
   } = $props();
@@ -134,16 +134,19 @@
           </div>
           <div class="srv-tr dim">{server.transport}</div>
         </div>
+        <!-- The latency belongs INSIDE the row button. As a sibling it sat
+             between the row and the chevron as a 44px strip answering no click,
+             no long press and no right-click. -->
+        <span class="srv-ping" aria-label="latency">
+          {#if ping === "pinging"}
+            …
+          {:else if ping === "timeout"}
+            {t("ping.na")}
+          {:else if typeof ping === "number"}
+            {t("ping.ms", { n: ping })}
+          {/if}
+        </span>
       </button>
-      <span class="srv-ping" aria-label="latency">
-        {#if ping === "pinging"}
-          …
-        {:else if ping === "timeout"}
-          {t("ping.na")}
-        {:else if typeof ping === "number"}
-          {t("ping.ms", { n: ping })}
-        {/if}
-      </span>
       <button
         class="srv-detail"
         aria-label="Location details"
@@ -247,6 +250,7 @@
   }
   .chev { color: inherit; flex-shrink: 0; }
   .srv-ping {
+    flex-shrink: 0;
     align-self: center;
     font-variant-numeric: tabular-nums;
     font-size: 12px;

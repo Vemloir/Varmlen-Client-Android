@@ -1,4 +1,11 @@
-import { vpnConnect, vpnDisconnect, vpnStatus, type SplitInput } from "$lib/api";
+import {
+  tunnelStats,
+  vpnConnect,
+  vpnDisconnect,
+  vpnStatus,
+  type SplitInput,
+} from "$lib/api";
+import { SessionThroughput } from "$lib/session-stats";
 import { subs } from "$lib/subs.svelte";
 import { split } from "$lib/split.svelte";
 import { settings } from "$lib/settings.svelte";
@@ -30,6 +37,77 @@ class ConnStore {
   error = $state<string | null>(null);
   /** True while in the "dropped" phase WITH the kill switch holding traffic. */
   blockedByKillswitch = $state(false);
+  /** Throughput of the tunnel, bytes per second over the last sample, and the age
+   *  of the tunnel in seconds. Zero while disconnected: the pill reports that
+   *  state. Null while connected means the device refused to be read -- on a
+   *  phone the interface belongs to VpnService and whether an unprivileged app
+   *  may see its counters is the device's policy, not ours. */
+  sessionUp = $state<number | null>(0);
+  sessionDown = $state<number | null>(0);
+  sessionSeconds = $state(0);
+
+  private throughput = new SessionThroughput();
+  private sessionStartedAt = 0;
+  private sessionTickerStarted = false;
+
+  /** Count the session once a second while the tunnel is up. Started from
+   *  refresh(), next to the drop listener: both are about the tunnel, not about
+   *  whichever page happens to be open. */
+  startSessionTicker(): void {
+    if (this.sessionTickerStarted) return;
+    this.sessionTickerStarted = true;
+    setInterval(() => void this.tickSession(), 1000);
+  }
+
+  private async tickSession(): Promise<void> {
+    if (this.status !== "connected") return;
+    let stats = null;
+    try {
+      stats = await tunnelStats();
+    } catch {
+      stats = null; // no counters on this device
+    }
+    if (this.status !== "connected") return;
+    const at = Date.now();
+    if (!stats) {
+      // The session is still measurable in time, and the rates say "unknown"
+      // rather than claiming an idle tunnel.
+      this.sessionUp = null;
+      this.sessionDown = null;
+      this.sessionSeconds = Math.max(
+        0,
+        Math.floor(at / 1000 - this.sessionStartedAt / 1000),
+      );
+      return;
+    }
+    const rate = this.throughput.sample(
+      { up: stats.tx_bytes, down: stats.rx_bytes },
+      at,
+    );
+    this.sessionUp = rate.up;
+    this.sessionDown = rate.down;
+    // The device knows how old the tunnel is; only if sysfs would not say do we
+    // fall back to when this window noticed the connection.
+    const since = stats.since_unix ?? Math.floor(this.sessionStartedAt / 1000);
+    this.sessionSeconds = Math.max(0, Math.floor(at / 1000) - since);
+  }
+
+  /** A tunnel came up: start counting from here, not from whatever the device
+   *  has carried since it was created. */
+  private openSession(): void {
+    if (this.sessionStartedAt !== 0) return;
+    this.sessionStartedAt = Date.now();
+    this.throughput.reset();
+    this.sessionSeconds = 0;
+  }
+
+  private closeSession(): void {
+    this.sessionStartedAt = 0;
+    this.throughput.reset();
+    this.sessionUp = 0;
+    this.sessionDown = 0;
+    this.sessionSeconds = 0;
+  }
 
   private operations = new ConnectionOperationGate();
   private dropListenerStarted = false;
@@ -71,6 +149,9 @@ class ConnStore {
       server: subs.selectedKey,
       killswitch: settings.killswitch,
       allowLan: settings.allowLan,
+      // The MTU belongs in the signature: a tunnel that is already up must be
+      // rebuilt when the user changes it, or the setting reads as applied and is not.
+      mtu: settings.mtu,
       split: splitInput(),
     });
   }
@@ -141,6 +222,7 @@ class ConnStore {
         settings.killswitch,
         settings.allowLan,
         settings.logLevel,
+        settings.mtu,
       );
       const remain = MIN_CONNECTING_MS - (Date.now() - startedAt);
       if (remain > 0) await new Promise((r) => setTimeout(r, remain));
@@ -187,6 +269,7 @@ class ConnStore {
    *  still connected, or core crashed/dropped while the window was away). */
   async refresh(): Promise<void> {
     this.startDropListener();
+    this.startSessionTicker();
     const generation = this.operations.snapshot();
     try {
       const resp = await vpnStatus();
@@ -219,9 +302,11 @@ class ConnStore {
       this.status = "connected";
       this.lastConnectedAt = Date.now();
       this.blockedByKillswitch = false;
+      this.openSession();
     } else if (this.status === "connected" || this.status === "dropped") {
       this.status = "disconnected";
       this.blockedByKillswitch = false;
+      this.closeSession();
     }
   }
 
@@ -230,6 +315,7 @@ class ConnStore {
       this.status = "connected";
       this.lastConnectedAt = Date.now();
       this.blockedByKillswitch = false;
+      this.openSession();
       return;
     }
     if (state === "dropped") {
@@ -240,6 +326,7 @@ class ConnStore {
     }
     this.status = "disconnected";
     this.blockedByKillswitch = false;
+    this.closeSession();
   }
 }
 

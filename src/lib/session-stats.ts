@@ -29,9 +29,11 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(digits).replace(/\.0$/, "")} ${BYTE_UNITS[unit]}`;
 }
 
-/** Throughput, in the shape the pill wants: "1.5 MB/s". */
-export function formatRate(bytesPerSecond: number): string {
-  return `${formatBytes(bytesPerSecond)}/s`;
+/** Throughput, in the shape the pill wants: "1.5 MB/s". Null is "no reading" --
+ *  a dash, not a zero: a zero is a meter that looked at an idle tunnel and found
+ *  nothing, a dash says nobody was allowed to look. */
+export function formatRate(bytesPerSecond: number | null): string {
+  return bytesPerSecond === null ? "—/s" : `${formatBytes(bytesPerSecond)}/s`;
 }
 
 export type DurationUnit = "s" | "min" | "h" | "d";

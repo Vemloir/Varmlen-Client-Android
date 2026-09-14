@@ -88,26 +88,35 @@ describe("hidden locations across the subscription's life", () => {
   });
 
   it("keeps the location hidden through a background update", async () => {
-    settings.setHideLocations("untilManualRefresh");
     subs.toggleHideLocation(card().id, card().servers[1]);
     await subs.refresh(card().id, false, false);
     expect(names()).toEqual(["Finland", "Berlin"]);
   });
 
-  it("restores the list on an explicit refresh in that mode", async () => {
-    settings.setHideLocations("untilManualRefresh");
-    subs.toggleHideLocation(card().id, card().servers[1]);
-    await subs.refresh(card().id, false, true);
-    expect(names()).toEqual(["Finland", "Germany", "Berlin"]);
-  });
-
-  it("keeps the list hidden on an explicit refresh when hiding is until I show it again", async () => {
-    settings.setHideLocations("never");
+  it("keeps it hidden through an explicit refresh too -- a refresh is not an undo", async () => {
     subs.toggleHideLocation(card().id, card().servers[1]);
     await subs.refresh(card().id, false, true);
     expect(names()).toEqual(["Finland", "Berlin"]);
-    // and the card still offers the way back
-    subs.clearHiddenLocations(card().id);
-    expect(names()).toEqual(["Finland", "Germany", "Berlin"]);
+    expect(subs.hiddenCount(card())).toBe(1);
+  });
+
+  it("shows the hidden ones again through the card, without un-hiding them", () => {
+    const sub = card();
+    subs.toggleHideLocation(sub.id, sub.servers[1]);
+    expect(subs.isRevealed(sub.id)).toBe(false);
+
+    subs.toggleRevealed(sub.id);
+    expect(subs.isRevealed(sub.id)).toBe(true);
+    expect(subs.visibleLocations(card(), true).map((s) => s.name)).toEqual([
+      "Finland",
+      "Germany",
+      "Berlin",
+    ]);
+    // the row is still hidden: the card is only showing it to him
+    expect(subs.hiddenCount(card())).toBe(1);
+
+    subs.toggleRevealed(sub.id);
+    expect(subs.isRevealed(sub.id)).toBe(false);
+    expect(names()).toEqual(["Finland", "Berlin"]);
   });
 });

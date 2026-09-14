@@ -256,6 +256,7 @@ export function vpnConnect(
   killswitch: boolean,
   allowLan: boolean,
   logLevel: string,
+  mtu: number,
 ): Promise<HelperResponse> {
   return invoke<HelperResponse>("vpn_connect", {
     server,
@@ -263,6 +264,7 @@ export function vpnConnect(
     killswitch,
     allowLan,
     logLevel,
+    mtu,
   });
 }
 
@@ -311,6 +313,21 @@ export function clearVpnLog(): Promise<void> {
 
 export function vpnStatus(): Promise<HelperResponse> {
   return invoke<HelperResponse>("vpn_status");
+}
+
+export interface TunnelStats {
+  tx_bytes: number;
+  rx_bytes: number;
+  /** When the tunnel device appeared, in unix seconds. Survives a restart of
+   *  the window, because the device was not created by the window. */
+  since_unix: number | null;
+}
+
+/** Traffic through the tunnel device since it came up, or null when there is no
+ *  readable device (disconnected, or a device whose counters this app may not
+ *  read). */
+export function tunnelStats(): Promise<TunnelStats | null> {
+  return invoke<TunnelStats | null>("tunnel_stats");
 }
 
 /** Whether xray has the network capability it needs for its native TUN

@@ -12,19 +12,6 @@
  *  verb there, and how long it lasts is a user setting.
  */
 
-/** How long a hidden subscription location stays hidden. Both hide; they differ
- *  in what brings the location back.
- *  `untilManualRefresh` — the background update keeps it hidden, an explicit
- *  Refresh on that card restores the list;
- *  `never` — only showing it again by hand brings it back.
- *
- *  There is deliberately no "until the next update": a background update is not
- *  something the user did, so locations would come back by themselves while he
- *  uses the app. Removing the subscription and importing it again always brings
- *  every location back -- that is a new subscription, not a refresh of the old
- *  one -- so hiding can stay durable without becoming unrecoverable. */
-export type HideLocationsMode = "untilManualRefresh" | "never";
-
 /** Order of the pinned locations among themselves. Unpinned locations always
  *  keep the provider's own order. */
 export type PinOrder = "newestLast" | "newestFirst";
@@ -43,7 +30,6 @@ export interface LocationMenuState {
   fromSubscription: boolean;
   hidden: boolean;
   pinned: boolean;
-  hideMode: HideLocationsMode;
 }
 
 /** Menu items for one location, top to bottom. */
@@ -59,14 +45,18 @@ export function locationActions(state: LocationMenuState): LocationAction[] {
   return items;
 }
 
-/** True when the location must be kept out of the list right now. */
+/** True when the location must be kept out of the list right now.
+ *
+ *  Hiding has no duration setting on purpose. A hidden row stays hidden until the
+ *  user shows it again on the card, and the only other way back is removing the
+ *  subscription and importing it again -- a re-import is a new subscription, not a
+ *  refresh of the old one. Nothing brings a location back by itself: a background
+ *  update is not something the user did, and a refresh he did do is not an undo. */
 export function isHiddenLocation(
   key: string,
   hiddenKeys: readonly string[],
-  hideMode: HideLocationsMode,
   revealHidden: boolean,
 ): boolean {
-  void hideMode; // every mode hides; they differ in what restores the location
   if (revealHidden) return false;
   return hiddenKeys.includes(key);
 }
@@ -88,7 +78,6 @@ export function orderLocations<T>(
     keyOf: (server: T) => string;
     hiddenKeys: readonly string[];
     pinnedAt: Readonly<Record<string, number>>;
-    hideMode: HideLocationsMode;
     revealHidden: boolean;
     pinOrder: PinOrder;
   },
@@ -96,7 +85,7 @@ export function orderLocations<T>(
   const shown: T[] = [];
   const hidden: T[] = [];
   for (const server of servers) {
-    if (isHiddenLocation(opts.keyOf(server), opts.hiddenKeys, opts.hideMode, opts.revealHidden)) {
+    if (isHiddenLocation(opts.keyOf(server), opts.hiddenKeys, opts.revealHidden)) {
       hidden.push(server);
     } else {
       shown.push(server);
@@ -123,9 +112,7 @@ export function hiddenCount<T>(
   servers: readonly T[],
   keyOf: (server: T) => string,
   hiddenKeys: readonly string[],
-  hideMode: HideLocationsMode,
 ): number {
-  void hideMode;
   let n = 0;
   for (const server of servers) {
     if (hiddenKeys.includes(keyOf(server))) n += 1;
