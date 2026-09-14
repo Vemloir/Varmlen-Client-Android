@@ -208,7 +208,7 @@ const EN: Dict = {
   "settings.mtuSub": "Packet size on the tunnel interface.",
   "settings.pingConcurrency": "Simultaneous pings",
   "settings.pingConcurrencySub":
-    "0 means no limit. Every probe is its own short-lived xray process.",
+    "Every probe is its own short-lived xray process. 0 means no limit.",
   "settings.pinOrder": "Pinned locations",
   "settings.pinOrderSub": "Order of the pinned locations.",
   "settings.pinOrder.newestLast": "Newest pinned at the end",
@@ -446,7 +446,7 @@ const RU: Dict = {
   "settings.mtuSub": "Размер пакета на туннельном интерфейсе.",
   "settings.pingConcurrency": "Одновременных пингов",
   "settings.pingConcurrencySub":
-    "0 — без ограничения. Каждая проба — отдельный процесс xray.",
+    "Каждая проба — отдельный процесс xray. 0 — без ограничения.",
   "settings.pinOrder": "Закреплённые локации",
   "settings.pinOrderSub": "Порядок закреплённых локаций.",
   "settings.pinOrder.newestLast": "Свежие закрепления в конце",

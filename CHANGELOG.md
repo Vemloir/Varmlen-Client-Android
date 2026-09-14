@@ -2,18 +2,79 @@
 
 ## Unreleased
 
+- Home and Split are two panes of one gesture. Swiping between them follows the
+  finger 1:1 in the middle of the travel and gives way at the ends, so the edge
+  still feels like an edge; the gesture is released on distance OR on a flick, so
+  a slow drag to the middle commits instead of snapping back; one gesture drives
+  one pane, and a drag the system takes away (`pointercancel`) hands the pane back
+  rather than leaving it stopped in the middle of the screen. The tab you were on
+  is remembered with the split, and each half keeps its own scroll position.
+
+- The bottom bar is labelled again, and whether it is is a setting. The bar
+  carries its own plate colour and the page lifts into it with a fade the shell
+  draws; the old CSS mask is gone, because a mask makes a stacking context and the
+  dialogs fell behind it.
+
+- The pill on the home screen reports the session: up, down, and how long it has
+  been up, read from the tunnel interface itself instead of restated from the last
+  connection. Where the counter cannot be read the rate shows `—/s` and not
+  `0 B/s`: a dash says this device will not tell me, a zero says nothing is
+  moving, and printing the second when the first is true is a lie about an idle
+  connection.
+
+- The interface MTU is a setting that does something. It travels from Settings to
+  the core's tun inbound and to `VpnService.Builder.setMtu`, and it is part of the
+  connection signature, so changing it rebuilds a tunnel that is already up
+  instead of reading as applied. Out-of-range values are clamped to 1280..9000
+  rather than reset: someone who typed 1100 meant smaller than default, and
+  answering with 1500 -- the one value that fails on such a network -- would be
+  the worse lie. The same rule is applied again in Kotlin, because the Quick
+  Settings tile relaunches the tunnel from a saved preference without asking the
+  Rust side anything, and an interface that quietly came back at 1500 after a
+  screen timeout would make the setting a lie whenever the user was not looking.
+
+- Settings are grouped by what they belong to: Interface (MTU, simultaneous
+  pings, tab labels), VPN (kill switch, LAN, notifications, the system-VPN row),
+  Appearance, Diagnostics. "Simultaneous pings" is a real field now: it is the
+  number of locations a card probes at once. It starts at 4 rather than at "no
+  limit", because every probe on a phone is a short-lived process and a burst of
+  forty made healthy locations show up as n/a. Both number fields are wide enough
+  to show the number they hold.
+
+- A subscription that failed to update says so. The card states the failure and
+  keeps showing the list it still has, instead of refreshing quietly and leaving
+  him to guess whether the eleven locations he sees are current.
+
+- Revealing a card's hidden locations survives a trip to Settings and back: the
+  card is showing them to him, and that is not a fact about the page.
+
+- The latency of a location is inside the row button. As a sibling it stole the
+  tap: pressing the label selected the location as if the row had been pressed,
+  and on a phone the label is where a thumb lands.
+
+- Split sites are written without the asterisk: `example.com` means the domain and
+  its subdomains, `=example.com` means that name alone, and the add dialog is one
+  field with the kind on a tooltip. Everything the user types is a hostname, so
+  the field no longer asks him to spell a wildcard.
+
+- One rounding family and one panel colour. Cards, rows, pills and dialogs share
+  the same radii and hairlines, controls are cut out of the plate they sit on
+  rather than painted on top of it, and nothing in the app is selectable except
+  the fields he types into.
+
 - A manually added configuration no longer pretends to be a subscription: its card
   carries no refresh (nothing fetches it) and no ⋮ menu (rename, JSON, pin and
   remove are subscription actions), only the ping. Its locations are deleted for
   real from the row menu, and when the last one goes, the card goes with it.
 
-- "Until the next update" is gone as a hiding mode. A background update is not
-  something the user did, so hiding a location could undo itself while the app was
-  simply open. Two modes are left: hidden until I refresh that card myself, and
-  hidden until I show it again. Removing the subscription and importing it again
-  always brings every location back -- a re-import is a new subscription, not a
-  refresh of the old one -- so hiding stays durable without becoming
-  unrecoverable. A stored `untilRefresh` falls back to the default.
+- Hiding a location has no duration setting any more, and the setting itself is
+  deleted rather than left inert. A background update is not something the user
+  did, so hiding could undo itself while the app was simply open; an explicit
+  refresh is the provider's business, not the user's undo button. A hidden row
+  stays hidden until he shows it again on the card, and the only other way back is
+  removing the subscription and importing it again -- a re-import is a new
+  subscription, not a refresh of the old one -- so hiding stays durable without
+  becoming unrecoverable. A stored hiding mode is ignored.
 
 - Hiding one location no longer hides the location behind it. Hiding and pinning
   were keyed by the ENDPOINT, and a provider can put two rows on one endpoint
@@ -33,8 +94,7 @@
   no longer selects the location behind the menu. The list text is no longer
   selectable either, so the WebView's own "select text" haptics do not compete
   with it. Hidden locations drop out of the card and come back on the card's own
-  "N hidden" line; how long they stay away is a setting (until I refresh it
-  myself, until the next update, until I show it again), and pinned ones move to
+  "N hidden" line, and pinned ones move to
   the top of the list with the same pin mark a pinned card carries. The menu is
   one per app and as wide as its longest item, measured from the text, because
   `max-content` is not honoured the same way in every WebView.

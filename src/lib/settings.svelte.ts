@@ -46,7 +46,10 @@ const DEFAULTS: Persisted = {
   logLevel: "warn",
   subscriptionUserAgent: "varmlen",
   subscriptionAutoUpdate: true,
-  pingConcurrency: 0,
+  // A phone pays for parallel probes with processes, so the batch starts at the
+  // scheduler's own measured ceiling; 0 (no limit) stays available for whoever
+  // reads the warning and wants the whole subscription probed at once.
+  pingConcurrency: 4,
   navLabels: false,
   mtu: MTU_DEFAULT,
   pinOrder: "newestLast",

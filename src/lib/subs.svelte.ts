@@ -989,8 +989,10 @@ class SubsStore {
     const next = { ...this.pings };
     for (const s of servers) next[s.id] = "pinging";
     this.pings = next;
-    await runPingsInParallel(servers, (server) =>
-      this.pingServer(server, method),
+    await runPingsInParallel(
+      servers,
+      (server) => this.pingServer(server, method),
+      settings.pingConcurrency,
     );
   }
 

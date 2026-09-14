@@ -4,7 +4,10 @@
   import { theme } from "$lib/theme.svelte";
   import { MTU_MAX, MTU_MIN } from "$lib/mtu";
   import { settings, type PingMethod, type LogLevel } from "$lib/settings.svelte";
-  import type { SubscriptionUserAgent } from "$lib/subscription-user-agent";
+  import {
+    subscriptionUserAgentOptions,
+    type SubscriptionUserAgent,
+  } from "$lib/subscription-user-agent";
   import type { PinOrder } from "$lib/location-actions";
   import { i18n, t, LANGUAGES, type Lang } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
@@ -192,11 +195,7 @@
     { value: "newestFirst", label: t("settings.pinOrder.newestFirst") },
   ]);
 
-  const subscriptionUaOptions = [
-    { value: "varmlen", label: "Varmlen" },
-    { value: "happ", label: "Happ" },
-    { value: "incy", label: "INCY" },
-  ];
+  const subscriptionUaOptions = subscriptionUserAgentOptions();
 
   // Refresh the core's status when Settings opens (cheap GitHub check).
   $effect(() => {
