@@ -9,6 +9,10 @@
   --bg-elev-3: #3a3a3a;
   --border: #303030;
   --border-strong: #424242;
+  /* The outline of a control that carries no plate of its own -- white in the dark
+     theme, ink in the light one -- and the fill drawn in that same colour. */
+  --hairline: rgba(255, 255, 255, 0.55);
+  --hairline-fill: rgba(255, 255, 255, 0.18);
   --text: #f2f2f2;
   --text-muted: #9a9a9a;
   --text-dim: #6a6a6a;
@@ -30,6 +34,8 @@
   --bg-elev-3: #e0e0e0;
   --border: #d8d8d8;
   --border-strong: #c0c0c0;
+  --hairline: rgba(0, 0, 0, 0.55);
+  --hairline-fill: rgba(0, 0, 0, 0.14);
   --text: #111111;
   --text-muted: #5a5a5a;
   --text-dim: #8a8a8a;
@@ -48,10 +54,18 @@
   --danger-faint-2: rgba(229, 72, 77, 0.26);
   --warn: #f5a524;
 
-  --radius-sm: 8px;
-  --radius: 12px;
-  --radius-lg: 16px;
+  /* One rounding family, scaled up: a control that is a third of a card should
+     look like it belongs to the same object, not like a different shape. */
+  --radius-sm: 12px;
+  --radius: 18px;
+  --radius-lg: 24px;
 
+  /* Durations are short and everything animates transform or opacity. On Linux the
+     reason is a measured ceiling -- the GTK 3.24 frame clock under WebKitGTK pulses
+     at ~60 Hz whatever the panel does -- and here the clock belongs to the WebView,
+     which is faster and hungrier: a phone drops frames on an animation that touches
+     layout, and it pays for them with the battery. The durations are the same on
+     both platforms so the interface feels like one product. */
   --transition: 140ms cubic-bezier(0.2, 0, 0, 1);
 
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -68,6 +82,11 @@
   /* No blue tap flash / long-press callout on Android WebView. */
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
+  /* Nothing in here is text to read; it is a control. On a touch screen this matters
+     twice over: selection also owns the long press, which is exactly the gesture the
+     location menu is trying to make. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 html,
@@ -189,6 +208,27 @@ html.is-android .modal-backdrop > .modal {
   margin: 0 !important;
 }
 
+/* The user can ask the system for less motion; a client that ignores that is not
+   being polite, it is being sick-making. Android is where the request is most likely
+   to have come from. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* The platform's own clear button is a control the theme does not own, and in a
+   narrow field it eats the room the query needs. */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
 /* ---------- common ---------- */
 .btn {
   border: 1px solid var(--border);
@@ -254,7 +294,9 @@ html.is-android .modal-backdrop > .modal {
   position: absolute;
   inset: 0;
   cursor: pointer;
-  background: var(--bg-elev-3);
+  /* Off state reads as a hole in the row, the way system settings do it: the
+     track takes the app's own background, not another elevated grey. */
+  background: var(--bg);
   border-radius: 26px;
   transition: background var(--transition);
 }
@@ -284,23 +326,59 @@ html.is-android .modal-backdrop > .modal {
 /* ---------- segmented control ---------- */
 .segmented {
   display: inline-flex;
-  background: var(--bg-elev-2);
-  border-radius: var(--radius-sm);
+  position: relative;
+  /* The same panel colour as the cards and the list under it. */
+  background: var(--bg-elev);
+  /* Pill, not a rounded rectangle: the ends are as round as the control can be. */
+  border-radius: 999px;
   padding: 3px;
   gap: 2px;
 }
 .segmented button {
-  padding: 6px 14px;
+  /* A fixed height, so the pill is 30 + 2*3 = 36 px and the panel inside it is
+     exactly 30 px. Left to the font's line box the pill came out at an odd height
+     and the frame was one pixel thicker on one side. */
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
   font-size: 13px;
-  border-radius: 6px;
+  border-radius: 999px;
+  position: relative;
+  z-index: 1;
   color: var(--text-muted);
   border: none;
   font-weight: 500;
 }
 .segmented button.active {
-  background: var(--bg-elev);
+  background: var(--bg);
   color: var(--text);
   box-shadow: var(--shadow-sm);
+}
+
+/* A segmented control whose selection slides. The panel behind the active label
+   is a separate element that moves, the way a switch moves its knob: switching
+   between two places in the same screen is motion, not a fade-in of something
+   new. Without this element (any other segmented control) the rule above still
+   paints the active button itself. */
+.segmented .seg-thumb {
+  /* left, width and translateX are set from the measured active button; the
+     vertical inset is the control's own padding and stays here. */
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  bottom: 3px;
+  background: var(--bg);
+  border-radius: 999px;
+  /* No shadow: --shadow-sm is offset 1px down, which darkened the frame under the
+     panel and left the frame above it clean -- the two sides of the same pill
+     looked like they had different thickness. */
+  transition: transform var(--transition);
+}
+.segmented:has(.seg-thumb) button.active {
+  background: transparent;
+  box-shadow: none;
 }
 
 /* ---------- list rows ---------- */
@@ -318,6 +396,10 @@ html.is-android .modal-backdrop > .modal {
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
+  /* An application row carries two lines (name + id) and a site row one, so left
+     to the content the list came out with rows of different heights. Both kinds are
+     dominated by this height, so the rhythm is identical whatever the row contains. */
+  min-height: 62px;
   background: transparent;
   transition: background var(--transition);
 }
