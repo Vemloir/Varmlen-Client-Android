@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.4.0
+
 - The dropdown control in Settings was the same grey as the row's hover, so the
   control disappeared into the state that hover is supposed to reveal, and its own
   hover rule painted the colour it already had. It takes the application background
