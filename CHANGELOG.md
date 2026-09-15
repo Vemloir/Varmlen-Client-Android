@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+- The dropdown control in Settings was the same grey as the row's hover, so the
+  control disappeared into the state that hover is supposed to reveal, and its own
+  hover rule painted the colour it already had. It takes the application background
+  now and moves to the lighter tone on hover. The surface-contract test asked for
+  the old colour, which pinned the mistake instead of the design; it asks for the
+  new one, and now also asserts the hover.
+- Two strings left over from the removed application search are gone, and the test
+  for the subscription traffic strip -- the one that keeps a measured zero apart
+  from an unknown quota -- is ported from Linux, where the module it covers already
+  arrived byte-identical.
 
 - Editing the split while the tunnel is up rebuilds the interface and says nothing
   about it. The service has always established the replacement TUN before retiring
