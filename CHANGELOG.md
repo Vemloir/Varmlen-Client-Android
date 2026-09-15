@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Editing the split while the tunnel is up rebuilds the interface and says nothing
+  about it. The service has always established the replacement TUN before retiring
+  the running one, so the session never dropped -- but the client still painted
+  "connecting" for at least 700 ms over a tunnel that never went away, because the
+  same code path serves a press of the power button, where that floor is honest. A
+  connect that arrives while a tunnel is running is now marked as a reconfigure,
+  and the button stays as it is.
+- A refused reconfigure keeps the tunnel that was protecting the user. Before, any
+  exception in a start -- a config the core will not accept, an application that
+  was uninstalled mid-edit, an interface that could not be built -- ended in
+  `stopAll()`, which on a replacement attempt meant: no tunnel, live internet, and
+  a power button that still said "connected". Now a refused reconfigure logs,
+  leaves the running interface alone, and answers its own request with the error,
+  so the app knows the edit did not apply while the session keeps running. The
+  kill switch is not a screen state: it has to survive the client failing to
+  change it.
+
 - Home and Split are two panes of one gesture. Swiping between them follows the
   finger 1:1 in the middle of the travel and gives way at the ends, so the edge
   still feels like an edge; the gesture is released on distance OR on a flick, so

@@ -476,6 +476,8 @@ pub async fn vpn_connect(
     allow_lan: bool,
     log_level: Option<String>,
     mtu: Option<u32>,
+    // True when a tunnel is already up and this call replaces it (see mobile_vpn).
+    reconfigure: Option<bool>,
 ) -> Result<HelperResponse, String> {
     // Android: VpnService gives its TUN descriptor directly to Xray; Android
     // owns the per-package split and the in-app kill switch (core-death →
@@ -518,6 +520,7 @@ pub async fn vpn_connect(
             killswitch,
             xray_bin.to_string_lossy().into_owned(),
             mtu,
+            reconfigure.unwrap_or(false),
         )?;
         return Ok(HelperResponse::connected(0));
     }

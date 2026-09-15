@@ -1,4 +1,5 @@
 import { browser } from "$app/environment";
+import type { SplitInput } from "./api";
 import type { SplitTab } from "./nav-zones";
 import { migrateSitePatterns } from "./site-pattern";
 
@@ -158,6 +159,26 @@ class SplitStore {
     this.appsBuckets = { ...this.appsBuckets, [this.appsMode]: next };
     this.persist();
   }
+  /** The split as the connect command wants it: enabled entries only, applications
+   *  by package id and websites by pattern.
+   *
+   *  Linux answers an edit to this list twice: it pushes the application list to
+   *  the running daemon over its control socket (vpn_apply_split), and the
+   *  signature-driven reconnect catches the rest. Android has no daemon to push to:
+   *  the application list is baked into the VpnService.Builder at establish() time
+   *  and the site rules live inside the core's config, so both halves of an edit
+   *  reach the tunnel the same way -- by rebuilding it. That rebuild is what
+   *  conn.onConfigChanged() schedules, which is why there is no pushApps() here:
+   *  two paths to the same reconfigure would establish the interface twice. */
+  input(): SplitInput {
+    return {
+      appsMode: this.appsMode,
+      sitesMode: this.sitesMode,
+      apps: this.apps.filter((a) => a.enabled).map((a) => a.id),
+      sites: this.sites.filter((s) => s.enabled).map((s) => s.pattern),
+    };
+  }
+
   private setSites(next: SiteEntry[]): void {
     this.sitesBuckets = { ...this.sitesBuckets, [this.sitesMode]: next };
     this.persist();

@@ -257,6 +257,11 @@ export function vpnConnect(
   allowLan: boolean,
   logLevel: string,
   mtu: number,
+  /** True when a tunnel is already up and this call replaces it. The service must
+   *  then leave the running tunnel alone if the new configuration is refused --
+   *  tearing it down would put the user on the open internet while telling him he
+   *  is connected. */
+  reconfigure: boolean,
 ): Promise<HelperResponse> {
   return invoke<HelperResponse>("vpn_connect", {
     server,
@@ -265,6 +270,7 @@ export function vpnConnect(
     allowLan,
     logLevel,
     mtu,
+    reconfigure,
   });
 }
 

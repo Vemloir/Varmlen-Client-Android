@@ -62,6 +62,10 @@ class ConnectArgs {
     /** MTU for the interface the service is about to create. Clamped again on the
      *  Kotlin side, where the interface is actually built. */
     var mtu: Int = 1500
+    /** This connect replaces a tunnel that is already running. The service then
+     *  refuses the change instead of tearing anything down, so an edit that cannot
+     *  be applied leaves the user exactly as protected as he was. */
+    var reconfigure: Boolean = false
 }
 
 @InvokeArg
@@ -121,6 +125,7 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
                         it.id,
                         requestId,
                         running,
+                        error,
                     )
                 }
             ) {
@@ -541,6 +546,7 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         intent.putExtra(VarmlenVpnService.EXTRA_KILLSWITCH, args.killSwitch)
         intent.putExtra(VarmlenVpnService.EXTRA_BIN, args.bin)
         intent.putExtra(VarmlenVpnService.EXTRA_MTU, args.mtu)
+        intent.putExtra(VarmlenVpnService.EXTRA_RECONFIGURE, args.reconfigure)
         intent.putExtra(VarmlenVpnService.EXTRA_REQUEST_ID, requestId)
         ContextCompat.startForegroundService(activity, intent)
     }

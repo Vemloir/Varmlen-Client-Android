@@ -79,6 +79,7 @@ class VarmlenVpnService : VpnService() {
          *  one); empty → fall back to the bundled binary. */
         const val EXTRA_BIN = "bin"
         const val EXTRA_MTU = "mtu"
+        const val EXTRA_RECONFIGURE = "reconfigure"
         const val EXTRA_REQUEST_ID = "requestId"
         const val EXTRA_ERROR = "error"
         /** Session is up but the core is down while the kill switch holds. */
@@ -242,11 +243,30 @@ class VarmlenVpnService : VpnService() {
                         intent.getBooleanExtra(EXTRA_KILLSWITCH, true),
                         intent.getStringExtra(EXTRA_BIN) ?: "",
                         intent.getIntExtra(EXTRA_MTU, DEFAULT_MTU),
+                        intent.getBooleanExtra(EXTRA_RECONFIGURE, false),
                         requestId
                     )
                 } catch (e: Throwable) {
-                    log("connect failed", e)
-                    stopAll(e.message ?: e.javaClass.simpleName, requestId)
+                    // A reconfigure is what happens when the user edits the split,
+                    // the MTU or a switch while the tunnel runs. If the replacement
+                    // is refused -- a config the core will not accept, an
+                    // application that vanished, an interface that could not be
+                    // built -- the tunnel he already has stays up and keeps
+                    // protecting him. Tearing it down here would put him on the open
+                    // internet under a power button that still says "connected",
+                    // which is the one failure a kill switch must not cause.
+                    val reconfigure = intent.getBooleanExtra(EXTRA_RECONFIGURE, false)
+                    if (reconfigure && tun != null) {
+                        log("reconfigure refused — running tunnel kept", e)
+                        broadcastState(
+                            true,
+                            error = e.message ?: e.javaClass.simpleName,
+                            requestId = requestId
+                        )
+                    } else {
+                        log("connect failed", e)
+                        stopAll(e.message ?: e.javaClass.simpleName, requestId)
+                    }
                 }
             }
             else -> {
@@ -275,7 +295,7 @@ class VarmlenVpnService : VpnService() {
     private fun startAll(
         config: String, validationConfig: String, dns: String,
         apps: Array<String>, appsAllow: Boolean, logLevel: String,
-        killSwitch: Boolean, binPath: String, mtu: Int,
+        killSwitch: Boolean, binPath: String, mtu: Int, reconfigure: Boolean,
         requestId: String?
     ) {
         // A reconnect may reach this same Service instance before Android has
@@ -283,7 +303,7 @@ class VarmlenVpnService : VpnService() {
         // idempotency guard into the new data plane or its next Disconnect
         // action would be ignored forever.
         stopAllInProgress = false
-        log("startAll nativeTun dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel killswitch=$killSwitch bin=$binPath mtu=$mtu")
+        log("startAll nativeTun dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel killswitch=$killSwitch bin=$binPath mtu=$mtu reconfigure=$reconfigure")
         // The active core: a user-downloaded version or the APK-bundled one.
         // A missing selected binary (e.g. the version dir was cleaned) must
         // never break a connect — fall back to the bundled core.

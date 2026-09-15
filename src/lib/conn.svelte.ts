@@ -1,10 +1,4 @@
-import {
-  tunnelStats,
-  vpnConnect,
-  vpnDisconnect,
-  vpnStatus,
-  type SplitInput,
-} from "$lib/api";
+import { tunnelStats, vpnConnect, vpnDisconnect, vpnStatus } from "$lib/api";
 import { SessionThroughput } from "$lib/session-stats";
 import { subs } from "$lib/subs.svelte";
 import { split } from "$lib/split.svelte";
@@ -22,15 +16,6 @@ function msg(e: unknown): string {
 }
 
 /** Current split-tunnel selection (enabled entries for the active mode). */
-function splitInput(): SplitInput {
-  return {
-    appsMode: split.appsMode,
-    sitesMode: split.sitesMode,
-    apps: split.apps.filter((a) => a.enabled).map((a) => a.id),
-    sites: split.sites.filter((s) => s.enabled).map((s) => s.pattern),
-  };
-}
-
 class ConnStore {
   status = $state<Status>("disconnected");
   /** Last connect error, surfaced under the power button. */
@@ -152,7 +137,7 @@ class ConnStore {
       // The MTU belongs in the signature: a tunnel that is already up must be
       // rebuilt when the user changes it, or the setting reads as applied and is not.
       mtu: settings.mtu,
-      split: splitInput(),
+      split: split.input(),
     });
   }
 
@@ -207,22 +192,32 @@ class ConnStore {
       this.error = t("conn.selectLocation");
       return;
     }
-    this.status = "connecting";
+    // A connect while a tunnel is already up is a RECONFIGURE. The service
+    // establishes the replacement interface before it retires the running one
+    // (VarmlenVpnService.startAll: "Android atomically switches VPN routing to the
+    // new descriptor"), so the session never drops and the kill switch is never
+    // lifted -- and the UI must not paint "connecting" over a tunnel that stayed
+    // up. That is what makes editing the split while connected silent: the
+    // interface is rebuilt, the power button does not blink.
+    const reconfigure = this.status === "connected";
+    if (!reconfigure) this.status = "connecting";
     this.lastSig = this.configSig();
     // Hold the "connecting" indicator visible for at least this long even
     // when the helper rejects in <50ms — otherwise the spinner / animated
     // ring is gone before the user perceives it, and a fast failure looks
-    // like "the button does nothing".
+    // like "the button does nothing". A reconfigure shows nothing, so it has
+    // nothing to hold.
     const startedAt = Date.now();
-    const MIN_CONNECTING_MS = 700;
+    const MIN_CONNECTING_MS = reconfigure ? 0 : 700;
     try {
       const resp = await vpnConnect(
         server,
-        splitInput(),
+        split.input(),
         settings.killswitch,
         settings.allowLan,
         settings.logLevel,
         settings.mtu,
+        reconfigure,
       );
       const remain = MIN_CONNECTING_MS - (Date.now() - startedAt);
       if (remain > 0) await new Promise((r) => setTimeout(r, remain));
