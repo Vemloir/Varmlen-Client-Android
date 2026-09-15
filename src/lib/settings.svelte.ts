@@ -3,6 +3,8 @@ import {
   normalizeSubscriptionUserAgent,
   type SubscriptionUserAgent,
 } from "./subscription-user-agent";
+import type { PinOrder } from "./location-actions";
+import { MTU_DEFAULT, normalizeMtu } from "./mtu";
 
 /** How server latency is measured. `tcp` = raw TCP connect to the endpoint
  *  (bypasses the tunnel, works disconnected). `proxy` = an HTTP GET routed
@@ -21,6 +23,18 @@ interface Persisted {
   /** Identity advertised only while importing/refreshing subscriptions. */
   subscriptionUserAgent: SubscriptionUserAgent;
   subscriptionAutoUpdate: boolean;
+  /** Concurrency cap for the "ping all locations" sweep (0 = ping them all at
+   *  once). The sweep runs inside the app process, so an unbounded burst costs
+   *  memory and CPU on a device that may be doing something else. */
+  pingConcurrency: number;
+  /** Names under the bottom tab icons. Off by default: three tabs with two words
+   *  each cost vertical space the location list needs. */
+  navLabels: boolean;
+  /** MTU of the tunnel interface. A path that encapsulates again cannot carry
+   *  Ethernet's 1500 inside the tunnel, and then only large responses die. */
+  mtu: number;
+  /** Order of the pinned locations among themselves. */
+  pinOrder: PinOrder;
 }
 
 const KEY = "varmlen.settings";
@@ -32,9 +46,17 @@ const DEFAULTS: Persisted = {
   logLevel: "warn",
   subscriptionUserAgent: "varmlen",
   subscriptionAutoUpdate: true,
+  // A phone pays for parallel probes with processes, so the batch starts at the
+  // scheduler's own measured ceiling; 0 (no limit) stays available for whoever
+  // reads the warning and wants the whole subscription probed at once.
+  pingConcurrency: 4,
+  navLabels: false,
+  mtu: MTU_DEFAULT,
+  pinOrder: "newestLast",
 };
 
 const LOG_LEVELS: LogLevel[] = ["debug", "warn", "error"];
+const PIN_ORDERS: PinOrder[] = ["newestLast", "newestFirst"];
 
 function load(): Persisted {
   if (!browser) return DEFAULTS;
@@ -55,6 +77,12 @@ function load(): Persisted {
       ),
       subscriptionAutoUpdate:
         parsed.subscriptionAutoUpdate ?? DEFAULTS.subscriptionAutoUpdate,
+      pingConcurrency: sanitizePingConcurrency(parsed.pingConcurrency),
+      navLabels: parsed.navLabels ?? DEFAULTS.navLabels,
+      mtu: normalizeMtu(parsed.mtu),
+      pinOrder: PIN_ORDERS.includes(parsed.pinOrder as PinOrder)
+        ? (parsed.pinOrder as PinOrder)
+        : DEFAULTS.pinOrder,
     };
   } catch {
     return DEFAULTS;
@@ -73,6 +101,10 @@ class SettingsStore {
     _initialSettings.subscriptionUserAgent,
   );
   subscriptionAutoUpdate = $state(_initialSettings.subscriptionAutoUpdate);
+  pingConcurrency = $state<number>(_initialSettings.pingConcurrency);
+  navLabels = $state<boolean>(_initialSettings.navLabels);
+  mtu = $state<number>(_initialSettings.mtu);
+  pinOrder = $state<PinOrder>(_initialSettings.pinOrder);
 
   private persist(): void {
     if (!browser) return;
@@ -86,6 +118,10 @@ class SettingsStore {
         logLevel: this.logLevel,
         subscriptionUserAgent: this.subscriptionUserAgent,
         subscriptionAutoUpdate: this.subscriptionAutoUpdate,
+        pingConcurrency: this.pingConcurrency,
+        navLabels: this.navLabels,
+        mtu: this.mtu,
+        pinOrder: this.pinOrder,
       }),
     );
   }
@@ -103,6 +139,27 @@ class SettingsStore {
     this.subscriptionAutoUpdate = v;
     this.persist();
   }
+  setPingConcurrency(v: number): void {
+    this.pingConcurrency = sanitizePingConcurrency(v);
+    this.persist();
+  }
+  setNavLabels(v: boolean): void {
+    this.navLabels = v;
+    this.persist();
+  }
+  setMtu(v: number): void {
+    this.mtu = normalizeMtu(v);
+    this.persist();
+  }
+  setPinOrder(v: PinOrder): void {
+    this.pinOrder = PIN_ORDERS.includes(v) ? v : DEFAULTS.pinOrder;
+    this.persist();
+  }
+}
+
+/** Clamped ping concurrency; the rule lives next to the scheduler that obeys it. */
+function sanitizePingConcurrency(value: unknown): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
 export const settings = new SettingsStore();

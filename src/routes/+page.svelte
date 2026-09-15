@@ -1,15 +1,19 @@
 <script lang="ts">
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { onBackButtonPress } from "@tauri-apps/api/app";
   import type { PluginListener } from "@tauri-apps/api/core";
-  import { openUrl } from "@tauri-apps/plugin-opener";
   import { conn } from "$lib/conn.svelte";
+  import { navPath } from "$lib/nav-path";
+  import { persistScroll } from "$lib/scroll-memory";
   import { subs } from "$lib/subs.svelte";
   import { t } from "$lib/i18n.svelte";
   import { readClipboard } from "$lib/api";
+  import { formatRate, sessionDuration } from "$lib/session-stats";
   import { releaseActiveControl } from "$lib/modal-lifecycle";
   import { modalActionFromTarget } from "$lib/modal-events";
   import { isAndroid } from "$lib/platform";
-  import { placePopup, portal } from "$lib/popup";
+  import { tick } from "svelte";
+  import { placeAtPoint, placePopup, portal } from "$lib/popup";
   import FlagIcon from "$lib/components/FlagIcon.svelte";
   import LocationEditor from "$lib/components/LocationEditor.svelte";
   import ServerList from "$lib/components/ServerList.svelte";
@@ -23,6 +27,13 @@
   } from "$lib/location-draft";
 
   import type { Subscription, ServerEntry } from "$lib/subs.svelte";
+  import type { LocationAction } from "$lib/location-actions";
+
+  interface Props {
+    /** Path of the tab this page is standing in as; empty when it is the page. */
+    preview?: string;
+  }
+  let { preview = "" }: Props = $props();
 
   type ModalKind =
     | "none"
@@ -143,6 +154,149 @@
     locationSaveError = null;
     openModal("details");
   }
+  /** THE location menu. One instance for the whole page: a state per card left
+   *  several menus open when the user right-clicked in two subscriptions. */
+  let locMenu = $state<{
+    sub: Subscription;
+    server: ServerEntry;
+    items: LocationAction[];
+    x: number;
+    y: number;
+  } | null>(null);
+  let locMenuPos = $state({ top: 0, left: 0 });
+  let locMenuWidth = $state(0);
+  let locMenuEl = $state<HTMLDivElement | undefined>();
+  let locMenuOpenedAt = 0;
+
+  const LOCATION_MENU_LABELS: Record<LocationAction, () => string> = {
+    ping: () => t("menu.ping"),
+    rename: () => t("menu.rename"),
+    pin: () => t("menu.pinLocation"),
+    unpin: () => t("menu.unpinLocation"),
+    hide: () => t("menu.hide"),
+    unhide: () => t("menu.unhide"),
+    delete: () => t("menu.deleteLocation"),
+  };
+
+  /** Opens at the pointer (its top-left corner at the cursor, flipping left/above
+   *  near an edge) and is as wide as its longest item. `max-content` is not enough
+   *  in every WebKitGTK build, so the width is measured from the text and set. */
+  async function openLocationMenu(
+    sub: Subscription,
+    server: ServerEntry,
+    point: { x: number; y: number },
+  ): Promise<void> {
+    const items = subs.locationActionsFor(sub, server);
+    locMenu = { sub, server, items, x: point.x, y: point.y };
+    locMenuOpenedAt = Date.now();
+    locMenuWidth = 160;
+    locMenuPos = placeAtPoint(point.x, point.y, 160, items.length * 33 + 10);
+    await tick();
+    if (!locMenu || locMenu.server.id !== server.id || !locMenuEl) return;
+    let widest = 0;
+    for (const item of locMenuEl.querySelectorAll<HTMLElement>(".loc-menu-item")) {
+      widest = Math.max(widest, item.scrollWidth);
+    }
+    // item padding 10+10, menu padding 4+4, border 1+1
+    const width = Math.max(96, Math.min(widest + 30, window.innerWidth - 24));
+    locMenuWidth = width;
+    await tick();
+    const height = locMenuEl?.getBoundingClientRect().height ?? items.length * 33 + 10;
+    locMenuPos = placeAtPoint(point.x, point.y, width, height);
+  }
+
+  function closeLocationMenu(): void {
+    locMenu = null;
+  }
+
+  function runLocationAction(action: LocationAction): void {
+    if (!locMenu) return;
+    const { sub, server } = locMenu;
+    closeLocationMenu();
+    locationAction(action, server, sub);
+  }
+
+  $effect(() => {
+    if (!locMenu) return;
+    const onDocClick = (event: Event) => {
+      const node = event.target as Node | null;
+      if (node && (locMenuEl?.contains(node) ?? false)) return;
+      // The click that ends our own right click / long press must not close the
+      // menu it just opened.
+      if (Date.now() - locMenuOpenedAt < 250) return;
+      closeLocationMenu();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeLocationMenu();
+    };
+    const onScroll = () => closeLocationMenu();
+    const onDocContextmenu = (event: MouseEvent) => {
+      const node = event.target as Node | null;
+      if (!node || !locMenuEl?.contains(node)) return;
+      // The menu is open and the user right-clicked THROUGH it, because it covers
+      // the rows under and to the right of the cursor. Get out of the way and hand
+      // the gesture to whatever is underneath, the way a native menu hands a
+      // right-click to the window behind it -- otherwise the second right-click
+      // inside one subscription looks dead.
+      const x = event.clientX;
+      const y = event.clientY;
+      event.preventDefault();
+      event.stopPropagation();
+      closeLocationMenu();
+      requestAnimationFrame(() => {
+        const below = document.elementFromPoint(x, y);
+        below?.dispatchEvent(
+          new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+            button: 2,
+          }),
+        );
+      });
+    };
+    document.addEventListener("click", onDocClick, true);
+    document.addEventListener("contextmenu", onDocContextmenu, true);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("click", onDocClick, true);
+      document.removeEventListener("contextmenu", onDocContextmenu, true);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  });
+
+  function locationAction(
+    action: LocationAction,
+    server: ServerEntry,
+    sub: Subscription,
+  ): void {
+    switch (action) {
+      case "ping":
+        void subs.pingServer(server);
+        break;
+      case "rename":
+        // The name lives in the location sheet along with the rest of the entry.
+        openDetails(server);
+        break;
+      case "pin":
+      case "unpin":
+        subs.togglePinLocation(sub.id, server);
+        break;
+      case "hide":
+      case "unhide":
+        subs.toggleHideLocation(sub.id, server);
+        break;
+      case "delete":
+        subs.deleteLocation(sub.id, server.id);
+        break;
+    }
+  }
+
   async function saveLocationDraft(): Promise<void> {
     if (!detailFor) return;
     locationSaveError = null;
@@ -248,6 +402,20 @@
 
   const statusLabel = $derived(t(`status.${conn.status}`));
 
+  const DURATION_KEYS = {
+    s: "session.seconds",
+    min: "session.minutes",
+    h: "session.hours",
+    d: "session.days",
+  } as const;
+
+  const connectedFor = $derived(
+    (() => {
+      const d = sessionDuration(conn.sessionSeconds);
+      return t(DURATION_KEYS[d.unit], { n: d.value });
+    })(),
+  );
+
 
   function openImport(): void {
     setImportMode("choose");
@@ -332,6 +500,28 @@
       </svg>
     </button>
     <div class="status-text" data-status={conn.status}>{statusLabel}</div>
+    <!-- Session pill: what we sent, for how long, what we got back. The space is
+         reserved when disconnected so connecting does not shove the list down. -->
+    <!-- Session pill: what goes out, for how long, what comes back. It never
+         leaves the screen -- "not connected" is a state it reports in grey, not
+         an absence, so the hero does not breathe when the tunnel changes. -->
+    <div class="session-pill" class:idle={conn.status !== "connected"}>
+      <span class="session-part" title={t("session.upload")}
+        ><svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 19V6M6 12l6-6 6 6" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        {formatRate(conn.sessionUp)}</span
+      >
+      <span class="session-sep" aria-hidden="true"></span>
+      <span class="session-part" title={t("session.duration")}>{connectedFor}</span>
+      <span class="session-sep" aria-hidden="true"></span>
+      <span class="session-part" title={t("session.download")}
+        ><svg width="10" height="10" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 5v13M6 12l6 6 6-6" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        {formatRate(conn.sessionDown)}</span
+      >
+    </div>
     {#if conn.error}
       <div class="conn-error" class:blocked={conn.status === "dropped"}>{conn.error}</div>
     {/if}
@@ -340,9 +530,10 @@
     {/if}
   </section>
 
-  <main class="scroll fade-y">
+  <main class="scroll" data-scroll use:persistScroll={preview || navPath()}>
 
   {#each subs.ordered as sub (sub.id)}
+    {@const isManual = subs.isManualCard(sub)}
     <section class="sub-card" class:pinned={sub.pinned}>
       <header class="sub-head">
         <button
@@ -372,8 +563,14 @@
           {#if sub.updateIntervalHours}
             <div class="sub-meta muted">{t("home.autoUpdate", { h: sub.updateIntervalHours })}</div>
           {/if}
+          {#if sub.lastError}
+            <div class="sub-meta err" title={sub.lastError}>
+              {t("home.updateFailed", { error: sub.lastError })}
+            </div>
+          {/if}
         </div>
 
+        {#if !isManual}
         <button
           class="head-btn"
           class:spinning={sub.refreshing}
@@ -385,6 +582,7 @@
             <path d="M21 12a9 9 0 1 1-3.13-6.84M21 4v5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
+        {/if}
         <button
           class="head-btn"
           onclick={() => subs.pingSub(sub.id)}
@@ -398,6 +596,7 @@
             <circle cx="12" cy="12" r="1.4" fill="currentColor" />
           </svg>
         </button>
+        {#if !isManual}
         <div class="menu-wrap">
           <button
             class="head-btn"
@@ -438,9 +637,10 @@
             </div>
           {/if}
         </div>
+        {/if}
       </header>
 
-      {#if subs.hasTraffic(sub) || sub.webPageUrl || sub.supportUrl}
+      {#if !isManual}
       <div class="sub-traffic">
         {#if sub.webPageUrl}
           <button class="round-btn" aria-label="Website" onclick={() => open(sub.webPageUrl)}>
@@ -451,11 +651,13 @@
             </svg>
           </button>
         {/if}
-        {#if subs.hasTraffic(sub)}
-          <div class="traffic-bar">
-            <span class="traffic-text">{subs.trafficText(sub)}</span>
-          </div>
-        {/if}
+        <!-- Drawn even when the provider sent nothing: a subscription that reports no
+             quota is information, not an absence, and the empty strip is how that
+             reads. -->
+        <div class="traffic-bar">
+          <span class="traffic-fill" style="width: {subs.trafficPercent(sub)}%"></span>
+          <span class="traffic-text">{subs.hasTraffic(sub) ? subs.trafficText(sub) : t("home.trafficNone")}</span>
+        </div>
         {#if sub.supportUrl}
           <button class="round-btn" aria-label="Telegram" onclick={() => open(sub.supportUrl)}>
             <svg width="23" height="23" viewBox="0 0 128 128" fill="currentColor" aria-hidden="true">
@@ -476,21 +678,55 @@
 
       {#if !sub.collapsed}
         <ServerList
-          servers={sub.servers}
+          servers={subs.visibleLocations(sub, subs.isRevealed(sub.id))}
           selectedServerId={subs.selectedServerId}
           pings={subs.pings}
+          hiddenIds={subs.hiddenLocationIds(sub)}
+          pinnedIds={subs.locationPinnedIds(sub)}
           onSelect={(id) => subs.selectServer(id)}
           onDetails={openDetails}
+          onMenu={(server, point) => void openLocationMenu(sub, server, point)}
         />
+        {#if subs.hiddenCount(sub) > 0}
+          <button class="link-btn hidden-toggle" onclick={() => subs.toggleRevealed(sub.id)}>
+            {subs.isRevealed(sub.id)
+              ? t("home.hideHiddenLocations")
+              : t("home.hiddenLocations", { n: subs.hiddenCount(sub) })}
+          </button>
+        {/if}
       {/if}
     </section>
   {/each}
 
   {#if subs.list.length === 0}
     <div class="empty muted">{t("home.empty")}</div>
+  {:else if subs.selectionLost && subs.selectedServerId === null && subs.selectedLabel}
+    <div class="empty muted">{t("home.selectionLost", { name: subs.selectedLabel })}</div>
   {/if}
 </main>
 </div>
+
+{#if locMenu}
+  <div
+    class="loc-menu"
+    class:loc-menu--animated={isAndroid}
+    role="menu"
+    use:portal
+    style="top: {locMenuPos.top}px; left: {locMenuPos.left}px; width: {locMenuWidth}px;"
+    bind:this={locMenuEl}
+  >
+    {#each locMenu.items as action (action)}
+      <button
+        role="menuitem"
+        class="loc-menu-item"
+        class:danger={action === "delete"}
+        onclick={() => runLocationAction(action)}
+      >
+        {LOCATION_MENU_LABELS[action]()}
+      </button>
+    {/each}
+  </div>
+{/if}
 
 {#if activeModal === "info" && infoFor}
   <div class="modal-backdrop" data-modal-action="close" role="presentation">
@@ -520,6 +756,11 @@
         {#if infoFor.updateIntervalHours}
           <dt>{t("info.autoUpdate")}</dt>
           <dd>{t("info.everyH", { h: infoFor.updateIntervalHours })}</dd>
+        {/if}
+
+        {#if infoFor.lastError}
+          <dt>{t("info.updateError")}</dt>
+          <dd class="small">{infoFor.lastError}</dd>
         {/if}
 
         <dt>{t("info.traffic")}</dt>
@@ -765,10 +1006,8 @@
     background: transparent;
     border: none;
   }
-  @media (hover: hover) {
-    .icon-btn:hover {
-      background: var(--bg-elev-2);
-    }
+  .icon-btn:hover {
+    background: var(--bg-elev-2);
   }
   .modal-head {
     display: flex;
@@ -784,10 +1023,8 @@
     flex-shrink: 0;
     color: var(--text-muted);
   }
-  @media (hover: hover) {
-    .modal-head .icon-btn:hover {
-      color: var(--text);
-    }
+  .modal-head .icon-btn:hover {
+    color: var(--text);
   }
   .location-title {
     display: flex;
@@ -807,7 +1044,7 @@
        which is the asymmetric look we want to avoid. */
     overflow-y: scroll;
     overflow-x: hidden;
-    padding: 8px 14px 24px 20px;
+    padding: 8px 14px calc(24px + var(--nav-clearance)) 20px;
   }
 
   /* ---------- power hero (fixed, above the scroll) ---------- */
@@ -840,11 +1077,9 @@
       color var(--transition);
     z-index: 1;
   }
-  @media (hover: hover) {
-    .power:hover {
-      border-color: var(--border-strong);
-      color: var(--text);
-    }
+  .power:hover {
+    border-color: var(--border-strong);
+    color: var(--text);
   }
   .power[data-status="connecting"] {
     color: var(--accent);
@@ -872,6 +1107,34 @@
     letter-spacing: 0.1em;
     color: var(--text-muted);
     margin-top: 6px;
+  }
+  .session-pill {
+    display: flex;
+    align-items: stretch;
+    margin-top: 10px;
+    border-radius: 999px;
+    /* The same idiom as the tab bar: a raised plate with the page showing through
+       the partitions. */
+    background: var(--bg-elev);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+  }
+  .session-pill.idle { color: var(--text-muted); }
+  .session-part {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 10px;
+    white-space: nowrap;
+  }
+  /* Full height of the plate: a 12px stub floating in the middle reads as a
+     decoration rather than as the line between two numbers. */
+  .session-sep {
+    width: 2px;
+    background: var(--bg);
   }
   .status-text[data-status="connected"] { color: var(--accent); }
   .status-text[data-status="connecting"] { color: var(--accent); }
@@ -902,9 +1165,7 @@
     text-decoration: underline;
     cursor: pointer;
   }
-  @media (hover: hover) {
-    .link-btn:hover { color: var(--text); }
-  }
+  .link-btn:hover { color: var(--text); }
 
 
   /* ---------- subscription card ---------- */
@@ -956,6 +1217,12 @@
     font-size: 11px;
     margin-top: 1px;
   }
+  .sub-meta.err {
+    color: var(--danger);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .head-btn {
     width: 30px;
     height: 30px;
@@ -968,11 +1235,9 @@
     align-items: center;
     justify-content: center;
   }
-  @media (hover: hover) {
-    .head-btn:hover {
-      background: var(--bg-elev-2);
-      color: var(--text);
-    }
+  .head-btn:hover {
+    background: var(--bg-elev-2);
+    color: var(--text);
   }
   .head-btn.spinning svg {
     animation: spin 900ms linear infinite;
@@ -985,6 +1250,63 @@
   .menu-wrap {
     position: relative;
   }
+  /* The card's bottom line belongs to this button, not to the list: it closes the
+     list the same way a row separator divides two rows, and only exists when there
+     is something hidden to show. Label centred -- it is a row-wide action, not a
+     link in a sentence. */
+  .hidden-toggle {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 10px 14px;
+    text-align: center;
+    border-top: 1px solid var(--bg);
+    /* It is the card's last row: the bottom corners follow the card, the top ones
+       stay square, or the row peels away from the rows above it. The base button
+       radius (--radius-sm) rounds all four, which read as two notches. */
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+
+  /* The location menu. Width is set in JS from the longest item, so a Russian
+     menu does not pay for an English one and vice versa. */
+  .loc-menu {
+    position: fixed;
+    box-sizing: border-box;
+    background: var(--bg-elev-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow);
+    padding: 4px;
+    z-index: 210;
+  }
+  /* Android only: the menu answers a press, so it should arrive with motion.
+     Desktop opens on right-click and must appear instantly. */
+  .loc-menu--animated {
+    animation: loc-menu-in 140ms ease-out;
+    transform-origin: top left;
+  }
+  @keyframes loc-menu-in {
+    from { opacity: 0; transform: translateY(-4px) scale(0.97); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .loc-menu--animated { animation: none; }
+  }
+  .loc-menu-item {
+    display: block;
+    width: 100%;
+    white-space: nowrap;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .loc-menu-item:hover { background: var(--bg-elev-3); }
+  .loc-menu-item.danger { color: var(--danger); }
+
   .menu {
     position: fixed;
     /* Explicit width: a fixed element with right set + width:auto stretches to
@@ -1009,10 +1331,8 @@
     color: var(--text);
     font-size: 13px;
   }
-  @media (hover: hover) {
-    .menu-item:hover {
-      background: var(--bg-elev-3);
-    }
+  .menu-item:hover {
+    background: var(--bg-elev-3);
   }
   .menu-item.danger {
     color: var(--danger);
@@ -1037,20 +1357,29 @@
     justify-content: center;
     flex-shrink: 0;
   }
-  @media (hover: hover) {
-    .round-btn:hover {
-      background: var(--accent-faint);
-    }
+  .round-btn:hover {
+    background: var(--accent-faint);
   }
+  /* The card's own colour, held apart from the card by a hairline: a trough rather
+     than a second plate. What has been spent is filled in the colour of that hairline,
+     translucent so the figure on top of it stays readable. */
   .traffic-bar {
+    position: relative;
     flex: 1;
-    background: var(--bg-elev-2);
-    border: 1px solid var(--border);
+    overflow: hidden;
+    background: var(--bg-elev);
+    border: 1px solid var(--hairline);
     border-radius: 100px;
     padding: 6px 14px;
     text-align: center;
   }
+  .traffic-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--hairline-fill);
+  }
   .traffic-text {
+    position: relative;
     font-variant-numeric: tabular-nums;
     font-size: 13px;
     font-weight: 500;
@@ -1116,7 +1445,8 @@
     inset: 0;
     background: var(--overlay);
     display: flex;
-    align-items: flex-end;
+    /* Centred on the desktop client; see the split page for the reasoning. */
+    align-items: center;
     justify-content: center;
     z-index: 100;
     animation: fadeIn var(--transition);

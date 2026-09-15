@@ -154,7 +154,10 @@
     align-items: center;
     gap: 6px;
     padding: 6px 8px 6px 12px;
-    background: var(--bg-elev-2);
+    /* The application background (--bg), no outline: the row is lighter and gets
+       lighter still on hover, so a control in the app colour never blends into
+       either state. */
+    background: var(--bg);
     border: none;
     border-radius: var(--radius-sm);
     font-size: 13px;
@@ -170,7 +173,7 @@
   }
   @media (hover: hover) {
     .trigger:hover {
-      background: var(--bg-elev-2);
+      background: var(--bg-elev-3);
     }
   }
   .trigger-text {

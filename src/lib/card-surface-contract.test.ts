@@ -28,12 +28,16 @@ describe("card surface contract", () => {
     );
     expect(split).toMatch(/\.empty-state\s*\{[^}]*border:\s*none;/s);
     expect(split).toMatch(/\.picker\s*\{[^}]*border:\s*none;/s);
+    // The separator is one step off the plate it is drawn on. The picker plate took
+    // the application background in the Linux pass (a plate inside a card reads as
+    // cut out of it, not as a box glued on top), so the line has to be the lighter
+    // colour now -- a separator the same colour as its surface is not a separator.
     expect(split).toMatch(
-      /\.picker-row \+ \.picker-row\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
+      /\.picker-row \+ \.picker-row\s*\{[^}]*border-top:\s*1px solid var\(--bg-elev\);/s,
     );
   });
 
-  it("keeps the View log hover surface square without changing dropdown rounding", () => {
+  it("keeps settings controls readable on a hovered row", () => {
     const settings = read("../routes/settings/+page.svelte");
     const dropdown = read("./components/Dropdown.svelte");
 
@@ -41,11 +45,19 @@ describe("card surface contract", () => {
     expect(dropdown).not.toMatch(
       /\.trigger\[aria-expanded="true"\]\s*\{[^}]*border-top-left-radius:\s*0;/s,
     );
+    // Controls take the APPLICATION background (--bg) with no outline: the card
+    // row is lighter and its hover is lighter still, so they read in both states.
+    // This assertion used to demand --bg-elev-2, which pinned the mistake rather
+    // than the design: the plate and the row's hover were the same grey, so the
+    // control vanished into the state the hover was meant to reveal.
     expect(dropdown).toMatch(
-      /\.trigger\s*\{[^}]*background:\s*var\(--bg-elev-2\);[^}]*border:\s*none;/s,
+      /\.trigger\s*\{[^}]*background:\s*var\(--bg\);[^}]*border:\s*none;/s,
+    );
+    expect(dropdown).toMatch(
+      /\.trigger:hover\s*\{[^}]*background:\s*var\(--bg-elev-3\);/s,
     );
     expect(settings).toMatch(
-      /\.versions-btn\s*\{[^}]*background:\s*var\(--bg-elev-2\);[^}]*border:\s*none;/s,
+      /\.versions-btn\s*\{[^}]*background:\s*var\(--bg\);[^}]*border:\s*none;/s,
     );
   });
 
@@ -140,6 +152,12 @@ describe("card surface contract", () => {
     );
     expect(css).toMatch(
       /\.is-android \.modal-backdrop > \.modal\s*\{[^}]*max-height:\s*100%\s*!important;/s,
+    );
+    // The pages centre their dialogs for the desktop; on Android the sheet must come
+    // back to the bottom edge, or a dialog floats in the middle of the screen with
+    // nothing holding it there.
+    expect(css).toMatch(
+      /\.is-android \.modal-backdrop\s*\{[^}]*align-items:\s*flex-end;/s,
     );
     expect(dropdown).toContain("field?: boolean");
     expect(dropdown).toContain("class:field");

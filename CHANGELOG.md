@@ -1,5 +1,172 @@
 # Changelog
 
+## 0.4.0
+
+- The dropdown control in Settings was the same grey as the row's hover, so the
+  control disappeared into the state that hover is supposed to reveal, and its own
+  hover rule painted the colour it already had. It takes the application background
+  now and moves to the lighter tone on hover. The surface-contract test asked for
+  the old colour, which pinned the mistake instead of the design; it asks for the
+  new one, and now also asserts the hover.
+- Two strings left over from the removed application search are gone, and the test
+  for the subscription traffic strip -- the one that keeps a measured zero apart
+  from an unknown quota -- is ported from Linux, where the module it covers already
+  arrived byte-identical.
+
+- Editing the split while the tunnel is up rebuilds the interface and says nothing
+  about it. The service has always established the replacement TUN before retiring
+  the running one, so the session never dropped -- but the client still painted
+  "connecting" for at least 700 ms over a tunnel that never went away, because the
+  same code path serves a press of the power button, where that floor is honest. A
+  connect that arrives while a tunnel is running is now marked as a reconfigure,
+  and the button stays as it is.
+- A refused reconfigure keeps the tunnel that was protecting the user. Before, any
+  exception in a start -- a config the core will not accept, an application that
+  was uninstalled mid-edit, an interface that could not be built -- ended in
+  `stopAll()`, which on a replacement attempt meant: no tunnel, live internet, and
+  a power button that still said "connected". Now a refused reconfigure logs,
+  leaves the running interface alone, and answers its own request with the error,
+  so the app knows the edit did not apply while the session keeps running. The
+  kill switch is not a screen state: it has to survive the client failing to
+  change it.
+
+- Home and Split are two panes of one gesture. Swiping between them follows the
+  finger 1:1 in the middle of the travel and gives way at the ends, so the edge
+  still feels like an edge; the gesture is released on distance OR on a flick, so
+  a slow drag to the middle commits instead of snapping back; one gesture drives
+  one pane, and a drag the system takes away (`pointercancel`) hands the pane back
+  rather than leaving it stopped in the middle of the screen. The tab you were on
+  is remembered with the split, and each half keeps its own scroll position.
+
+- The bottom bar is labelled again, and whether it is is a setting. The bar
+  carries its own plate colour and the page lifts into it with a fade the shell
+  draws; the old CSS mask is gone, because a mask makes a stacking context and the
+  dialogs fell behind it.
+
+- The pill on the home screen reports the session: up, down, and how long it has
+  been up, read from the tunnel interface itself instead of restated from the last
+  connection. Where the counter cannot be read the rate shows `—/s` and not
+  `0 B/s`: a dash says this device will not tell me, a zero says nothing is
+  moving, and printing the second when the first is true is a lie about an idle
+  connection.
+
+- The interface MTU is a setting that does something. It travels from Settings to
+  the core's tun inbound and to `VpnService.Builder.setMtu`, and it is part of the
+  connection signature, so changing it rebuilds a tunnel that is already up
+  instead of reading as applied. Out-of-range values are clamped to 1280..9000
+  rather than reset: someone who typed 1100 meant smaller than default, and
+  answering with 1500 -- the one value that fails on such a network -- would be
+  the worse lie. The same rule is applied again in Kotlin, because the Quick
+  Settings tile relaunches the tunnel from a saved preference without asking the
+  Rust side anything, and an interface that quietly came back at 1500 after a
+  screen timeout would make the setting a lie whenever the user was not looking.
+
+- Settings are grouped by what they belong to: Interface (MTU, simultaneous
+  pings, tab labels), VPN (kill switch, LAN, notifications, the system-VPN row),
+  Appearance, Diagnostics. "Simultaneous pings" is a real field now: it is the
+  number of locations a card probes at once. It starts at 4 rather than at "no
+  limit", because every probe on a phone is a short-lived process and a burst of
+  forty made healthy locations show up as n/a. Both number fields are wide enough
+  to show the number they hold.
+
+- A subscription that failed to update says so. The card states the failure and
+  keeps showing the list it still has, instead of refreshing quietly and leaving
+  him to guess whether the eleven locations he sees are current.
+
+- Revealing a card's hidden locations survives a trip to Settings and back: the
+  card is showing them to him, and that is not a fact about the page.
+
+- The latency of a location is inside the row button. As a sibling it stole the
+  tap: pressing the label selected the location as if the row had been pressed,
+  and on a phone the label is where a thumb lands.
+
+- Split sites are written without the asterisk: `example.com` means the domain and
+  its subdomains, `=example.com` means that name alone, and the add dialog is one
+  field with the kind on a tooltip. Everything the user types is a hostname, so
+  the field no longer asks him to spell a wildcard.
+
+- One rounding family and one panel colour. Cards, rows, pills and dialogs share
+  the same radii and hairlines, controls are cut out of the plate they sit on
+  rather than painted on top of it, and nothing in the app is selectable except
+  the fields he types into.
+
+- A manually added configuration no longer pretends to be a subscription: its card
+  carries no refresh (nothing fetches it) and no ⋮ menu (rename, JSON, pin and
+  remove are subscription actions), only the ping. Its locations are deleted for
+  real from the row menu, and when the last one goes, the card goes with it.
+
+- Hiding a location has no duration setting any more, and the setting itself is
+  deleted rather than left inert. A background update is not something the user
+  did, so hiding could undo itself while the app was simply open; an explicit
+  refresh is the provider's business, not the user's undo button. A hidden row
+  stays hidden until he shows it again on the card, and the only other way back is
+  removing the subscription and importing it again -- a re-import is a new
+  subscription, not a refresh of the old one -- so hiding stays durable without
+  becoming unrecoverable. A stored hiding mode is ignored.
+
+- Hiding one location no longer hides the location behind it. Hiding and pinning
+  were keyed by the ENDPOINT, and a provider can put two rows on one endpoint
+  exactly -- the "auto choice" balancer of a JSON profile exposes the same first
+  proxy outbound as the location behind it, so hiding one row hid its neighbour.
+  A row is now keyed by endpoint AND label, the way the selection already resolves
+  it: the row you pointed at is the row that goes away. Renaming a location brings
+  back a hidden one and unpins a pinned one, because that row is gone under a new
+  name. Keys written by older builds are rewritten to the row they can only have
+  meant; when several rows share the old key the intent is lost, so those locations
+  show again rather than stay hidden.
+
+- Long-press a location for its menu: ping, rename, pin, hide -- or delete, for a
+  location of a manually added configuration. The gesture dies the moment it stops
+  being a press: a finger that wanders more than 10 px, a list that scrolls under
+  it, or a lift before 500 ms opens nothing, and the click a long press ends with
+  no longer selects the location behind the menu. The list text is no longer
+  selectable either, so the WebView's own "select text" haptics do not compete
+  with it. Hidden locations drop out of the card and come back on the card's own
+  "N hidden" line, and pinned ones move to
+  the top of the list with the same pin mark a pinned card carries. The menu is
+  one per app and as wide as its longest item, measured from the text, because
+  `max-content` is not honoured the same way in every WebView.
+- The ✕ of a modal answered only when the user missed the icon. An icon-only
+  button is clicked on its `<svg>`, and an `SVGElement` is not an `HTMLElement`,
+  so the old filter dropped exactly the clicks that were meant to close it.
+- A refresh no longer moves the chosen location into another card. The card the
+  user picked from owns the choice while it exists; the endpoint key now carries
+  transport, security, SNI, flow, path and the two REALITY fields, because
+  providers put several locations on one endpoint and separate them only by those;
+  when several locations still share a key, the tie is broken by the label the
+  user chose rather than by the order in the provider's list.
+- Android: ask a profile's resolver over a transport the proxy actually carries.
+  Full JSON profiles hard-wire `8.8.8.8`-style UDP resolvers and the client
+  forces every resolver connection through the selected proxy -- the anti-leak
+  invariant -- but forwarded UDP/53 is what proxy servers routinely drop. A
+  client log said it exactly: `from DNS accepted udp:8.8.8.8:53 [... -> proxy]`
+  followed by `app/observatory/burst: error ping
+  http://www.gstatic.com/generate_204 with proxy: context deadline exceeded` for
+  every member of the profile. The tunnel is up, the resolver is not, so the
+  observatory cannot resolve its own probe URL, the balancer keeps the profile's
+  fallback outbound, and every lookup in every app hangs -- "latency is green,
+  nothing works", working again on its own once a UDP query happens through.
+  Across Proxen's fleet UDP DNS answered on 9 of 23 endpoints, TCP on 16 and DoH
+  on 16. A plain IP resolver now becomes DoH of the same operator first, then the
+  same IP over TCP, then the provider's own UDP entry: one set per operator,
+  still forced through the proxy, nothing substituted. With UDP/53 blocked in a
+  test config, the old plan resolved 0 of 11 endpoints and the new one resolved 9
+  of 11 -- the two remaining do not carry proxy traffic either.
+- Android: the client no longer picks a different country by itself. A refresh
+  regenerates every location id, so the chosen one was re-found by its endpoint
+  (`protocol:host:port:uuid`) -- and a composite JSON profile exposes its FIRST
+  proxy outbound as that host, which is exactly what a provider rotates: when
+  Proxen moved the primary of «США», the stored endpoint matched nothing and the
+  selection fell back to the first location of the first subscription, so the
+  active location jumped to another country on its own. The selection is now
+  re-found by endpoint and then by the location label inside the same
+  subscription; a location that really vanished leaves nothing selected and says
+  so instead of choosing another one, and its identity is kept, so an update that
+  brings it back restores the choice.
+- Android: the xray row in Settings states its status without the essay about
+  why the core version cannot be changed there; the version manager stays
+  hidden, since there is nothing on that screen for the user to act on.
+
 ## 0.3.2
 
 - Android: a location whose profile resolves through Quad9 reported n/a while

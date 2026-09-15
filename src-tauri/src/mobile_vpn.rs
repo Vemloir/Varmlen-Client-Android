@@ -28,6 +28,17 @@ struct ConnectArgs {
     /// version or the APK-bundled one). The service falls back to the bundled
     /// binary if the file is gone.
     bin: String,
+    /// MTU for the interface VpnService is about to create. The number is decided
+    /// in the frontend and clamped twice (here, and in Kotlin, where the interface
+    /// is actually built), because a saved preference also reaches the service
+    /// through the Quick Settings tile without passing this process at all.
+    mtu: u32,
+    /// This call replaces a tunnel that is already running: an edit to the split,
+    /// the MTU or the switches while connected. The service keeps the running
+    /// tunnel when the new configuration is refused, because dropping it would put
+    /// the user on the open internet under a power button that still says
+    /// "connected".
+    reconfigure: bool,
 }
 
 /// Managed handle to the Android plugin.
@@ -82,6 +93,8 @@ pub fn connect<R: Runtime>(
     log_level: String,
     killswitch: bool,
     bin: String,
+    mtu: u32,
+    reconfigure: bool,
 ) -> Result<(), String> {
     let vpn = app.state::<Vpn<R>>();
     vpn.0
@@ -96,6 +109,8 @@ pub fn connect<R: Runtime>(
                 log_level,
                 killswitch,
                 bin,
+                mtu,
+                reconfigure,
             },
         )
         .map(|_| ())

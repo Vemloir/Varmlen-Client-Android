@@ -1,4 +1,7 @@
 import { browser } from "$app/environment";
+import type { SplitInput } from "./api";
+import type { SplitTab } from "./nav-zones";
+import { migrateSitePatterns } from "./site-pattern";
 
 export type Mode = "selective" | "general";
 
@@ -7,8 +10,9 @@ export interface AppEntry {
   id: string;
   /** Display name. */
   name: string;
-  /** Emoji, short text, or a `data:` icon URI. */
-  icon: string;
+  /** Emoji, short text, or a `data:` icon URI. Null when the application has no
+   *  icon at all -- the row then shows no icon rather than a placeholder. */
+  icon: string | null;
   enabled: boolean;
 }
 
@@ -112,13 +116,36 @@ function load(): Persisted {
   }
 }
 
-const _initialSplit = load();
+// Patterns are shown to the user, so they are stored in the current notation. The
+// rewrite preserves meaning -- the router maps the old "*.host" spelling to the same
+// rule as the plain host -- so this is a display fix, not a routing change.
+const _initialSplit = (() => {
+  const loaded = load();
+  return {
+    ...loaded,
+    sites: {
+      general: migrateSitePatterns(loaded.sites.general).sites,
+      selective: migrateSitePatterns(loaded.sites.selective).sites,
+    },
+  };
+})();
 
 class SplitStore {
   appsMode = $state<Mode>(_initialSplit.appsMode);
   sitesMode = $state<Mode>(_initialSplit.sitesMode);
   appsBuckets = $state<ModeBuckets<AppEntry>>(_initialSplit.apps);
   sitesBuckets = $state<ModeBuckets<SiteEntry>>(_initialSplit.sites);
+
+  /** Which half of the split page the reader is looking at. It lives here rather
+   *  than in the page because the swipe strip has to know it too: applications and
+   *  websites are two places in the strip that share one route, and a drag from Home
+   *  has to land on the right half without navigating twice. Not persisted -- it is
+   *  where the eyes were, not a setting. */
+  tab = $state<SplitTab>("apps");
+
+  setTab(tab: SplitTab): void {
+    this.tab = tab;
+  }
 
   /** Active-mode apps — what the UI binds to and what's sent to the backend. */
   get apps(): AppEntry[] {
@@ -132,6 +159,26 @@ class SplitStore {
     this.appsBuckets = { ...this.appsBuckets, [this.appsMode]: next };
     this.persist();
   }
+  /** The split as the connect command wants it: enabled entries only, applications
+   *  by package id and websites by pattern.
+   *
+   *  Linux answers an edit to this list twice: it pushes the application list to
+   *  the running daemon over its control socket (vpn_apply_split), and the
+   *  signature-driven reconnect catches the rest. Android has no daemon to push to:
+   *  the application list is baked into the VpnService.Builder at establish() time
+   *  and the site rules live inside the core's config, so both halves of an edit
+   *  reach the tunnel the same way -- by rebuilding it. That rebuild is what
+   *  conn.onConfigChanged() schedules, which is why there is no pushApps() here:
+   *  two paths to the same reconfigure would establish the interface twice. */
+  input(): SplitInput {
+    return {
+      appsMode: this.appsMode,
+      sitesMode: this.sitesMode,
+      apps: this.apps.filter((a) => a.enabled).map((a) => a.id),
+      sites: this.sites.filter((s) => s.enabled).map((s) => s.pattern),
+    };
+  }
+
   private setSites(next: SiteEntry[]): void {
     this.sitesBuckets = { ...this.sitesBuckets, [this.sitesMode]: next };
     this.persist();

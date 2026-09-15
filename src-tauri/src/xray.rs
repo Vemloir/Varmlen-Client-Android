@@ -52,6 +52,29 @@ const DEFAULT_DOH_SERVERS: &[(&str, &[&str])] = &[
     ("https://dns.google/dns-query", &["8.8.8.8", "8.8.4.4"]),
 ];
 
+/// Public resolvers by the plain IP a profile tends to name, with the DoH
+/// endpoint of the SAME operator and the bootstrap addresses for it. Profiles
+/// hard-wire `8.8.8.8`-style UDP resolvers; see `prefer_doh_transports`.
+const DOH_BY_RESOLVER_IP: &[(&[&str], &str, &[&str])] = &[
+    (&["8.8.8.8", "8.8.4.4"], "https://dns.google/dns-query", &["8.8.8.8", "8.8.4.4"]),
+    (
+        &["1.1.1.1", "1.0.0.1"],
+        "https://cloudflare-dns.com/dns-query",
+        &["1.1.1.1", "1.0.0.1"],
+    ),
+    (
+        &["9.9.9.9", "149.112.112.112"],
+        "https://dns.quad9.net/dns-query",
+        &["9.9.9.9", "149.112.112.112"],
+    ),
+    (
+        &["77.88.8.8", "77.88.8.1"],
+        "https://common.dot.dns.yandex.net/dns-query",
+        &["77.88.8.8", "77.88.8.1"],
+    ),
+];
+
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct EditorChoice {
     pub value: &'static str,
@@ -168,6 +191,22 @@ pub const XRAY_DIAL_MARK: u32 = 0x2024;
 /// TUN interface name. Must match the helper's `TUN_IFACE`.
 pub const TUN_NAME: &str = "varmlen0";
 const TUN_MTU: u32 = 1500;
+/// Floor: the minimum IPv6 link MTU (RFC 8200). Below it the interface cannot
+/// carry IPv6 at all, so it is not a usable MTU whatever the user typed.
+pub const TUN_MTU_MIN: u32 = 1280;
+/// Ceiling: jumbo frames are worth allowing on a tunnel, but a typo must not
+/// produce a 65535 interface that black-holes every response.
+pub const TUN_MTU_MAX: u32 = 9000;
+
+/// The MTU to hand the tunnel. Out-of-range values are CLAMPED, not reset: someone
+/// who asked for 1100 meant "smaller than default", and answering with 1500 -- the
+/// one value that does not work on such a network -- would be the worse lie.
+pub fn tun_mtu(value: Option<u32>) -> u32 {
+    match value {
+        None => TUN_MTU,
+        Some(v) => v.clamp(TUN_MTU_MIN, TUN_MTU_MAX),
+    }
+}
 
 /// Private / LAN ranges kept direct when "allow LAN" is on. Explicit CIDRs
 /// rather than `geoip:private` so xray needs no `geoip.dat` asset — we ship only
@@ -1181,9 +1220,106 @@ fn safe_provider_dns_servers(server: &VlessServer) -> Vec<(Value, Vec<String>, O
 /// only when the profile also supplies a public literal-IP bootstrap in
 /// `dns.hosts`; local/system resolvers remain excluded so a subscription cannot
 /// silently reintroduce a DNS leak.
+/// The `address` of a DNS server entry, string or object form.
+fn dns_entry_address(entry: &Value) -> Option<String> {
+    match entry {
+        Value::String(address) => Some(address.clone()),
+        Value::Object(object) => object
+            .get("address")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+/// Ask a profile's classic UDP resolver over transports that survive a proxy.
+///
+/// UDP/53 is the least reliable thing a profile can ask for: proxy servers
+/// forward TCP on 443 as a matter of course and routinely drop forwarded UDP
+/// DNS, and the first datagram after a tunnel comes up is lost while the server
+/// side opens its UDP association. Measured across Proxen's fleet with the
+/// resolver forced through the proxy (one resolver, one path, transport only
+/// varying): UDP answered on 9 of 23 endpoints, TCP on 16, DoH on 16 -- every
+/// endpoint that carried proxy traffic at all. "Ping is green, nothing works"
+/// is exactly this: the tunnel is up, the resolver is not, so the observatory
+/// cannot resolve its own probe URL and the balancer keeps the profile's
+/// fallback outbound.
+///
+/// So a bare IP resolver becomes DoH of the same operator first (TLS on 443),
+/// then the same IP over TCP, then the provider's own UDP entry last. Same
+/// operator, same forced-through-proxy path, nothing leaks and nothing is
+/// substituted behind the provider's back. One set per operator: `8.8.8.8` and
+/// `8.8.4.4` are one anycast network, and five probes per query would only
+/// spend the provider's rate limit. `enableParallelQuery` keeps every transport
+/// in flight, so a server that ignores one of them costs nothing.
+fn prefer_doh_transports(
+    entries: Vec<(Value, Vec<String>, Option<String>)>,
+) -> Vec<(Value, Vec<String>, Option<String>)> {
+    fn with_address(entry: &Value, address: String) -> Value {
+        match entry {
+            Value::String(_) => Value::String(address),
+            Value::Object(object) => {
+                let mut object = object.clone();
+                object.insert("address".into(), Value::String(address));
+                Value::Object(object)
+            }
+            other => other.clone(),
+        }
+    }
+
+    let mut out = Vec::with_capacity(entries.len() * 3);
+    let mut covered: Vec<String> = Vec::new();
+    for (entry, ips, probe) in entries {
+        let address = dns_entry_address(&entry);
+        let resolver = match address.as_deref().filter(|raw| raw.parse::<IpAddr>().is_ok()) {
+            Some(resolver) => resolver,
+            // Already DoH/DoT/TCP: a transport the proxy can carry.
+            None => {
+                out.push((entry, ips, probe));
+                continue;
+            }
+        };
+        let operator = DOH_BY_RESOLVER_IP
+            .iter()
+            .find(|(addresses, _, _)| addresses.contains(&resolver));
+        let key = operator.map_or_else(
+            || resolver.to_string(),
+            |(_, url, _)| (*url).to_string(),
+        );
+        if covered.contains(&key) {
+            continue;
+        }
+        covered.push(key);
+
+        let mut variants: Vec<(Value, Vec<String>, Option<String>)> = Vec::new();
+        if let Some((_, url, bootstrap)) = operator {
+            variants.push((
+                with_address(&entry, (*url).to_string()),
+                bootstrap.iter().map(|ip| (*ip).to_string()).collect(),
+                Some((*url).to_string()),
+            ));
+        }
+        variants.push((
+            with_address(&entry, format!("tcp://{resolver}")),
+            vec![resolver.to_string()],
+            None,
+        ));
+        variants.push((entry, vec![resolver.to_string()], probe));
+        out.extend(variants);
+    }
+    out
+}
+
+/// Preserve a full JSON profile's safe DNS endpoints and force their concrete
+/// destination IPs through the selected proxy. Hostname DNS is accepted only
+/// with a public literal-IP bootstrap in `dns.hosts`; local/system resolvers
+/// remain excluded so a subscription cannot silently reintroduce a DNS leak.
 fn build_dns_plan(server: &VlessServer) -> DnsPlan {
     let mut servers = safe_provider_dns_servers(server);
     let using_defaults = servers.is_empty();
+    if !using_defaults {
+        servers = prefer_doh_transports(servers);
+    }
     if using_defaults {
         servers = DEFAULT_DOH_SERVERS
             .iter()
@@ -1220,6 +1356,16 @@ fn build_dns_plan(server: &VlessServer) -> DnsPlan {
         .iter()
         .filter_map(|(_, _, url)| url.clone())
         .collect::<Vec<_>>();
+    // Every DoH endpoint needs a literal-IP bootstrap, or xray would resolve its
+    // own hostname through the host resolver.
+    let bootstraps = servers
+        .iter()
+        .filter_map(|(_, ips, url)| {
+            let hostname = Url::parse(url.as_deref()?).ok()?.host_str()?.to_string();
+            Some((hostname, ips.clone()))
+        })
+        .collect::<Vec<_>>();
+
     let mut config = server
         .raw_profile
         .as_ref()
@@ -1241,16 +1387,10 @@ fn build_dns_plan(server: &VlessServer) -> DnsPlan {
         *hosts = json!({});
     }
     let hosts = hosts.as_object_mut().expect("DNS hosts object inserted");
-    if using_defaults {
-        for (url, ips) in DEFAULT_DOH_SERVERS {
-            let hostname = Url::parse(url)
-                .expect("constant DoH URL")
-                .host_str()
-                .expect("constant DoH hostname")
-                .to_string();
-            hosts.entry(hostname).or_insert_with(|| json!(ips));
-        }
+    for (hostname, ips) in bootstraps {
+        hosts.entry(hostname).or_insert_with(|| json!(ips));
     }
+
     // v2rayNG carries this compatibility alias specifically to avoid Play
     // services being stranded behind resolvers that return googleapis.cn.
     hosts
@@ -1276,7 +1416,7 @@ pub fn dns_probe_urls(server: &VlessServer) -> Vec<String> {
 /// Build the single inbound that carries system traffic. Connection startup is
 /// structural only: synthetic Internet probes are not allowed to reject a
 /// valid tunnel or race a composite profile's still-warming balancer.
-fn build_inbounds(inbound: CaptureInbound) -> Vec<Value> {
+fn build_inbounds(inbound: CaptureInbound, mtu: u32) -> Vec<Value> {
     // routeOnly: the sniffed domain is used for routing (domain rules) but the
     // connection keeps its original destination. This avoids the destination
     // override that can sever the source->process binding the `process` matcher
@@ -1292,7 +1432,11 @@ fn build_inbounds(inbound: CaptureInbound) -> Vec<Value> {
             "protocol": "tun",
             // Native tun manages ONLY the device (name + mtu). Addressing,
             // routes, DNS redirect and the bypass rules are the helper's job.
-            "settings": { "name": TUN_NAME, "mtu": TUN_MTU },
+            // On Android the MTU written here is a statement of intent, not the
+            // act: the interface belongs to VpnService, which sets its own from the
+            // same number (VarmlenVpnService.tunMtu). Both are told, so the core
+            // never believes it may carry a bigger packet than the device will.
+            "settings": { "name": TUN_NAME, "mtu": mtu },
             "sniffing": sniffing,
         })],
         CaptureInbound::ValidationHttp => vec![json!({
@@ -1459,6 +1603,7 @@ fn build_xray_config_with_inbound(
     app_split_owner: AppSplitOwner,
     allow_lan: bool,
     log_level: &str,
+    mtu: u32,
 ) -> Value {
     let loglevel = xray_loglevel(log_level);
     let OutboundPlan {
@@ -1494,7 +1639,7 @@ fn build_xray_config_with_inbound(
     let mut config = json!({
         "log": { "loglevel": loglevel },
         "dns": dns.config,
-        "inbounds": build_inbounds(inbound),
+        "inbounds": build_inbounds(inbound, mtu),
         "outbounds": proxies,
         "routing": routing
     });
@@ -1514,6 +1659,7 @@ pub fn build_xray_config(
     app_split_owner: AppSplitOwner,
     allow_lan: bool,
     log_level: &str,
+    mtu: u32,
 ) -> Value {
     build_xray_config_with_inbound(
         server,
@@ -1522,6 +1668,7 @@ pub fn build_xray_config(
         app_split_owner,
         allow_lan,
         log_level,
+        mtu,
     )
 }
 
@@ -1535,6 +1682,7 @@ pub fn build_xray_validation_config(
     app_split_owner: AppSplitOwner,
     allow_lan: bool,
     log_level: &str,
+    mtu: u32,
 ) -> Value {
     build_xray_config_with_inbound(
         server,
@@ -1543,6 +1691,7 @@ pub fn build_xray_validation_config(
         app_split_owner,
         allow_lan,
         log_level,
+        mtu,
     )
 }
 
@@ -1555,6 +1704,7 @@ pub fn build_android_xray_config(
     split: &SplitInput,
     allow_lan: bool,
     log_level: &str,
+    mtu: u32,
 ) -> Value {
     build_xray_config_with_inbound(
         server,
@@ -1563,6 +1713,7 @@ pub fn build_android_xray_config(
         AppSplitOwner::VpnService,
         allow_lan,
         log_level,
+        mtu,
     )
 }
 
@@ -1574,6 +1725,7 @@ pub fn build_android_validation_config(
     split: &SplitInput,
     allow_lan: bool,
     log_level: &str,
+    mtu: u32,
 ) -> Value {
     build_xray_config_with_inbound(
         server,
@@ -1582,6 +1734,7 @@ pub fn build_android_validation_config(
         AppSplitOwner::VpnService,
         allow_lan,
         log_level,
+        mtu,
     )
 }
 
@@ -1648,7 +1801,7 @@ pub fn generate_xray_config(
     allow_lan: bool,
 ) -> Result<String, String> {
     validate_server(&server)?;
-    let cfg = build_xray_config(&server, &split, AppSplitOwner::Xray, allow_lan, "warning");
+    let cfg = build_xray_config(&server, &split, AppSplitOwner::Xray, allow_lan, "warning", TUN_MTU);
     serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())
 }
 
@@ -1842,7 +1995,7 @@ mod tests {
     #[test]
     fn multi_outbound_profile_keeps_balancer_and_varmlen_policy() {
         let server = estonia_profile_server();
-        let cfg = build_xray_config(&server, &split(), AppSplitOwner::Xray, false, "warning");
+        let cfg = build_xray_config(&server, &split(), AppSplitOwner::Xray, false, "warning", TUN_MTU);
 
         let proxy_outbounds = cfg["outbounds"]
             .as_array()
@@ -1871,7 +2024,13 @@ mod tests {
             .unwrap();
         assert_eq!(dns_rule["balancerTag"], "estonia-balancer");
         assert!(cfg.get("burstObservatory").is_some());
-        assert_eq!(cfg["dns"]["servers"][0], "8.8.8.8");
+        // The profile's resolver is still the resolver, but a proxy that drops
+        // forwarded UDP/53 no longer takes the location down with it.
+        assert_eq!(
+            cfg["dns"]["servers"],
+            json!(["https://dns.google/dns-query", "tcp://8.8.8.8", "8.8.8.8"])
+        );
+
         assert!(cfg["routing"]["rules"]
             .as_array()
             .unwrap()
@@ -1901,7 +2060,7 @@ mod tests {
             }]
         });
         let server = parse_subscription(&profile.to_string()).remove(0);
-        let cfg = build_xray_config(&server, &split(), AppSplitOwner::Xray, false, "warning");
+        let cfg = build_xray_config(&server, &split(), AppSplitOwner::Xray, false, "warning", TUN_MTU);
 
         assert_eq!(cfg["outbounds"][0]["protocol"], "wireguard");
         assert!(cfg["outbounds"][0].get("streamSettings").is_none());
@@ -1913,7 +2072,7 @@ mod tests {
             "vless://16ddb21e-5342-4a82-a870-1038b01b8dbc@46.29.238.157:443?type=xhttp&security=reality&encryption=none&sni=gateway.icloud.com&fp=firefox&pbk=PUBKEY&sid=SID&spx=%2F&path=%2F&mode=packet-up#NO",
         )
         .expect("parse");
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
 
         let out = &cfg["outbounds"][0];
         assert_eq!(out["protocol"], "vless");
@@ -1961,7 +2120,7 @@ mod tests {
           }]
         }"#;
         let server = parse_subscription(body).remove(0);
-        let cfg = build_xray_config(&server, &split(), AppSplitOwner::Xray, false, "warning");
+        let cfg = build_xray_config(&server, &split(), AppSplitOwner::Xray, false, "warning", TUN_MTU);
         let proxy = &cfg["outbounds"][0];
         assert_eq!(proxy["tag"], "proxy");
         assert_eq!(
@@ -2034,7 +2193,7 @@ mod tests {
             }
         });
         let server = parse_subscription(&body.to_string()).remove(0);
-        let cfg = build_android_xray_config(&server, &split(), false, "warning");
+        let cfg = build_android_xray_config(&server, &split(), false, "warning", TUN_MTU);
 
         assert_eq!(cfg["dns"]["servers"], json!(["https://9.9.9.9/dns-query"]));
         assert_eq!(cfg["dns"]["queryStrategy"], "UseIPv4");
@@ -2076,8 +2235,41 @@ mod tests {
             AppSplitOwner::VpnService,
             false,
             "warning",
+            TUN_MTU,
         );
         assert_bundled_xray_accepts("hysteria-provider-dns", &validation);
+    }
+
+    #[test]
+    fn an_unknown_udp_resolver_still_gets_tcp_before_udp() {
+        // No DoH mapping is invented for an operator we do not know, but TCP is
+        // still tried before the datagram that Proxen's servers drop.
+        let body = json!({
+            "remarks": "Odd resolver",
+            "dns": {"servers": [{ "address": "213.180.204.203", "domains": ["domain:ya.ru"] }]},
+            "outbounds": [{
+                "tag": "proxy",
+                "protocol": "vless",
+                "settings": {"address": "vpn.example", "port": 443, "id": "uuid"}
+            }]
+        });
+        let server = parse_subscription(&body.to_string()).remove(0);
+        let cfg = build_xray_config(
+            &server,
+            &split(),
+            AppSplitOwner::VpnService,
+            false,
+            "warning",
+            TUN_MTU,
+        );
+
+        let servers = cfg["dns"]["servers"].as_array().unwrap();
+        assert_eq!(servers.len(), 2);
+        assert_eq!(servers[0]["address"], "tcp://213.180.204.203");
+        // The domain scope the provider wrote survives the rewrite.
+        assert_eq!(servers[0]["domains"], json!(["domain:ya.ru"]));
+        assert_eq!(servers[1]["address"], "213.180.204.203");
+        assert!(dns_probe_urls(&server).is_empty());
     }
 
     #[test]
@@ -2101,11 +2293,24 @@ mod tests {
             }]
         });
         let server = parse_subscription(&body.to_string()).remove(0);
-        let cfg = build_android_xray_config(&server, &split(), false, "warning");
+        let cfg = build_android_xray_config(&server, &split(), false, "warning", TUN_MTU);
 
-        assert_eq!(cfg["dns"]["servers"], json!(["8.8.8.8", "8.8.4.4"]));
+        // One set per operator: 8.8.8.8 and 8.8.4.4 are one anycast network, so
+        // DoH once (its bootstrap covers both) plus the provider's own endpoints.
+        assert_eq!(
+            cfg["dns"]["servers"],
+            json!(["https://dns.google/dns-query", "tcp://8.8.8.8", "8.8.8.8"])
+        );
         assert!(cfg["dns"].get("clientIp").is_none());
-        assert!(dns_probe_urls(&server).is_empty());
+        assert_eq!(
+            dns_probe_urls(&server),
+            vec!["https://dns.google/dns-query"]
+        );
+        assert_eq!(
+            cfg["dns"]["hosts"]["dns.google"],
+            json!(["8.8.8.8", "8.8.4.4"])
+        );
+
         assert!(cfg["routing"]["rules"]
             .as_array()
             .unwrap()
@@ -2137,7 +2342,7 @@ mod tests {
             }]
         });
         let server = parse_subscription(&body.to_string()).remove(0);
-        let cfg = build_android_xray_config(&server, &split(), false, "warning");
+        let cfg = build_android_xray_config(&server, &split(), false, "warning", TUN_MTU);
 
         assert_eq!(
             cfg["dns"]["servers"],
@@ -2184,7 +2389,7 @@ mod tests {
             "vless://uuid-1@1.2.3.4:443?type=tcp&security=reality&flow=xtls-rprx-vision&sni=icloud.com&pbk=K&sid=ab&fp=chrome#X",
         )
         .expect("parse");
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
         let out = &cfg["outbounds"][0];
         assert_eq!(
             out["settings"]["vnext"][0]["users"][0]["flow"],
@@ -2196,7 +2401,7 @@ mod tests {
 
     fn stream_for(uri: &str) -> Value {
         let s = parse_proxy_uri(uri).expect("parse");
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
         cfg["outbounds"][0]["streamSettings"].clone()
     }
 
@@ -2285,11 +2490,41 @@ mod tests {
     }
 
     #[test]
+    fn the_tun_inbound_carries_the_requested_mtu() {
+        // A path that encapsulates again cannot carry Ethernet's 1500 inside the
+        // tunnel, and then only large responses die. The setting has to reach xray,
+        // not stay in the frontend.
+        let s = parse_proxy_uri("vless://u@1.2.3.4:443?security=reality&pbk=K#X").unwrap();
+        let cfg = build_xray_config(
+            &s,
+            &split(),
+            AppSplitOwner::Xray,
+            true,
+            "warning",
+            1420,
+        );
+        assert_eq!(cfg["inbounds"][0]["settings"]["mtu"], 1420);
+        let android = build_android_xray_config(&s, &split(), false, "warning", 1420);
+        assert_eq!(android["inbounds"][0]["settings"]["mtu"], 1420);
+    }
+
+    #[test]
+    fn an_out_of_range_mtu_is_clamped_rather_than_reset() {
+        // Someone who asked for 1100 meant "smaller than default". Answering with
+        // 1500 -- the one value that does not work on such a network -- would be the
+        // worse lie, so the number is pushed back into the usable range instead.
+        assert_eq!(tun_mtu(None), 1500);
+        assert_eq!(tun_mtu(Some(1420)), 1420);
+        assert_eq!(tun_mtu(Some(1)), TUN_MTU_MIN);
+        assert_eq!(tun_mtu(Some(65535)), TUN_MTU_MAX);
+    }
+
+    #[test]
     fn native_tun_inbound_only_has_name_and_mtu() {
         // Guard: the native tun inbound must NOT carry gateway/dns/iptables
         // fields — those are unverified upstream and the helper owns routing.
         let s = parse_proxy_uri("vless://u@1.2.3.4:443?security=reality&pbk=K#X").unwrap();
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
         let inb = &cfg["inbounds"][0];
         assert_eq!(inb["protocol"], "tun");
         assert_eq!(inb["settings"]["name"], TUN_NAME);
@@ -2306,7 +2541,7 @@ mod tests {
     #[test]
     fn android_uses_native_tun_with_vpn_service_app_split() {
         let s = parse_proxy_uri("vless://u@1.2.3.4:443?security=reality&pbk=K#X").unwrap();
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::VpnService, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::VpnService, true, "warning", TUN_MTU);
         let inb = &cfg["inbounds"][0];
         assert_eq!(inb["protocol"], "tun");
         assert!(inb.get("port").is_none());
@@ -2324,7 +2559,7 @@ mod tests {
     #[test]
     fn android_startup_config_has_only_the_native_tun_inbound() {
         let server = estonia_profile_server();
-        let config = build_android_xray_config(&server, &split(), false, "warning");
+        let config = build_android_xray_config(&server, &split(), false, "warning", TUN_MTU);
         let inbounds = config["inbounds"].as_array().unwrap();
         assert_eq!(inbounds.len(), 1);
         assert_eq!(inbounds[0]["tag"], "tun-in");
@@ -2342,7 +2577,7 @@ mod tests {
     fn proxy_and_direct_outbounds_carry_dial_mark() {
         let s =
             parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
         assert_eq!(
             cfg["outbounds"][0]["streamSettings"]["sockopt"]["mark"],
             XRAY_DIAL_MARK
@@ -2401,7 +2636,7 @@ mod tests {
         // inbound is handled by dns-out, and no extra loopback listener exists.
         let s =
             parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
         assert_eq!(
             cfg["dns"]["servers"],
             json!([
@@ -2458,7 +2693,7 @@ mod tests {
             apps: vec!["thunderbird".into()],
             sites: vec!["*.ru".into(), "example.com".into()],
         };
-        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning", TUN_MTU);
         let rules = cfg["routing"]["rules"].as_array().unwrap();
         // Every rule must carry type:field for cross-version safety.
         assert!(
@@ -2487,7 +2722,7 @@ mod tests {
             apps: vec!["firefox".into()],
             sites: vec!["example.com".into()],
         };
-        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning", TUN_MTU);
         assert_eq!(
             cfg["routing"]["rules"].as_array().unwrap().last().unwrap()["outboundTag"],
             "direct"
@@ -2507,7 +2742,7 @@ mod tests {
             sites: vec!["example.com".into()],
             ..Default::default()
         };
-        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning", TUN_MTU);
         assert_eq!(
             cfg["routing"]["rules"].as_array().unwrap().last().unwrap()["outboundTag"],
             "direct"
@@ -2534,7 +2769,7 @@ mod tests {
             apps: vec!["firefox".into(), "telegram-desktop".into()],
             sites: vec!["*.ru".into(), "example.com".into()],
         };
-        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning", TUN_MTU);
         std::fs::write(
             "/tmp/varmlen_xray_sample.json",
             serde_json::to_string_pretty(&cfg).unwrap(),
@@ -2554,7 +2789,7 @@ mod tests {
             apps: vec!["firefox".into()],
             ..Default::default()
         };
-        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &sp, AppSplitOwner::Xray, true, "warning", TUN_MTU);
         let rules = cfg["routing"]["rules"].as_array().unwrap();
         let proc_idx = rules
             .iter()
@@ -2576,7 +2811,7 @@ mod tests {
     fn trojan_outbound_shape() {
         let s =
             parse_proxy_uri("trojan://secretpass@1.2.3.4:443?security=tls&sni=a.com#T").unwrap();
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
         let out = &cfg["outbounds"][0];
         assert_eq!(out["protocol"], "trojan");
         assert_eq!(out["settings"]["servers"][0]["password"], "secretpass");
@@ -2587,7 +2822,7 @@ mod tests {
     #[test]
     fn shadowsocks_outbound_shape() {
         let s = parse_proxy_uri("ss://YWVzLTI1Ni1nY206c2VjcmV0@1.2.3.4:8388#S").unwrap();
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
         let out = &cfg["outbounds"][0];
         assert_eq!(out["protocol"], "shadowsocks");
         assert_eq!(out["settings"]["servers"][0]["method"], "aes-256-gcm");
@@ -2603,7 +2838,7 @@ mod tests {
         });
         let b64 = base64::engine::general_purpose::STANDARD.encode(payload.to_string());
         let s = parse_proxy_uri(&format!("vmess://{b64}")).unwrap();
-        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
         let out = &cfg["outbounds"][0];
         assert_eq!(out["protocol"], "vmess");
         assert_eq!(out["settings"]["vnext"][0]["users"][0]["id"], "uuid-vm");
@@ -2615,7 +2850,7 @@ mod tests {
     fn validation_config_uses_http_without_a_tun_device() {
         let s =
             parse_proxy_uri("vless://u@1.2.3.4:443?type=xhttp&security=reality&pbk=K#X").unwrap();
-        let cfg = build_xray_validation_config(&s, &split(), AppSplitOwner::Xray, true, "warning");
+        let cfg = build_xray_validation_config(&s, &split(), AppSplitOwner::Xray, true, "warning", TUN_MTU);
         assert_eq!(cfg["inbounds"][0]["protocol"], "http");
         assert_eq!(cfg["inbounds"][0]["listen"], "127.0.0.1");
         assert!(cfg["inbounds"]

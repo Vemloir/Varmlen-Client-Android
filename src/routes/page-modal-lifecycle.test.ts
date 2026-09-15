@@ -84,6 +84,7 @@ vi.mock("$lib/platform", () => ({ isAndroid: false }));
 vi.mock("$lib/modal-lifecycle", () => modalSpies);
 vi.mock("$lib/popup", () => ({
   placePopup: vi.fn(() => ({ top: 0, right: 0 })),
+  placeAtPoint: vi.fn(() => ({ top: 0, left: 0 })),
   portal: vi.fn(() => ({ destroy: vi.fn() })),
 }));
 vi.mock("$lib/conn.svelte", () => ({
@@ -125,9 +126,18 @@ vi.mock("$lib/subs.svelte", () => ({
     pings: {},
     importing: false,
     hasTraffic: vi.fn(() => false),
+    trafficPercent: vi.fn(() => 0),
+    isRevealed: vi.fn(() => false),
+    toggleRevealed: vi.fn(),
     expiresText: vi.fn(() => null),
     trafficText: vi.fn(() => ""),
+    isManualCard: vi.fn(() => false),
     isSubPinging: vi.fn(() => false),
+    visibleLocations: vi.fn((sub) => sub.servers),
+    hiddenLocationIds: vi.fn(() => []),
+    locationPinnedIds: vi.fn(() => []),
+    hiddenCount: vi.fn(() => 0),
+    locationActionsFor: vi.fn(() => ["ping", "rename", "pin", "hide"]),
     toggleCollapse: vi.fn(),
     refresh: vi.fn(),
     pingSub: vi.fn(),

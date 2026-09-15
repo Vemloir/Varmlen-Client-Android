@@ -1,15 +1,28 @@
 <script lang="ts">
+  import { navPath } from "$lib/nav-path";
+  import { persistScroll } from "$lib/scroll-memory";
   import { theme } from "$lib/theme.svelte";
+  import { MTU_MAX, MTU_MIN } from "$lib/mtu";
   import { settings, type PingMethod, type LogLevel } from "$lib/settings.svelte";
-  import type { SubscriptionUserAgent } from "$lib/subscription-user-agent";
+  import {
+    subscriptionUserAgentOptions,
+    type SubscriptionUserAgent,
+  } from "$lib/subscription-user-agent";
+  import type { PinOrder } from "$lib/location-actions";
   import { i18n, t, LANGUAGES, type Lang } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
-  import { capsGranted, grantCaps, autostartStatus, setAutostart, vpnLog, clearVpnLog, writeClipboard, notificationsEnabled, openNotificationSettings, openVpnSettings } from "$lib/api";
+  import { autostartStatus, setAutostart, vpnLog, clearVpnLog, writeClipboard, notificationsEnabled, openNotificationSettings, openVpnSettings } from "$lib/api";
   import { copyDisplayedLog } from "$lib/log-copy";
   import Dropdown from "$lib/components/Dropdown.svelte";
   import { onDestroy, onMount, tick } from "svelte";
   import { isAndroid } from "$lib/platform";
   import { getVersion } from "@tauri-apps/api/app";
+
+  interface Props {
+    /** Path of the tab this page is standing in as; empty when it is the page. */
+    preview?: string;
+  }
+  let { preview = "" }: Props = $props();
 
   const logLevelOptions = $derived([
     { value: "debug", label: "debug" },
@@ -22,13 +35,6 @@
   let logText = $state("");
   let logBusy = $state(false);
   let logEl = $state<HTMLElement>();
-  let logCopyState = $state<"idle" | "copied" | "failed">("idle");
-  let logCopyReset: ReturnType<typeof setTimeout> | undefined;
-  function resetLogCopyFeedback() {
-    if (logCopyReset !== undefined) clearTimeout(logCopyReset);
-    logCopyReset = undefined;
-    logCopyState = "idle";
-  }
   async function refreshLog() {
     resetLogCopyFeedback();
     logBusy = true;
@@ -53,6 +59,13 @@
       await clearVpnLog();
     } catch {}
     await refreshLog();
+  }
+  let logCopyState = $state<"idle" | "copied" | "failed">("idle");
+  let logCopyReset: ReturnType<typeof setTimeout> | undefined;
+  function resetLogCopyFeedback() {
+    if (logCopyReset !== undefined) clearTimeout(logCopyReset);
+    logCopyReset = undefined;
+    logCopyState = "idle";
   }
   async function copyLog() {
     const result = await copyDisplayedLog(logText, (text) =>
@@ -119,6 +132,7 @@
   let autostartMinimized = $state(false);
   let appVersion = $state("…");
   onMount(async () => {
+    if (preview) return;
     try {
       const s = await autostartStatus();
       autostart = s.enabled;
@@ -128,6 +142,7 @@
     }
   });
   onMount(async () => {
+    if (preview) return;
     try {
       appVersion = await getVersion();
     } catch {
@@ -144,6 +159,7 @@
     }
   }
   onMount(() => {
+    if (preview) return;
     refreshNotif();
     const onVis = () => { if (document.visibilityState === "visible") refreshNotif(); };
     document.addEventListener("visibilitychange", onVis);
@@ -174,60 +190,17 @@
     { value: "proxy", label: t("ping.proxy") },
   ]);
 
-  const subscriptionUaOptions = [
-    { value: "varmlen", label: "Varmlen" },
-    { value: "happ", label: "Happ" },
-    { value: "incy", label: "INCY" },
-    { value: "v2raytun", label: "v2rayTun" },
-  ];
+  const pinOrderOptions = $derived([
+    { value: "newestLast", label: t("settings.pinOrder.newestLast") },
+    { value: "newestFirst", label: t("settings.pinOrder.newestFirst") },
+  ]);
+
+  const subscriptionUaOptions = subscriptionUserAgentOptions();
 
   // Refresh the core's status when Settings opens (cheap GitHub check).
   $effect(() => {
+    if (preview) return;
     void core.check();
-  });
-
-  /** Tri-state so we don't flash "Not installed" while the very first check
-   *  is still in flight (the helper check is async but the section paints
-   *  instantly). "checking" renders the neutral yellow dot + a soft label
-   *  until we actually know. */
-  type HelperState = "checking" | "ok" | "missing";
-  let helperState = $state<HelperState>("checking");
-  let helperBusy = $state(false);
-  let helperErr = $state<string | null>(null);
-
-  async function refreshHelper(allowChecking = false) {
-    if (allowChecking) helperState = "checking";
-    try {
-      helperState = (await capsGranted()) ? "ok" : "missing";
-    } catch {
-      helperState = "missing";
-    }
-  }
-  $effect(() => {
-    void refreshHelper(true);
-  });
-
-  async function setupHelper() {
-    helperBusy = true;
-    helperErr = null;
-    try {
-      await grantCaps();
-      for (let i = 0; i < 10; i++) {
-        await refreshHelper();
-        if (helperState === "ok") break;
-        await new Promise((r) => setTimeout(r, 250));
-      }
-    } catch (e) {
-      helperErr = e instanceof Error ? e.message : String(e);
-    } finally {
-      helperBusy = false;
-    }
-  }
-
-  const helperStatus = $derived.by(() => {
-    if (helperState === "checking") return t("helper.checking");
-    if (helperState === "ok") return t("helper.ready");
-    return helperErr ?? t("helper.notInstalled");
   });
 
   // The versions modal is shared by both cores; `activeCore` is whichever the
@@ -302,7 +275,7 @@
   <h1>{t("settings.title")}</h1>
 </header>
 
-<main class="scroll fade-y">
+<main class="scroll" data-scroll use:persistScroll={preview || navPath()}>
   <section>
     <h2>{t("settings.appearance")}</h2>
     <div class="card theme-card">
@@ -329,8 +302,9 @@
     </div>
   </section>
 
+  <!-- How the app looks and behaves, as opposed to how the tunnel works. -->
   <section>
-    <h2>{t("settings.general")}</h2>
+    <h2>{t("settings.interface")}</h2>
     <div class="list">
       <div class="row">
         <div class="row-text">
@@ -345,43 +319,38 @@
       </div>
       <label class="row">
         <div class="row-text">
-          <div class="row-title">{t("settings.killswitch")}</div>
-          <div class="row-sub muted">{t("settings.killswitchSub")}</div>
+          <div class="row-title">{t("settings.navLabels")}</div>
+          <div class="row-sub muted">{t("settings.navLabelsSub")}</div>
         </div>
         <span class="switch">
           <input
             type="checkbox"
-            checked={settings.killswitch}
-            onchange={(e) => settings.setKillswitch((e.currentTarget as HTMLInputElement).checked)}
+            checked={settings.navLabels}
+            onchange={(e) => settings.setNavLabels((e.currentTarget as HTMLInputElement).checked)}
           />
           <span class="slider"></span>
         </span>
       </label>
-      {#if isAndroid}
-      <button type="button" class="row log-row" onclick={() => openVpnSettings()}>
+      <div class="row">
         <div class="row-text">
-          <div class="row-title">{t("settings.androidSystemLockdown")}</div>
-          <div class="row-sub muted">{t("settings.androidSystemLockdownSub")}</div>
+          <div class="row-title">{t("settings.pinOrder")}</div>
+          <div class="row-sub muted">{t("settings.pinOrderSub")}</div>
         </div>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </button>
-      {/if}
-      <label class="row">
-        <div class="row-text">
-          <div class="row-title">{t("settings.allowLan")}</div>
-          <div class="row-sub muted">{t("settings.allowLanSub")}</div>
-        </div>
-        <span class="switch">
-          <input
-            type="checkbox"
-            checked={settings.allowLan}
-            onchange={(e) => settings.setAllowLan((e.currentTarget as HTMLInputElement).checked)}
-          />
-          <span class="slider"></span>
-        </span>
-      </label>
+        <Dropdown
+          value={settings.pinOrder}
+          options={pinOrderOptions}
+          onChange={(v) => settings.setPinOrder(v as PinOrder)}
+          ariaLabel={t("settings.pinOrder")}
+        />
+      </div>
+    </div>
+  </section>
+
+  <!-- Everything that belongs to the app itself rather than to how it looks or to
+       the tunnel: the tray, the window, launching at login. -->
+  <section>
+    <h2>{t("settings.general")}</h2>
+    <div class="list">
       <!-- Tray / window / autostart are desktop concepts; hide on Android. -->
       {#if !isAndroid}
       <label class="row">
@@ -428,6 +397,59 @@
         </span>
       </label>
       {/if}
+    </div>
+  </section>
+
+  <!-- How the tunnel itself works. -->
+  <section>
+    <h2>{t("settings.vpn")}</h2>
+    <div class="list">
+      <label class="row">
+        <div class="row-text">
+          <div class="row-title">{t("settings.killswitch")}</div>
+          <div class="row-sub muted">{t("settings.killswitchSub")}</div>
+        </div>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={settings.killswitch}
+            onchange={(e) => settings.setKillswitch((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
+      <label class="row">
+        <div class="row-text">
+          <div class="row-title">{t("settings.allowLan")}</div>
+          <div class="row-sub muted">{t("settings.allowLanSub")}</div>
+        </div>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={settings.allowLan}
+            onchange={(e) => settings.setAllowLan((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
+      <label class="row">
+        <div class="row-text">
+          <div class="row-title">{t("settings.mtu")}</div>
+          <div class="row-sub muted">{t("settings.mtuSub")}</div>
+        </div>
+        <input
+          class="num-input"
+          type="number"
+          min={MTU_MIN}
+          max={MTU_MAX}
+          step="20"
+          inputmode="numeric"
+          value={settings.mtu}
+          aria-label={t("settings.mtu")}
+          onchange={(e) =>
+            settings.setMtu(Number((e.currentTarget as HTMLInputElement).value))}
+        />
+      </label>
       <div class="row">
         <div class="row-text">
           <div class="row-title">{t("settings.pingMethod")}</div>
@@ -438,6 +460,26 @@
           options={pingOptions}
           onChange={(v) => settings.setPingMethod(v as PingMethod)}
           ariaLabel={t("settings.pingMethod")}
+        />
+      </div>
+      <div class="row">
+        <div class="row-text">
+          <div class="row-title">{t("settings.pingConcurrency")}</div>
+          <div class="row-sub muted">{t("settings.pingConcurrencySub")}</div>
+        </div>
+        <input
+          class="num-input narrow"
+          type="number"
+          min="0"
+          max="256"
+          step="1"
+          inputmode="numeric"
+          value={settings.pingConcurrency}
+          aria-label={t("settings.pingConcurrency")}
+          onchange={(e) =>
+            settings.setPingConcurrency(
+              Number((e.currentTarget as HTMLInputElement).value),
+            )}
         />
       </div>
       <div class="row">
@@ -480,7 +522,6 @@
         <div class="row-text">
           <div class="row-title">xray <span class="muted" style="font-weight:400">· TUN</span></div>
           <div class="row-sub muted">{coreStatus(core)}</div>
-          {#if isAndroid}<div class="row-sub muted">{t("core.androidManaged")}</div>{/if}
         </div>
         {#if !isAndroid}
         <button class="btn versions-btn" onclick={() => openVersions(core)} title={t("core.versionsTitle")}>
@@ -598,7 +639,7 @@
                   {#if isDownloading && prog}
                     <div class="progress" aria-label="downloading">
                       <div class="progress-track">
-                        <div class="progress-fill" style="width: {pct}%"></div>
+                        <div class="progress-fill" style="transform: scaleX({pct / 100})"></div>
                       </div>
                       <div class="progress-meta muted">
                         {formatBytes(prog.downloaded)}
@@ -633,6 +674,15 @@
   <section>
     <h2>{t("settings.permissions")}</h2>
     <div class="list">
+      <button type="button" class="row log-row" onclick={() => openVpnSettings()}>
+        <div class="row-text">
+          <div class="row-title">{t("settings.androidSystemLockdown")}</div>
+          <div class="row-sub muted">{t("settings.androidSystemLockdownSub")}</div>
+        </div>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
       <button type="button" class="row log-row" onclick={() => openNotificationSettings()}>
         <div class="row-text">
           <div class="row-title">{t("settings.notifications")}</div>
@@ -674,44 +724,6 @@
       </button>
     </div>
   </section>
-
-  <!-- Network permissions (file caps via pkexec) are a desktop concept; on
-       Android the VPN consent dialog handles permission per-connect. -->
-  {#if !isAndroid}
-  <section>
-    <h2>{t("settings.helper")}</h2>
-    <div class="list">
-      <div class="row">
-        <span
-          class="status-dot"
-          class:on={helperState === "ok" && !helperBusy}
-          class:off={helperState === "missing" && !helperBusy}
-          class:busy={helperState === "checking" || helperBusy}
-        ></span>
-        <div class="row-text">
-          <div class="row-title">{t("helper.title")}</div>
-          <div class="row-sub muted">{helperStatus}</div>
-        </div>
-        {#if helperState !== "checking"}
-          <button
-            class="btn {helperState === "ok" ? '' : 'btn-primary'}"
-            onclick={setupHelper}
-            disabled={helperBusy}
-          >
-            {helperBusy
-              ? t("helper.installing")
-              : helperState === "ok"
-                ? t("helper.reinstall")
-                : t("helper.install")}
-          </button>
-        {/if}
-      </div>
-      {#if helperErr}
-        <div class="row-sub" style="color: var(--danger); padding: 6px 14px;">{helperErr}</div>
-      {/if}
-    </div>
-  </section>
-  {/if}
 
   <footer class="app-version muted">Varmlen {appVersion}</footer>
 </main>
@@ -874,9 +886,9 @@
        visible gap from the app edge to the panel edge is identical on
        both sides. */
     overflow-y: scroll;
-    /* Top padding clears the fade-y mask so the first section label isn't
+    /* Top padding keeps the first section label off
        dimmed at rest. */
-    padding: 12px 14px 24px 20px;
+    padding: 12px 14px calc(24px + var(--nav-clearance)) 20px;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -897,6 +909,8 @@
     letter-spacing: 0.08em;
   }
 
+  /* The theme stays two tiles here: a phone row with a dropdown loses the colour
+     preview, and the system picker is a bigger interruption than a thumb. */
   .theme-card { padding: 12px; }
   .theme-row {
     display: grid;
@@ -937,6 +951,7 @@
     padding: 12px 14px;
     cursor: pointer;
   }
+
   .row + .row {
     border-top: 1px solid var(--bg);
   }
@@ -945,10 +960,8 @@
     opacity: 0.45;
     cursor: default;
   }
-  @media (hover: hover) {
-    .row:hover {
-      background: var(--bg-elev-2);
-    }
+  .row:hover {
+    background: var(--bg-elev-2);
   }
   .list {
     background: var(--bg-elev);
@@ -968,29 +981,40 @@
   }
   .row-title { font-size: 14px; }
   .row-sub { font-size: 12px; margin-top: 2px; }
-
-  .status-dot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    margin-right: 2px;
+  .num-input {
+    /* Card background, no outline. Wide enough for the four digits of an MTU --
+       a 32px box clipped 1500 to "150". */
+    box-sizing: border-box;
+    width: 64px;
+    height: 32px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    border: none;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    /* The value sits in the middle of the square. */
+    text-align: center;
+    text-align-last: center;
+    caret-color: var(--text);
+    font-variant-numeric: tabular-nums;
   }
-  .status-dot.on {
-    background: #2eb872;
-    box-shadow: 0 0 0 3px rgba(46, 184, 114, 0.18);
+  /* A stepper on "how many xray processes" is 43 clicks to 43, and the arrows
+     take more room than the number. */
+  .num-input::-webkit-outer-spin-button,
+  .num-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
   }
-  .status-dot.off {
-    background: var(--danger);
-    box-shadow: 0 0 0 3px var(--danger-faint);
+  .num-input {
+    -moz-appearance: textfield;
+    appearance: textfield;
   }
-  .status-dot.busy {
-    background: var(--warn);
-    box-shadow: 0 0 0 3px rgba(245, 165, 36, 0.22);
-    animation: status-pulse 1.2s ease-in-out infinite;
-  }
-  @keyframes status-pulse {
-    50% { opacity: 0.45; }
+  /* A counter of pings holds three digits, an MTU holds four: the same width for
+     both makes the small number look like a field that lost half its value. */
+  .num-input.narrow {
+    width: 32px;
   }
 
   /* ---------- version-picker modal ---------- */
@@ -1039,13 +1063,12 @@
     justify-content: center;
     transition: background var(--transition), color var(--transition);
   }
-  @media (hover: hover) {
-    .icon-btn:hover { background: var(--bg-elev-2); color: var(--text); }
-  }
+  .icon-btn:hover { background: var(--bg-elev-2); color: var(--text); }
 
   /* The Versions button on the core row carries its own icon. */
   .versions-btn {
-    background: var(--bg-elev-2);
+    /* Application background, no outline: readable on a row and on its hover. */
+    background: var(--bg);
     border: none;
   }
   .versions-btn:hover:not(:disabled) {
@@ -1149,11 +1172,9 @@
     color: var(--danger);
     background: var(--danger-faint);
   }
-  @media (hover: hover) {
-    :global(.btn.btn-danger:hover:not(:disabled)) {
-      background: var(--danger-faint-2);
-      border-color: var(--danger);
-    }
+  :global(.btn.btn-danger:hover:not(:disabled)) {
+    background: var(--danger-faint-2);
+    border-color: var(--danger);
   }
 
 
@@ -1172,9 +1193,13 @@
     overflow: hidden;
   }
   .progress-fill {
+    /* Scaled, not widened: a download bar updates many times a second, and a width
+       transition lays the page out again on every frame. */
     height: 100%;
+    width: 100%;
+    transform-origin: left center;
     background: var(--accent);
-    transition: width 120ms linear;
+    transition: transform 120ms linear;
   }
   .progress-meta {
     font-size: 11px;

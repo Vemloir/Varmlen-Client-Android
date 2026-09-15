@@ -475,11 +475,16 @@ pub async fn vpn_connect(
     killswitch: bool,
     allow_lan: bool,
     log_level: Option<String>,
+    mtu: Option<u32>,
+    // True when a tunnel is already up and this call replaces it (see mobile_vpn).
+    reconfigure: Option<bool>,
 ) -> Result<HelperResponse, String> {
     // Android: VpnService gives its TUN descriptor directly to Xray; Android
     // owns the per-package split and the in-app kill switch (core-death →
     // hold the session, black-hole traffic, retry the core).
     let level = log_level.unwrap_or_else(|| "warn".to_string());
+    // The interface MTU is the user's, clamped to what an interface can carry.
+    let mtu = crate::xray::tun_mtu(mtu);
     validate_server(&server)?;
     #[cfg(target_os = "android")]
     {
@@ -487,7 +492,7 @@ pub async fn vpn_connect(
         // handed to Xray by VpnService. Startup requires structural validation
         // and a live Xray process, but never a synthetic Internet destination.
         let xray_cfg = serde_json::to_string(&crate::xray::build_android_xray_config(
-            &server, &split, allow_lan, &level,
+            &server, &split, allow_lan, &level, mtu,
         ))
         .map_err(|e| e.to_string())?;
         // Device-free variant of the exact same transport/routing JSON, so the
@@ -495,7 +500,7 @@ pub async fn vpn_connect(
         // or touching any policy — the native tun inbound may create its
         // device just by being parsed, so it can't be used for `-test` itself.
         let validate_cfg = serde_json::to_string(&crate::xray::build_android_validation_config(
-            &server, &split, allow_lan, &level,
+            &server, &split, allow_lan, &level, mtu,
         ))
         .map_err(|e| e.to_string())?;
         // apps_allow = whitelist apps (only listed apps enter the TUN). App and
@@ -514,6 +519,8 @@ pub async fn vpn_connect(
             level,
             killswitch,
             xray_bin.to_string_lossy().into_owned(),
+            mtu,
+            reconfigure.unwrap_or(false),
         )?;
         return Ok(HelperResponse::connected(0));
     }
@@ -529,6 +536,7 @@ pub async fn vpn_connect(
             AppSplitOwner::Xray,
             allow_lan,
             &level,
+            mtu,
         ))
         .map_err(|e| e.to_string())?;
         // `xray run -test` on a TUN inbound may create the device, so validate
@@ -539,6 +547,7 @@ pub async fn vpn_connect(
             AppSplitOwner::Xray,
             allow_lan,
             &level,
+            mtu,
         ))
         .map_err(|e| e.to_string())?;
         let server_host = server.host.clone();
@@ -1217,6 +1226,102 @@ pub async fn proxy_get_ping(
     let _ = child.wait();
     let _ = std::fs::remove_file(&cfg_path);
     result
+}
+
+/// Traffic through the tunnel device, in bytes, as the kernel counted it.
+#[derive(Serialize)]
+pub struct TunnelStats {
+    pub tx_bytes: u64,
+    pub rx_bytes: u64,
+    /// When the device appeared, if sysfs knew.
+    ///
+    /// The device belongs to the tunnel, not to this window: the session can
+    /// outlive the WebView (the service is started for the OS, and the tile can
+    /// raise it again), so the pill asks the device how old it is instead of
+    /// counting from the moment the window noticed the connection.
+    pub since_unix: Option<u64>,
+}
+
+/// Read the counters of the tunnel interface, trying each candidate name in turn.
+///
+/// The name is the whole difficulty on Android. `Builder.establish()` creates the
+/// interface and hands its descriptor to Xray; the kernel names the device for us
+/// (`tun0` in practice), while the profile asks for `varmlen0` and a core that runs
+/// against a descriptor has no reason to rename anything. Both are tried: the name
+/// we asked for first, because a future core that owns the interface would honour
+/// it, then the kernel's default.
+///
+/// Whether an unprivileged app may read `/sys/class/net/<if>/statistics` is the
+/// device's SELinux policy, and no device is attached to the machine writing this.
+/// A name that cannot be read is skipped and no counters at all is `None`, which
+/// the interface renders as a dash: a zero would claim an idle tunnel on the
+/// strength of nothing.
+pub fn read_tunnel_stats(root: &std::path::Path, names: &[&str]) -> Option<TunnelStats> {
+    for name in names {
+        let stats_dir = root.join(name).join("statistics");
+        let counter = |file: &str| -> Option<u64> {
+            let text = std::fs::read_to_string(stats_dir.join(file)).ok()?;
+            text.trim().parse::<u64>().ok()
+        };
+        let (Some(tx_bytes), Some(rx_bytes)) = (counter("tx_bytes"), counter("rx_bytes"))
+        else {
+            continue;
+        };
+        let appeared = std::fs::metadata(root.join(name))
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|since| since.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|since_epoch| since_epoch.as_secs());
+        return Some(TunnelStats {
+            tx_bytes,
+            rx_bytes,
+            since_unix: appeared,
+        });
+    }
+    None
+}
+
+/// Traffic counters of the running tunnel, or null when there is no readable
+/// device: disconnected, a device that carries another name, or a policy that
+/// closes sysfs to this app.
+#[tauri::command]
+pub fn tunnel_stats() -> Option<TunnelStats> {
+    read_tunnel_stats(
+        std::path::Path::new("/sys/class/net"),
+        &[crate::xray::TUN_NAME, "tun0"],
+    )
+}
+
+#[cfg(test)]
+mod tunnel_stats_tests {
+    /// The kernel's name is used when the profile's name is not there, and no
+    /// counters at all is reported as "nothing readable" rather than as zero.
+    #[test]
+    fn falls_back_to_the_kernels_name_and_gives_up_honestly() {
+        let root = std::env::temp_dir().join("varmlen-android-tunnel-stats");
+        let dir = root.join("tun0").join("statistics");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tx_bytes"), "4242\n").unwrap();
+        std::fs::write(dir.join("rx_bytes"), "24242\n").unwrap();
+
+        let stats = super::read_tunnel_stats(&root, &["varmlen0", "tun0"]).expect("counters");
+        assert_eq!((stats.tx_bytes, stats.rx_bytes), (4242, 24242));
+
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(super::read_tunnel_stats(&root, &["varmlen0", "tun0"]).is_none());
+    }
+
+    /// A half-readable device (one counter present, the other not) must not be
+    /// reported as a tunnel carrying only one direction.
+    #[test]
+    fn refuses_to_invent_a_missing_counter() {
+        let root = std::env::temp_dir().join("varmlen-android-tunnel-stats-partial");
+        let dir = root.join("tun0").join("statistics");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("tx_bytes"), "10\n").unwrap();
+        assert!(super::read_tunnel_stats(&root, &["tun0"]).is_none());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
 
 #[cfg(test)]

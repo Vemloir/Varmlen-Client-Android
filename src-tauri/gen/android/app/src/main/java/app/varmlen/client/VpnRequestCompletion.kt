@@ -16,13 +16,19 @@ internal fun vpnRequestOutcome(
     pendingRequestId: String,
     broadcastRequestId: String?,
     running: Boolean,
+    error: String? = null,
 ): VpnRequestOutcome {
     if (broadcastRequestId == null || broadcastRequestId != pendingRequestId) {
         return VpnRequestOutcome.IGNORE
     }
     return when (kind) {
         VpnRequestKind.CONNECT ->
-            if (running) VpnRequestOutcome.RESOLVE else VpnRequestOutcome.REJECT
+            // A refused RECONFIGURE arrives with running = true: the tunnel the user
+            // already had is still up, and this request is the one that failed. The
+            // session and the request are two different facts, and answering "done"
+            // because a tunnel exists would tell the app its edit applied.
+            if (error != null) VpnRequestOutcome.REJECT
+            else if (running) VpnRequestOutcome.RESOLVE else VpnRequestOutcome.REJECT
         VpnRequestKind.DISCONNECT ->
             if (running) VpnRequestOutcome.IGNORE else VpnRequestOutcome.RESOLVE
     }

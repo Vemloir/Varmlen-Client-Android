@@ -78,6 +78,8 @@ class VarmlenVpnService : VpnService() {
         /** Active core binary path (downloaded version or the APK-bundled
          *  one); empty → fall back to the bundled binary. */
         const val EXTRA_BIN = "bin"
+        const val EXTRA_MTU = "mtu"
+        const val EXTRA_RECONFIGURE = "reconfigure"
         const val EXTRA_REQUEST_ID = "requestId"
         const val EXTRA_ERROR = "error"
         /** Session is up but the core is down while the kill switch holds. */
@@ -116,7 +118,26 @@ class VarmlenVpnService : VpnService() {
         private const val CHANNEL = "varmlen_vpn"
         private const val NOTIF_ID = 1
         private const val TUN_ADDR = "10.10.10.2"
-        private const val MTU = 1500
+        /** The interface MTU when nothing asked for another one. */
+        private const val DEFAULT_MTU = 1500
+        /** Floor: the minimum IPv6 link MTU (RFC 8200). Below it the interface cannot
+         *  carry IPv6 at all, so it is not a usable MTU whatever was asked for. */
+        private const val MIN_MTU = 1280
+        /** Ceiling: jumbo frames are worth allowing on a tunnel, but a typo must not
+         *  produce an interface that black-holes every response. */
+        private const val MAX_MTU = 9000
+
+        /**
+         * The MTU to hand the OS. Out-of-range values are CLAMPED, not reset: someone
+         * who asked for 1100 meant "smaller than default", and answering with 1500 --
+         * the one value that does not work on such a network -- would be the worse lie.
+         *
+         * The same rule the Rust side applies, deliberately in both places: the number
+         * arrives from another process, and the Quick Settings tile relaunches the
+         * tunnel from a saved preference without going through Rust at all.
+         */
+        @JvmStatic
+        fun tunMtu(value: Int): Int = value.coerceIn(MIN_MTU, MAX_MTU)
         private const val PREFS = "varmlen_vpn"
         private const val WANT_FILE = "vpn_want.flag"
         /** Min gap between kill-switch core retries (the core may crash-loop
@@ -173,6 +194,7 @@ class VarmlenVpnService : VpnService() {
             i.putExtra(EXTRA_LOG_LEVEL, p.getString("logLevel", "warn"))
             i.putExtra(EXTRA_KILLSWITCH, p.getBoolean("killSwitch", true))
             i.putExtra(EXTRA_BIN, p.getString("bin", "") ?: "")
+            i.putExtra(EXTRA_MTU, p.getInt("mtu", DEFAULT_MTU))
             ContextCompat.startForegroundService(ctx, i)
         }
 
@@ -220,11 +242,31 @@ class VarmlenVpnService : VpnService() {
                         intent.getStringExtra(EXTRA_LOG_LEVEL) ?: "warn",
                         intent.getBooleanExtra(EXTRA_KILLSWITCH, true),
                         intent.getStringExtra(EXTRA_BIN) ?: "",
+                        intent.getIntExtra(EXTRA_MTU, DEFAULT_MTU),
+                        intent.getBooleanExtra(EXTRA_RECONFIGURE, false),
                         requestId
                     )
                 } catch (e: Throwable) {
-                    log("connect failed", e)
-                    stopAll(e.message ?: e.javaClass.simpleName, requestId)
+                    // A reconfigure is what happens when the user edits the split,
+                    // the MTU or a switch while the tunnel runs. If the replacement
+                    // is refused -- a config the core will not accept, an
+                    // application that vanished, an interface that could not be
+                    // built -- the tunnel he already has stays up and keeps
+                    // protecting him. Tearing it down here would put him on the open
+                    // internet under a power button that still says "connected",
+                    // which is the one failure a kill switch must not cause.
+                    val reconfigure = intent.getBooleanExtra(EXTRA_RECONFIGURE, false)
+                    if (reconfigure && tun != null) {
+                        log("reconfigure refused — running tunnel kept", e)
+                        broadcastState(
+                            true,
+                            error = e.message ?: e.javaClass.simpleName,
+                            requestId = requestId
+                        )
+                    } else {
+                        log("connect failed", e)
+                        stopAll(e.message ?: e.javaClass.simpleName, requestId)
+                    }
                 }
             }
             else -> {
@@ -253,7 +295,7 @@ class VarmlenVpnService : VpnService() {
     private fun startAll(
         config: String, validationConfig: String, dns: String,
         apps: Array<String>, appsAllow: Boolean, logLevel: String,
-        killSwitch: Boolean, binPath: String,
+        killSwitch: Boolean, binPath: String, mtu: Int, reconfigure: Boolean,
         requestId: String?
     ) {
         // A reconnect may reach this same Service instance before Android has
@@ -261,7 +303,7 @@ class VarmlenVpnService : VpnService() {
         // idempotency guard into the new data plane or its next Disconnect
         // action would be ignored forever.
         stopAllInProgress = false
-        log("startAll nativeTun dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel killswitch=$killSwitch bin=$binPath")
+        log("startAll nativeTun dns=$dns apps=${apps.size} allow=$appsAllow level=$logLevel killswitch=$killSwitch bin=$binPath mtu=$mtu reconfigure=$reconfigure")
         // The active core: a user-downloaded version or the APK-bundled one.
         // A missing selected binary (e.g. the version dir was cleaned) must
         // never break a connect — fall back to the bundled core.
@@ -338,7 +380,7 @@ class VarmlenVpnService : VpnService() {
         // IPv4 — which the proxy can actually serve.
         val builder = Builder()
             .setSession("Varmlen")
-            .setMtu(MTU)
+            .setMtu(tunMtu(mtu))
             .addAddress(TUN_ADDR, 30)
             .addRoute("0.0.0.0", 0)
             .addDnsServer(dns)
@@ -416,6 +458,9 @@ class VarmlenVpnService : VpnService() {
             .putString("logLevel", logLevel)
             .putBoolean("killSwitch", killSwitch)
             .putString("bin", xrayBinPath)
+            // The tile relaunches the tunnel from these prefs, so the interface it
+            // builds has to be built with the same MTU the user set.
+            .putInt("mtu", tunMtu(mtu))
             .apply()
         setWant(this, true)
         broadcastState(true, requestId = requestId)

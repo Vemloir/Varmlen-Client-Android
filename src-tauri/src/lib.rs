@@ -395,6 +395,7 @@ pub fn run() {
             vpn::vpn_connect,
             vpn::vpn_disconnect,
             vpn::vpn_status,
+            vpn::tunnel_stats,
             vpn::caps_granted,
             vpn::grant_caps,
             vpn::tcp_ping_host,
