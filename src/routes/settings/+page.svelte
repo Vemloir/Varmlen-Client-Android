@@ -348,11 +348,12 @@
 
   <!-- Everything that belongs to the app itself rather than to how it looks or to
        the tunnel: the tray, the window, launching at login. -->
+  <!-- Tray / window / autostart are desktop concepts, and they are the whole section:
+       on Android there is nothing under the heading, so the heading goes too. -->
+  {#if !isAndroid}
   <section>
     <h2>{t("settings.general")}</h2>
     <div class="list">
-      <!-- Tray / window / autostart are desktop concepts; hide on Android. -->
-      {#if !isAndroid}
       <label class="row">
         <div class="row-text">
           <div class="row-title">{t("settings.closeToTray")}</div>
@@ -396,9 +397,9 @@
           <span class="slider"></span>
         </span>
       </label>
-      {/if}
     </div>
   </section>
+  {/if}
 
   <!-- How the tunnel itself works. -->
   <section>
