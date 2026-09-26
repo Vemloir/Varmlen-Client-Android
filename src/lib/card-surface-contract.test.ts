@@ -192,7 +192,7 @@ describe("card surface contract", () => {
       /html\.is-android \.modal-backdrop\s*\{[^}]*padding-top:\s*calc\(var\(--sat\) \+ 12px\);/s,
     );
     expect(css).toMatch(
-      /html\.is-android \.modal-backdrop > \.modal\s*\{[^}]*max-height:\s*calc\(100dvh - var\(--sat\) - env\(safe-area-inset-bottom\) - 24px\)\s*!important;/s,
+      /html\.is-android \.modal-backdrop > \.modal\s*\{[^}]*max-height:\s*calc\(\s*100dvh - var\(--sat\) - max\(env\(safe-area-inset-bottom\), var\(--ime-height, 0px\)\) - 24px\s*\)\s*!important;/s,
     );
     expect(settings).toMatch(
       /\.log-modal\s*\{[^}]*overflow:\s*hidden;/s,

@@ -246,15 +246,22 @@ html.is-android .modal-backdrop {
   align-items: flex-end;
   padding-top: calc(var(--sat) + 12px);
   padding-right: 12px;
-  padding-bottom: calc(env(safe-area-inset-bottom) + 12px);
+  /* `--ime-height` is the keyboard, set by MainActivity from the window insets:
+     the window itself stays put under the keyboard (adjustResize under
+     edge-to-edge resizes nothing), and only the sheet rides up. It is measured
+     from the screen's bottom edge, so it already covers the navigation bar. */
+  padding-bottom: calc(max(env(safe-area-inset-bottom), var(--ime-height, 0px)) + 12px);
   padding-left: 12px;
   overflow: hidden;
+  transition: padding-bottom var(--transition);
 }
 html.is-android .modal-backdrop > .modal {
   width: 100% !important;
   /* Fallback for WebViews without dynamic viewport units. */
   max-height: 100% !important;
-  max-height: calc(100dvh - var(--sat) - env(safe-area-inset-bottom) - 24px) !important;
+  max-height: calc(
+    100dvh - var(--sat) - max(env(safe-area-inset-bottom), var(--ime-height, 0px)) - 24px
+  ) !important;
   min-height: 0;
   margin: 0 !important;
 }
