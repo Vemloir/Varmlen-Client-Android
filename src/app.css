@@ -211,11 +211,23 @@ a {
 .is-android .page,
 .is-android .scroll {
   top: calc(var(--sat) + 46px) !important;
-  /* Even up the side padding (the panels left-pad 6px to mirror the desktop
-     scrollbar, which is gone here — that pushed everything toward the right). */
+}
+/* Even up the side padding: the pages left-pad 20px against 14px on the right to
+   mirror the desktop's 6px scrollbar, which a phone does not draw -- that pushed
+   everything toward the right. The bottom is left to the pages: their
+   `--nav-clearance` already counts the floating tab pill and the gesture bar, and
+   a smaller override here hid the last rows under the pill. */
+.is-android .scroll {
   padding-left: 14px !important;
-  /* Extra bottom room so the last item clears the tab bar + gesture nav. */
-  padding-bottom: calc(28px + env(safe-area-inset-bottom)) !important;
+}
+/* The split page is not a scroller: its pill and its two halves each carry the
+   desktop's 20px, so each gets the phone's 14px instead. */
+.is-android .page > .segmented,
+.is-android .page > .split-unavailable {
+  margin-left: 14px !important;
+}
+.is-android .page .pane {
+  padding-left: 14px !important;
 }
 
 /* Bottom-sheet modals (add subscription, app picker, …) sit at the bottom edge;

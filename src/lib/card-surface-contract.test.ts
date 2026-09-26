@@ -172,6 +172,16 @@ describe("card surface contract", () => {
     );
   });
 
+  it("gives Android even side margins and the full clearance under the tab pill", () => {
+    const css = read("../app.css");
+    const android = css.slice(css.indexOf(".is-android .page,"));
+    // No bottom override: the pages' --nav-clearance is the one that clears the pill.
+    expect(android).not.toMatch(/\.is-android \.scroll\s*\{[^}]*padding-bottom/s);
+    expect(android).toMatch(/\.is-android \.scroll\s*\{[^}]*padding-left:\s*14px !important;/s);
+    expect(android).toMatch(/\.is-android \.page \.pane\s*\{[^}]*padding-left:\s*14px !important;/s);
+    expect(android).toMatch(/\.is-android \.page > \.segmented,/);
+  });
+
   it("keeps the Android log viewer inside the safe viewport", () => {
     const css = read("../app.css");
     const settings = read("../routes/settings/+page.svelte");
