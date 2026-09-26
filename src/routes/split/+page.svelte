@@ -422,7 +422,7 @@
 </div>
 
 {#if showAddApp}
-  <div class="modal-backdrop" onclick={() => (showAddApp = false)} role="presentation">
+  <div class="modal-backdrop keyboard-covers" onclick={() => (showAddApp = false)} role="presentation">
     <div
       class="modal card"
       onclick={(e) => e.stopPropagation()}

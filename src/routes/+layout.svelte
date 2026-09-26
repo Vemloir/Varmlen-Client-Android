@@ -29,6 +29,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { theme } from "$lib/theme.svelte";
   import { isAndroid } from "$lib/platform";
+  import { watchKeyboard } from "$lib/keyboard";
   // The pages a swipe can reach without a navigation. Imported as components so
   // the neighbour can be mounted beside the page while the finger is still down.
   import HomePage from "./+page.svelte";
@@ -225,6 +226,9 @@
   // window was just recreated), show "connected" instead of a stale
   // "disconnected".
   onMount(() => void conn.refresh());
+
+  // The keyboard is ours to follow on Android: see $lib/keyboard.
+  onMount(() => (isAndroid ? watchKeyboard() : undefined));
 
   /* The bar follows the page it belongs to: on scroll, when the content under it grows
      (flags, ping results, subscription cards), when the window changes size, and when

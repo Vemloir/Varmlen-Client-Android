@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
@@ -16,12 +17,15 @@ class MainActivity : TauriActivity() {
   private var imeHeightCss = -1
 
   /**
-   * The keyboard lifts the sheet, not the window. Left to the default, Android
-   * pans the whole window up to uncover the focused field -- the page vanishes
-   * above the screen and the sheet is left floating over black. The activity is
-   * `adjustResize` and edge-to-edge, which on current Android resizes nothing, so
-   * the keyboard's height is handed to the page as `--ime-height` and the sheet
-   * pads itself above it (app.css, `.modal-backdrop`).
+   * The keyboard lifts the sheet, not the window. Two things slide the whole app
+   * off the top of the screen when a field is focused: Android panning the window
+   * (the default soft-input mode), and a current WebView that is told about the
+   * keyboard shrinking its visual viewport and panning that to the field (WebView
+   * 124 did not do this; 156 does). The activity is `adjustResize`, which under
+   * edge-to-edge resizes nothing, and the WebView gets the insets without the
+   * keyboard in them. The page gets the keyboard's height instead -- as
+   * `--ime-height` for the sheets to pad themselves above it, and as a
+   * `varmlen-ime` event for $lib/keyboard to reveal a covered field.
    */
   override fun onWebViewCreate(webView: WebView) {
     ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
@@ -30,12 +34,16 @@ class MainActivity : TauriActivity() {
       if (css != imeHeightCss) {
         imeHeightCss = css
         webView.evaluateJavascript(
-          "document.documentElement.style.setProperty('--ime-height','${css}px')",
+          "document.documentElement.style.setProperty('--ime-height','${css}px');" +
+            "window.dispatchEvent(new CustomEvent('varmlen-ime',{detail:$css}))",
           null,
         )
       }
-      // The WebView still needs the insets for env(safe-area-inset-*).
-      ViewCompat.onApplyWindowInsets(view, insets)
+      // The WebView still needs the other insets, for env(safe-area-inset-*).
+      val withoutKeyboard = WindowInsetsCompat.Builder(insets)
+        .setInsets(WindowInsetsCompat.Type.ime(), Insets.NONE)
+        .build()
+      ViewCompat.onApplyWindowInsets(view, withoutKeyboard)
     }
   }
 

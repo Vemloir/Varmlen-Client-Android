@@ -175,8 +175,10 @@ describe("card surface contract", () => {
   it("gives Android even side margins and the full clearance under the tab pill", () => {
     const css = read("../app.css");
     const android = css.slice(css.indexOf(".is-android .page,"));
-    // No bottom override: the pages' --nav-clearance is the one that clears the pill.
-    expect(android).not.toMatch(/\.is-android \.scroll\s*\{[^}]*padding-bottom/s);
+    // The bottom keeps the pages' own clearance under the pill, plus the keyboard.
+    expect(android).toMatch(
+      /\.is-android \.scroll\s*\{[^}]*padding-bottom:\s*calc\(24px \+ var\(--nav-clearance\) \+ var\(--ime-height, 0px\)\) !important;/s,
+    );
     expect(android).toMatch(/\.is-android \.scroll\s*\{[^}]*padding-left:\s*14px !important;/s);
     expect(android).toMatch(/\.is-android \.page \.pane\s*\{[^}]*padding-left:\s*14px !important;/s);
     expect(android).toMatch(/\.is-android \.page > \.segmented,/);

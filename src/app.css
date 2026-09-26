@@ -219,6 +219,9 @@ a {
    a smaller override here hid the last rows under the pill. */
 .is-android .scroll {
   padding-left: 14px !important;
+  /* Room for $lib/keyboard to scroll a field above the keyboard: the WebView is not
+     told the keyboard is there, so a list has no extra length unless it is given. */
+  padding-bottom: calc(24px + var(--nav-clearance) + var(--ime-height, 0px)) !important;
 }
 /* The split page is not a scroller: its pill and its two halves each carry the
    desktop's 20px, so each gets the phone's 14px instead. */
@@ -264,6 +267,17 @@ html.is-android .modal-backdrop > .modal {
   ) !important;
   min-height: 0;
   margin: 0 !important;
+}
+
+/* A sheet that is mostly a list keeps its place and its height while the keyboard is
+   open: the search field sits at its top and stays in view, and a list that jumped
+   up and shrank under the finger on every tap of the field was worse than a keyboard
+   over its bottom rows. */
+html.is-android .modal-backdrop.keyboard-covers {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 12px);
+}
+html.is-android .modal-backdrop.keyboard-covers > .modal {
+  max-height: calc(100dvh - var(--sat) - env(safe-area-inset-bottom) - 24px) !important;
 }
 
 /* The user can ask the system for less motion; a client that ignores that is not
