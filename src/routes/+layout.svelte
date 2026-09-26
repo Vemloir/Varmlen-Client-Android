@@ -474,6 +474,12 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
+    /* Sideways is ours, up and down is the list's. Left at `auto`, a touch screen's
+       Chromium (the Android WebView, WebView2 on a Windows tablet) claims a sideways
+       drag as its own pan a few pixels in and answers with `pointercancel`, which
+       springs the page back: every swipe on a phone died that way. WebKitGTK does not
+       do this, which is why the same code swiped on Linux. */
+    touch-action: pan-y;
   }
 
   /* The scrollbar, drawn by the shell. Only its opacity animates: the position and the

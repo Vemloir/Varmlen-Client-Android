@@ -24,6 +24,11 @@ describe("shell: tabs by swipe, with the new page arriving from the side", () =>
     expect(shell).toMatch(/go: goToZone,/);
   });
 
+  it("keeps a sideways drag from the touch screen's own pan", () => {
+    // Without it Chromium on a touch screen takes the drag and cancels the pointer.
+    expect(css).toMatch(/\.content\s*\{[^}]*touch-action:\s*pan-y;/s);
+  });
+
   it("rides with the pointer and slows down into the end of the list", () => {
     const action = read("../lib/swipe-nav.ts");
     expect(action).toMatch(/element\.style\.transform = /);
