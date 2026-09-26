@@ -127,6 +127,14 @@ describe("the neighbour under the finger", () => {
     expect(source).toMatch(/if \(committing\) return;/);
   });
 
+  it("does not read the hand-off of a touch pointer as the gesture ending", () => {
+    // Taking the pointer from the element the finger landed on fires its
+    // lostpointercapture, which bubbles here; only this element losing it counts.
+    expect(source).toMatch(/if \(event\.type === "lostpointercapture" && event\.target !== node\) return;/);
+    // And pan-y reaches past the lists: touch-action stops at the nearest scroller.
+    expect(layout).toMatch(/:global\(:where\(\.content\) \*\) \{\s*touch-action: pan-y;/);
+  });
+
   it("follows one pointer, not every pointer in the room", () => {
     // Measured in the installed build: a mouse moving next to a finger in progress
     // rewrote the start point and the page jittered between two offsets.

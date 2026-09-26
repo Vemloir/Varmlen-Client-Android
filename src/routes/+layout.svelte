@@ -481,6 +481,13 @@
        do this, which is why the same code swiped on Linux. */
     touch-action: pan-y;
   }
+  /* And again on everything inside it: Chromium intersects touch-action only up to the
+     nearest scroller, so the lists underneath, at `auto`, still gave the drag away.
+     `:where` keeps this at no specificity, so an element that sets its own
+     touch-action (the log's scrollbar) keeps it. */
+  :global(:where(.content) *) {
+    touch-action: pan-y;
+  }
 
   /* The scrollbar, drawn by the shell. Only its opacity animates: the position and the
      length are the reader's place in the document and must be exactly where the finger

@@ -336,6 +336,13 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
   const onCancel = (event: Event) => {
     // Only the platform may take a gesture away from underneath it.
     if (!event.isTrusted) return;
+    // A touch pointer is captured implicitly by whatever the finger landed on (a list,
+    // a row). Taking it over with setPointerCapture makes that element lose it, and
+    // its lostpointercapture bubbles up here: that is the hand-off to this gesture,
+    // not the platform ending it. Only this element losing the pointer counts. A mouse
+    // has no implicit capture, which is why a swipe survived on the desktop and died
+    // on every phone the moment it started dragging.
+    if (event.type === "lostpointercapture" && event.target !== node) return;
     if (pointerId === null) return;
     release();
     control = null;

@@ -825,6 +825,8 @@
     max-width: 100%;
     margin: 0;
     overflow: auto;
+    /* The log scrolls both ways; the swipe's pan-y would take its sideways pan. */
+    touch-action: pan-x pan-y;
     padding: 10px 12px;
     background: var(--bg-elev-2);
     border: 1px solid var(--border);
