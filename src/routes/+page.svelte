@@ -44,6 +44,9 @@
     | "import";
 
   let activeModal = $state<ModalKind>("none");
+  /** Whether the list has moved off its first row: the top edge is shaded only
+   *  then, so at rest the first card is not dimmed for nothing. */
+  let listScrolled = $state(false);
   let importMode = $state<"choose" | "link" | "json">("choose");
   let subUrl = $state("");
   let importError = $state<string | null>(null);
@@ -530,7 +533,16 @@
     {/if}
   </section>
 
-  <main class="scroll" data-scroll use:persistScroll={preview || navPath()}>
+  <!-- The list scrolls out under the hero into shade, not across a cut. A layer and
+       not a mask, for the reason given at `.edge-fade` in the layout: a mask makes
+       the scroller a stacking context and its modals paint under the tab pill. -->
+  <div class="top-fade" class:top-fade--on={listScrolled} aria-hidden="true"></div>
+  <main
+    class="scroll"
+    data-scroll
+    use:persistScroll={preview || navPath()}
+    onscroll={(event) => (listScrolled = event.currentTarget.scrollTop > 0)}
+  >
 
   {#each subs.ordered as sub (sub.id)}
     {@const isManual = subs.isManualCard(sub)}
@@ -977,6 +989,29 @@
 <style>
   .page-root {
     display: contents;
+  }
+  /* Zero height in the column, so it moves nothing; the band hangs from it over the
+     top of the list. */
+  .top-fade {
+    position: relative;
+    height: 0;
+    flex-shrink: 0;
+    z-index: 2;
+    pointer-events: none;
+  }
+  .top-fade::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 24px;
+    background: linear-gradient(to bottom, var(--bg), transparent);
+    opacity: 0;
+    transition: opacity var(--transition);
+  }
+  .top-fade--on::after {
+    opacity: 1;
   }
   /* Flex column so the top bar + power-button hero stay fixed and only the
      subscriptions list scrolls. */
