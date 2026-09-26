@@ -12,6 +12,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
+import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -232,6 +233,25 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         // degraded only makes sense while the session is up (otherwise the
         // service is gone and so is its retry state).
         ret.put("degraded", running && lastDegraded)
+        invoke.resolve(ret)
+    }
+
+    /** Traffic counters for the session pill. The TUN's own counters live in
+     *  sysfs, which Android closes to apps; what crosses the network on the
+     *  tunnel's behalf is Xray's sockets, and Xray runs under this app's UID
+     *  (kept outside the capture), so the UID's counters are the tunnel's
+     *  traffic -- the same numbers the notification shows. */
+    @Command
+    fun tunnelStats(invoke: Invoke) {
+        val ret = JSObject()
+        val uid = activity.applicationInfo.uid
+        val tx = TrafficStats.getUidTxBytes(uid)
+        val rx = TrafficStats.getUidRxBytes(uid)
+        val unsupported = TrafficStats.UNSUPPORTED.toLong()
+        ret.put("available", tx != unsupported && rx != unsupported)
+        ret.put("txBytes", tx.coerceAtLeast(0))
+        ret.put("rxBytes", rx.coerceAtLeast(0))
+        VarmlenVpnService.sessionSince(activity)?.let { ret.put("sinceUnix", it) }
         invoke.resolve(ret)
     }
 

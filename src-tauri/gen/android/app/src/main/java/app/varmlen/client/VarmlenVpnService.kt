@@ -140,6 +140,19 @@ class VarmlenVpnService : VpnService() {
         fun tunMtu(value: Int): Int = value.coerceIn(MIN_MTU, MAX_MTU)
         private const val PREFS = "varmlen_vpn"
         private const val WANT_FILE = "vpn_want.flag"
+        /** Unix seconds at which the running session connected. The app's
+         *  process reads it for the session pill: the service runs in its own
+         *  process, and the session can be older than the window. */
+        private const val SESSION_FILE = "vpn_session_since"
+
+        fun sessionSince(ctx: Context): Long? =
+            try { File(ctx.filesDir, SESSION_FILE).readText().trim().toLong() } catch (_: Throwable) { null }
+        private fun setSessionSince(ctx: Context, unixSeconds: Long?) {
+            try {
+                val f = File(ctx.filesDir, SESSION_FILE)
+                if (unixSeconds == null) f.delete() else f.writeText(unixSeconds.toString())
+            } catch (_: Throwable) {}
+        }
         /** Min gap between kill-switch core retries (the core may crash-loop
          *  on a broken location — never hammer it). */
         private const val CORE_RETRY_BACKOFF_MS = 15_000L
@@ -466,6 +479,7 @@ class VarmlenVpnService : VpnService() {
         broadcastState(true, requestId = requestId)
         // Start the per-second speed + uptime notification updates.
         connectedAt = System.currentTimeMillis()
+        setSessionSince(this, connectedAt / 1000)
         lastTx = 0L; lastRx = 0L; lastStatsAt = 0L
         notifHandler.removeCallbacks(statsTick)
         notifHandler.post(statsTick)
@@ -565,6 +579,7 @@ class VarmlenVpnService : VpnService() {
         }
         stopAllInProgress = true
         setWant(this, false)
+        setSessionSince(this, null)
         // Clear kill-switch retry state so a fresh connect never inherits a
         // stale "core dead" flag from a previous session.
         coreDeadSince = 0L

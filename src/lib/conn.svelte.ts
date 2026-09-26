@@ -24,9 +24,8 @@ class ConnStore {
   blockedByKillswitch = $state(false);
   /** Throughput of the tunnel, bytes per second over the last sample, and the age
    *  of the tunnel in seconds. Zero while disconnected: the pill reports that
-   *  state. Null while connected means the device refused to be read -- on a
-   *  phone the interface belongs to VpnService and whether an unprivileged app
-   *  may see its counters is the device's policy, not ours. */
+   *  state. Null while connected means there was nothing to read: no tunnel device
+   *  on a desktop, or a phone that does not count traffic per app. */
   sessionUp = $state<number | null>(0);
   sessionDown = $state<number | null>(0);
   sessionSeconds = $state(0);

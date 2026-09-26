@@ -326,6 +326,33 @@ pub fn disconnect<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TunnelStatsResp {
+    available: bool,
+    #[serde(default)]
+    tx_bytes: u64,
+    #[serde(default)]
+    rx_bytes: u64,
+    #[serde(default)]
+    since_unix: Option<u64>,
+}
+
+/// Traffic of the running session, counted per UID by Android (see
+/// `VpnPlugin.tunnelStats`). `None` when the device does not count per UID.
+pub fn tunnel_stats<R: Runtime>(app: &AppHandle<R>) -> Option<crate::vpn::TunnelStats> {
+    let vpn = app.state::<Vpn<R>>();
+    let resp = vpn
+        .0
+        .run_mobile_plugin::<TunnelStatsResp>("tunnelStats", ())
+        .ok()?;
+    resp.available.then_some(crate::vpn::TunnelStats {
+        tx_bytes: resp.tx_bytes,
+        rx_bytes: resp.rx_bytes,
+        since_unix: resp.since_unix,
+    })
+}
+
 pub fn is_running<R: Runtime>(app: &AppHandle<R>) -> bool {
     let vpn = app.state::<Vpn<R>>();
     vpn.0

@@ -1244,18 +1244,11 @@ pub struct TunnelStats {
 
 /// Read the counters of the tunnel interface, trying each candidate name in turn.
 ///
-/// The name is the whole difficulty on Android. `Builder.establish()` creates the
-/// interface and hands its descriptor to Xray; the kernel names the device for us
-/// (`tun0` in practice), while the profile asks for `varmlen0` and a core that runs
-/// against a descriptor has no reason to rename anything. Both are tried: the name
-/// we asked for first, because a future core that owns the interface would honour
-/// it, then the kernel's default.
-///
-/// Whether an unprivileged app may read `/sys/class/net/<if>/statistics` is the
-/// device's SELinux policy, and no device is attached to the machine writing this.
-/// A name that cannot be read is skipped and no counters at all is `None`, which
-/// the interface renders as a dash: a zero would claim an idle tunnel on the
-/// strength of nothing.
+/// Desktop only in practice: on Android, SELinux closes `/sys/class/net` to apps
+/// (every name reads as missing on a real phone), so `tunnel_stats` asks the
+/// VpnService's UID counters there instead. A name that cannot be read is
+/// skipped and no counters at all is `None`, which the interface renders as a
+/// dash: a zero would claim an idle tunnel on the strength of nothing.
 pub fn read_tunnel_stats(root: &std::path::Path, names: &[&str]) -> Option<TunnelStats> {
     for name in names {
         let stats_dir = root.join(name).join("statistics");
@@ -1281,15 +1274,23 @@ pub fn read_tunnel_stats(root: &std::path::Path, names: &[&str]) -> Option<Tunne
     None
 }
 
-/// Traffic counters of the running tunnel, or null when there is no readable
-/// device: disconnected, a device that carries another name, or a policy that
-/// closes sysfs to this app.
+/// Traffic counters of the running tunnel, or null when there is nothing to
+/// read: disconnected, a device that carries another name, or a phone that does
+/// not count traffic per UID.
 #[tauri::command]
-pub fn tunnel_stats() -> Option<TunnelStats> {
-    read_tunnel_stats(
-        std::path::Path::new("/sys/class/net"),
-        &[crate::xray::TUN_NAME, "tun0"],
-    )
+pub fn tunnel_stats(app: tauri::AppHandle) -> Option<TunnelStats> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::mobile_vpn::tunnel_stats(&app);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = &app;
+        read_tunnel_stats(
+            std::path::Path::new("/sys/class/net"),
+            &[crate::xray::TUN_NAME, "tun0"],
+        )
+    }
 }
 
 #[cfg(test)]
