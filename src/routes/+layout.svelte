@@ -1,7 +1,6 @@
 <script lang="ts">
   import "../app.css";
   import { onMount, tick, untrack } from "svelte";
-  import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { NAV } from "$lib/nav";
   import { navPath } from "$lib/nav-path";
@@ -104,7 +103,6 @@
   /* On Android there is no VPN mode to ask: the tunnel is the VpnService and per-app
      routing is what it does, so the applications place is always in the strip. */
   const appsAvailable = $derived(appSplitAvailable());
-  const currentZone = $derived(zoneOf(currentPath, split.tab));
 
   /** The element the finger drags: every page, side by side. Read through a getter
    *  because the action is attached to the content area before this child exists. */
