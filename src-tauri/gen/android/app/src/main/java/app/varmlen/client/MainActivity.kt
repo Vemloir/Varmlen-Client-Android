@@ -28,6 +28,12 @@ class MainActivity : TauriActivity() {
    * `varmlen-ime` event for $lib/keyboard to reveal a covered field.
    */
   override fun onWebViewCreate(webView: WebView) {
+    // A long press anywhere buzzed: the WebView plays a LONG_PRESS haptic on every
+    // long press, whether or not anything came of it -- measured,
+    // performHapticFeedback(constant=0) from the WebView over empty space. The buzz
+    // belongs to text that can be copied, so it starts off, and the page turns it on
+    // while a finger is down on such text (VpnPlugin.setLongPressHaptics).
+    webView.isHapticFeedbackEnabled = false
     ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
       val imePx = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
       val css = Math.round(imePx / resources.displayMetrics.density)

@@ -298,6 +298,11 @@ export function setStatusBar(light: boolean): Promise<void> {
   return invoke<void>("set_status_bar", { light });
 }
 
+/** Allow the long-press haptic (Android) -- only while the finger is on copyable text. */
+export function setLongPressHaptics(enabled: boolean): Promise<void> {
+  return invoke<void>("set_long_press_haptics", { enabled });
+}
+
 /** Whether the app may post notifications (Android). */
 export function notificationsEnabled(): Promise<boolean> {
   return invoke<boolean>("notifications_enabled");

@@ -286,6 +286,20 @@ pub fn set_bar_style<R: Runtime>(app: &AppHandle<R>, light: bool) -> Result<(), 
         .map_err(|e| e.to_string())
 }
 
+#[derive(Serialize)]
+struct LongPressHapticsArgs {
+    enabled: bool,
+}
+
+/// Let a long press buzz, or not: the page allows it only over copyable text.
+pub fn set_long_press_haptics<R: Runtime>(app: &AppHandle<R>, enabled: bool) -> Result<(), String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>("setLongPressHaptics", LongPressHapticsArgs { enabled })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Deserialize)]
 struct NotifResp {
     enabled: bool,

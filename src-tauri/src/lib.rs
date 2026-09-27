@@ -405,6 +405,7 @@ pub fn run() {
             vpn::read_clipboard,
             vpn::write_clipboard,
             vpn::set_status_bar,
+            vpn::set_long_press_haptics,
             vpn::notifications_enabled,
             vpn::open_notification_settings,
             vpn::open_vpn_settings,

@@ -802,6 +802,21 @@ pub async fn set_status_bar(app: tauri::AppHandle, light: bool) -> Result<(), St
     }
 }
 
+/// Whether a long press may play the system haptic (Android): only over text that
+/// can be copied. Nothing to do on desktop.
+#[tauri::command]
+pub async fn set_long_press_haptics(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::mobile_vpn::set_long_press_haptics(&app, enabled);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (&app, enabled);
+        Ok(())
+    }
+}
+
 /// Whether the app may post notifications (Android). Always true on desktop.
 #[tauri::command]
 pub async fn notifications_enabled(app: tauri::AppHandle) -> bool {

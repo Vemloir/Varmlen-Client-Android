@@ -28,6 +28,7 @@
   import { theme } from "$lib/theme.svelte";
   import { isAndroid } from "$lib/platform";
   import { watchKeyboard } from "$lib/keyboard";
+  import { watchLongPressHaptics } from "$lib/long-press-haptics";
   // The pages a swipe can reach without a navigation. Imported as components so
   // the neighbour can be mounted beside the page while the finger is still down.
   import HomePage from "./+page.svelte";
@@ -235,6 +236,8 @@
 
   // The keyboard is ours to follow on Android: see $lib/keyboard.
   onMount(() => (isAndroid ? watchKeyboard() : undefined));
+  // And the long-press buzz, which belongs to copyable text only: see $lib/long-press-haptics.
+  onMount(() => (isAndroid ? watchLongPressHaptics() : undefined));
 
   /* The bar follows the page it belongs to: on scroll, when the content under it grows
      (flags, ping results, subscription cards), when the window changes size, and when

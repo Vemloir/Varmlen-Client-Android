@@ -40,6 +40,11 @@ class BarStyleArgs {
 }
 
 @InvokeArg
+class LongPressHapticsArgs {
+    var enabled: Boolean = false
+}
+
+@InvokeArg
 class ClipboardWriteArgs {
     var text: String = ""
 }
@@ -165,8 +170,11 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    private var webView: WebView? = null
+
     override fun load(webView: WebView) {
         super.load(webView)
+        this.webView = webView
         val filter = IntentFilter(VarmlenVpnService.ACTION_STATE)
         try {
             if (Build.VERSION.SDK_INT >= 33) {
@@ -410,6 +418,15 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
                 c.isAppearanceLightNavigationBars = args.light
             } catch (_: Throwable) {}
         }
+        invoke.resolve()
+    }
+
+    /** Whether a long press may buzz: only over text that can be copied. The page
+     *  says so at every touch-down, before the long press can happen. */
+    @Command
+    fun setLongPressHaptics(invoke: Invoke) {
+        val args = invoke.parseArgs(LongPressHapticsArgs::class.java)
+        activity.runOnUiThread { webView?.isHapticFeedbackEnabled = args.enabled }
         invoke.resolve()
     }
 
