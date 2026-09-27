@@ -896,8 +896,14 @@
        on a --bg plate the line has to be the lighter one. */
     border-top: 1px solid var(--bg-elev);
   }
-  .picker-row:hover:not(:disabled) {
-    background: var(--bg-elev);
+  /* Hover only where there is a pointer that hovers. On a touch screen :hover sticks
+     to the last row the finger lifted from, and it outranked .selected, so the row
+     just picked showed the panel colour instead of the selection until something
+     else was touched. */
+  @media (hover: hover) {
+    .picker-row:hover:not(:disabled):not(.selected) {
+      background: var(--bg-elev);
+    }
   }
   .picker-row:disabled {
     opacity: 0.55;
