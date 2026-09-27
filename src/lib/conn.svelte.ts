@@ -116,6 +116,9 @@ class ConnStore {
   }
   /** Signature of the config last applied, to avoid redundant reconnects. */
   private lastSig: string | null = null;
+  /** The location the running tunnel was built for. A reconfigure onto another
+   *  one is a new connection as far as the reader is concerned. */
+  private appliedServer: string | null = null;
   private lastProviderRefreshRevision = 0;
   /** When we last reached "connected". A status poll right after connecting can
    *  falsely read "not running" (Android registers the service a beat late, and
@@ -195,19 +198,24 @@ class ConnStore {
     // establishes the replacement interface before it retires the running one
     // (VarmlenVpnService.startAll: "Android atomically switches VPN routing to the
     // new descriptor"), so the session never drops and the kill switch is never
-    // lifted -- and the UI must not paint "connecting" over a tunnel that stayed
-    // up. That is what makes editing the split while connected silent: the
-    // interface is rebuilt, the power button does not blink.
+    // lifted. Editing the split or a setting while connected is therefore silent:
+    // the interface is rebuilt, the power button does not blink. A new location
+    // is not silent: the reader chose another server and expects to watch the
+    // connection move there, as on the desktop, so it shows "connecting" while
+    // the service swaps -- the tunnel still stays up underneath.
     const reconfigure = this.status === "connected";
-    if (!reconfigure) this.status = "connecting";
+    const newLocation = reconfigure && this.appliedServer !== subs.selectedKey;
+    const quiet = reconfigure && !newLocation;
+    if (!quiet) this.status = "connecting";
     this.lastSig = this.configSig();
+    this.appliedServer = subs.selectedKey;
     // Hold the "connecting" indicator visible for at least this long even
     // when the helper rejects in <50ms — otherwise the spinner / animated
     // ring is gone before the user perceives it, and a fast failure looks
-    // like "the button does nothing". A reconfigure shows nothing, so it has
-    // nothing to hold.
+    // like "the button does nothing". A quiet reconfigure shows nothing, so it
+    // has nothing to hold.
     const startedAt = Date.now();
-    const MIN_CONNECTING_MS = reconfigure ? 0 : 700;
+    const MIN_CONNECTING_MS = quiet ? 0 : 700;
     try {
       const resp = await vpnConnect(
         server,
