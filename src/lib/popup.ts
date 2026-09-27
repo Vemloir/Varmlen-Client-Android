@@ -47,33 +47,57 @@ export function placePopup(
   return { top, right };
 }
 
-/** Place a `position: fixed` popup with its top-left corner AT the pointer, and
- *  return `left`/`top` (a cursor-anchored popup follows the cursor, not a trigger
- *  element, so right-alignment to a row is wrong). If the cursor sits too close
- *  to the right edge the popup opens to the LEFT of the cursor; too close to the
- *  bottom, it opens ABOVE it. */
+/** Where a pointer-anchored popup ended up, and the corner it grows from. */
+export interface PointPlacement {
+  top: number;
+  left: number;
+  /** A `transform-origin`: the corner at the pointer, so an opening animation grows
+   *  out of the finger rather than out of the popup's own top left. */
+  origin: string;
+}
+
+/** Place a `position: fixed` popup with one top corner AT the pointer (a popup that
+ *  follows the pointer belongs to the pointer, not to a trigger element). It extends
+ *  `toward` the side asked for -- its right edge at the pointer when that is left --
+ *  and to the other side when there is no room; below the pointer, or above it near
+ *  the bottom edge. */
 export function placeAtPoint(
   x: number,
   y: number,
   width: number,
   height: number,
   gap = 6,
-): { top: number; left: number } {
+  toward: "left" | "right" = "right",
+): PointPlacement {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const margin = 8;
 
-  let left = x + gap;
-  if (left + width > vw - margin) left = x - gap - width;
+  const rightOfPointer = x + gap;
+  const leftOfPointer = x - gap - width;
+  let extends_ = toward;
+  let left = toward === "right" ? rightOfPointer : leftOfPointer;
+  if (toward === "right" && left + width > vw - margin) {
+    left = leftOfPointer;
+    extends_ = "left";
+  } else if (toward === "left" && left < margin) {
+    left = rightOfPointer;
+    extends_ = "right";
+  }
   // Still overflowing after the flip (a popup nearly as wide as the viewport):
   // pull it back rather than let it hang off the screen.
   if (left + width > vw - margin) left = vw - margin - width;
   if (left < margin) left = margin;
 
   let top = y + gap;
-  if (top + height > vh - margin) top = y - gap - height;
+  let opensDown = true;
+  if (top + height > vh - margin) {
+    top = y - gap - height;
+    opensDown = false;
+  }
   if (top + height > vh - margin) top = vh - margin - height;
   if (top < margin) top = margin;
 
-  return { top, left };
+  const origin = `${opensDown ? "top" : "bottom"} ${extends_ === "right" ? "left" : "right"}`;
+  return { top, left, origin };
 }

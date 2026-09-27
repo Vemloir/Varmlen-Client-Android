@@ -159,7 +159,10 @@
     x: number;
     y: number;
   } | null>(null);
-  let locMenuPos = $state({ top: 0, left: 0 });
+  let locMenuPos = $state({ top: 0, left: 0, origin: "top right" });
+  /** Measured and placed: the menu is invisible until then, so it appears once, where
+   *  it belongs, instead of animating in at a guess and then jumping. */
+  let locMenuReady = $state(false);
   let locMenuWidth = $state(0);
   let locMenuEl = $state<HTMLDivElement | undefined>();
   let locMenuOpenedAt = 0;
@@ -174,9 +177,10 @@
     delete: () => t("menu.deleteLocation"),
   };
 
-  /** Opens at the pointer (its top-left corner at the cursor, flipping left/above
-   *  near an edge) and is as wide as its longest item. `max-content` is not enough
-   *  in every WebKitGTK build, so the width is measured from the text and set. */
+  /** Opens at the pointer with its top-right corner under the finger, extending to
+   *  the left (to the right, or above, near an edge), and is as wide as its longest
+   *  item. `max-content` is not enough in every WebKitGTK build, so the width is
+   *  measured from the text and set. */
   async function openLocationMenu(
     sub: Subscription,
     server: ServerEntry,
@@ -185,8 +189,9 @@
     const items = subs.locationActionsFor(sub, server);
     locMenu = { sub, server, items, x: point.x, y: point.y };
     locMenuOpenedAt = Date.now();
+    locMenuReady = false;
     locMenuWidth = 160;
-    locMenuPos = placeAtPoint(point.x, point.y, 160, items.length * 33 + 10);
+    locMenuPos = placeAtPoint(point.x, point.y, 160, items.length * 33 + 10, 6, "left");
     await tick();
     if (!locMenu || locMenu.server.id !== server.id || !locMenuEl) return;
     // The text, not the item: an item is a full-width block, so its own width is
@@ -202,7 +207,8 @@
     locMenuWidth = width;
     await tick();
     const height = locMenuEl?.getBoundingClientRect().height ?? items.length * 33 + 10;
-    locMenuPos = placeAtPoint(point.x, point.y, width, height);
+    locMenuPos = placeAtPoint(point.x, point.y, width, height, 6, "left");
+    locMenuReady = true;
   }
 
   function closeLocationMenu(): void {
@@ -717,10 +723,10 @@
 {#if locMenu}
   <div
     class="loc-menu"
-    class:loc-menu--animated={isAndroid}
+    class:loc-menu--ready={locMenuReady}
     role="menu"
     use:portal
-    style="top: {locMenuPos.top}px; left: {locMenuPos.left}px; width: {locMenuWidth}px;"
+    style="top: {locMenuPos.top}px; left: {locMenuPos.left}px; width: {locMenuWidth}px; transform-origin: {locMenuPos.origin};"
     bind:this={locMenuEl}
   >
     {#each locMenu.items as action (action)}
@@ -1347,16 +1353,21 @@
   }
   /* Android only: the menu answers a press, so it should arrive with motion.
      Desktop opens on right-click and must appear instantly. */
-  .loc-menu--animated {
-    animation: loc-menu-in 140ms ease-out;
-    transform-origin: top left;
+  /* Hidden while it is measured, then grown out of the corner under the finger --
+     quick enough that a right click still reads as instant. */
+  .loc-menu {
+    visibility: hidden;
+  }
+  .loc-menu--ready {
+    visibility: visible;
+    animation: loc-menu-in 110ms cubic-bezier(0.2, 0, 0, 1);
   }
   @keyframes loc-menu-in {
-    from { opacity: 0; transform: translateY(-4px) scale(0.97); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
+    from { opacity: 0; transform: scale(0.9); }
+    to { opacity: 1; transform: scale(1); }
   }
   @media (prefers-reduced-motion: reduce) {
-    .loc-menu--animated { animation: none; }
+    .loc-menu--ready { animation: none; }
   }
   .loc-menu-item {
     display: block;

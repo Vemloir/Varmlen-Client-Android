@@ -20,7 +20,26 @@ afterEach(restore);
 describe("cursor-anchored popup", () => {
   it("puts its top-left corner under the cursor", () => {
     viewport(1024, 768);
-    expect(placeAtPoint(300, 200, 220, 156)).toEqual({ top: 206, left: 306 });
+    expect(placeAtPoint(300, 200, 220, 156)).toEqual({ top: 206, left: 306, origin: "top left" });
+  });
+
+  it("puts its top-right corner under the finger when asked to extend left", () => {
+    viewport(400, 800);
+    expect(placeAtPoint(300, 200, 105, 140, 6, "left")).toEqual({
+      top: 206,
+      left: 300 - 6 - 105,
+      origin: "top right",
+    });
+  });
+
+  it("extends right after all when there is no room on the left", () => {
+    viewport(400, 800);
+    expect(placeAtPoint(40, 200, 105, 140, 6, "left")).toMatchObject({ left: 46, origin: "top left" });
+  });
+
+  it("grows from the bottom corner when it opens above the finger", () => {
+    viewport(400, 400);
+    expect(placeAtPoint(300, 390, 105, 140, 6, "left").origin).toBe("bottom right");
   });
 
   it("opens to the left of the cursor when the right edge is too close", () => {
