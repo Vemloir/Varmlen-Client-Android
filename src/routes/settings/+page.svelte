@@ -959,8 +959,15 @@
     opacity: 0.45;
     cursor: default;
   }
-  .row:hover {
-    background: var(--bg-elev-2);
+  @media (hover: hover) {
+    .row:hover {
+      background: var(--bg-elev-2);
+    }
+  }
+  @media (hover: none) {
+    .row:active {
+      background: var(--bg-elev-2);
+    }
   }
   .list {
     background: var(--bg-elev);
@@ -1062,7 +1069,12 @@
     justify-content: center;
     transition: background var(--transition), color var(--transition);
   }
-  .icon-btn:hover { background: var(--bg-elev-2); color: var(--text); }
+  @media (hover: hover) {
+    .icon-btn:hover { background: var(--bg-elev-2); color: var(--text); }
+  }
+  @media (hover: none) {
+    .icon-btn:active { background: var(--bg-elev-2); color: var(--text); }
+  }
 
   /* The Versions button on the core row carries its own icon. */
   .versions-btn {
@@ -1070,8 +1082,15 @@
     background: var(--bg);
     border: none;
   }
-  .versions-btn:hover:not(:disabled) {
-    background: var(--bg-elev-3);
+  @media (hover: hover) {
+    .versions-btn:hover:not(:disabled) {
+      background: var(--bg-elev-3);
+    }
+  }
+  @media (hover: none) {
+    .versions-btn:active:not(:disabled) {
+      background: var(--bg-elev-3);
+    }
   }
   .btn-ico {
     margin-right: 6px;
@@ -1171,9 +1190,17 @@
     color: var(--danger);
     background: var(--danger-faint);
   }
-  :global(.btn.btn-danger:hover:not(:disabled)) {
-    background: var(--danger-faint-2);
-    border-color: var(--danger);
+  @media (hover: hover) {
+    :global(.btn.btn-danger:hover:not(:disabled)) {
+      background: var(--danger-faint-2);
+      border-color: var(--danger);
+    }
+  }
+  @media (hover: none) {
+    :global(.btn.btn-danger:active:not(:disabled)) {
+      background: var(--danger-faint-2);
+      border-color: var(--danger);
+    }
   }
 
 

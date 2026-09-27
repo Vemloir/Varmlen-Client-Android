@@ -1033,8 +1033,15 @@
     background: transparent;
     border: none;
   }
-  .icon-btn:hover {
-    background: var(--bg-elev-2);
+  @media (hover: hover) {
+    .icon-btn:hover {
+      background: var(--bg-elev-2);
+    }
+  }
+  @media (hover: none) {
+    .icon-btn:active {
+      background: var(--bg-elev-2);
+    }
   }
   .modal-head {
     display: flex;
@@ -1050,8 +1057,15 @@
     flex-shrink: 0;
     color: var(--text-muted);
   }
-  .modal-head .icon-btn:hover {
-    color: var(--text);
+  @media (hover: hover) {
+    .modal-head .icon-btn:hover {
+      color: var(--text);
+    }
+  }
+  @media (hover: none) {
+    .modal-head .icon-btn:active {
+      color: var(--text);
+    }
   }
   .location-title {
     display: flex;
@@ -1104,9 +1118,17 @@
       color var(--transition);
     z-index: 1;
   }
-  .power:hover {
-    border-color: var(--border-strong);
-    color: var(--text);
+  @media (hover: hover) {
+    .power:hover {
+      border-color: var(--border-strong);
+      color: var(--text);
+    }
+  }
+  @media (hover: none) {
+    .power:active {
+      border-color: var(--border-strong);
+      color: var(--text);
+    }
   }
   .power[data-status="connecting"] {
     color: var(--accent);
@@ -1192,7 +1214,12 @@
     text-decoration: underline;
     cursor: pointer;
   }
-  .link-btn:hover { color: var(--text); }
+  @media (hover: hover) {
+    .link-btn:hover { color: var(--text); }
+  }
+  @media (hover: none) {
+    .link-btn:active { color: var(--text); }
+  }
 
 
   /* ---------- subscription card ---------- */
@@ -1262,9 +1289,17 @@
     align-items: center;
     justify-content: center;
   }
-  .head-btn:hover {
-    background: var(--bg-elev-2);
-    color: var(--text);
+  @media (hover: hover) {
+    .head-btn:hover {
+      background: var(--bg-elev-2);
+      color: var(--text);
+    }
+  }
+  @media (hover: none) {
+    .head-btn:active {
+      background: var(--bg-elev-2);
+      color: var(--text);
+    }
   }
   .head-btn.spinning svg {
     animation: spin 900ms linear infinite;
@@ -1331,7 +1366,12 @@
     color: var(--text);
     font-size: 13px;
   }
-  .loc-menu-item:hover { background: var(--bg-elev-3); }
+  @media (hover: hover) {
+    .loc-menu-item:hover { background: var(--bg-elev-3); }
+  }
+  @media (hover: none) {
+    .loc-menu-item:active { background: var(--bg-elev-3); }
+  }
   .loc-menu-item.danger { color: var(--danger); }
 
   .menu {
@@ -1358,8 +1398,15 @@
     color: var(--text);
     font-size: 13px;
   }
-  .menu-item:hover {
-    background: var(--bg-elev-3);
+  @media (hover: hover) {
+    .menu-item:hover {
+      background: var(--bg-elev-3);
+    }
+  }
+  @media (hover: none) {
+    .menu-item:active {
+      background: var(--bg-elev-3);
+    }
   }
   .menu-item.danger {
     color: var(--danger);
@@ -1384,8 +1431,15 @@
     justify-content: center;
     flex-shrink: 0;
   }
-  .round-btn:hover {
-    background: var(--accent-faint);
+  @media (hover: hover) {
+    .round-btn:hover {
+      background: var(--accent-faint);
+    }
+  }
+  @media (hover: none) {
+    .round-btn:active {
+      background: var(--accent-faint);
+    }
   }
   /* The card's own colour, held apart from the card by a hairline: a trough rather
      than a second plate. What has been spent is filled in the colour of that hairline,

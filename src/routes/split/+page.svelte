@@ -688,8 +688,15 @@
     background: var(--bg-elev);
     border: none;
   }
-  .panel-add:hover:not(:disabled) {
-    background: var(--bg-elev-2);
+  @media (hover: hover) {
+    .panel-add:hover:not(:disabled) {
+      background: var(--bg-elev-2);
+    }
+  }
+  @media (hover: none) {
+    .panel-add:active:not(:disabled) {
+      background: var(--bg-elev-2);
+    }
   }
 
 
@@ -755,8 +762,15 @@
     background: var(--bg);
     border: none;
   }
-  .site-add .btn:hover:not(:disabled) {
-    background: var(--bg-elev-2);
+  @media (hover: hover) {
+    .site-add .btn:hover:not(:disabled) {
+      background: var(--bg-elev-2);
+    }
+  }
+  @media (hover: none) {
+    .site-add .btn:active:not(:disabled) {
+      background: var(--bg-elev-2);
+    }
   }
 
   .pattern {
@@ -772,7 +786,12 @@
     align-items: center;
     justify-content: center;
   }
-  .trash:hover { color: var(--danger); }
+  @media (hover: hover) {
+    .trash:hover { color: var(--danger); }
+  }
+  @media (hover: none) {
+    .trash:active { color: var(--danger); }
+  }
 
 
   /* modal */
@@ -818,9 +837,17 @@
     justify-content: center;
     transition: background var(--transition), color var(--transition);
   }
-  .icon-btn:hover {
-    background: var(--bg-elev-2);
-    color: var(--text);
+  @media (hover: hover) {
+    .icon-btn:hover {
+      background: var(--bg-elev-2);
+      color: var(--text);
+    }
+  }
+  @media (hover: none) {
+    .icon-btn:active {
+      background: var(--bg-elev-2);
+      color: var(--text);
+    }
   }
 
   /* Indeterminate scan bar shown under the search while the app list loads. */
@@ -890,6 +917,11 @@
       background: var(--bg-elev);
     }
   }
+  @media (hover: none) {
+    .picker-row:active:not(:disabled):not(.selected) {
+      background: var(--bg-elev);
+    }
+  }
   .picker-row:disabled {
     opacity: 0.55;
     cursor: default;
@@ -913,8 +945,15 @@
     background: var(--bg);
     border: none;
   }
-  .modal-actions .btn:hover:not(:disabled) {
-    background: var(--bg-elev-2);
+  @media (hover: hover) {
+    .modal-actions .btn:hover:not(:disabled) {
+      background: var(--bg-elev-2);
+    }
+  }
+  @media (hover: none) {
+    .modal-actions .btn:active:not(:disabled) {
+      background: var(--bg-elev-2);
+    }
   }
   .modal-actions {
     display: flex;
