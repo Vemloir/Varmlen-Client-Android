@@ -189,9 +189,13 @@
     locMenuPos = placeAtPoint(point.x, point.y, 160, items.length * 33 + 10);
     await tick();
     if (!locMenu || locMenu.server.id !== server.id || !locMenuEl) return;
+    // The text, not the item: an item is a full-width block, so its own width is
+    // the menu's width and the menu could never come out narrower than it started.
+    const text = document.createRange();
     let widest = 0;
     for (const item of locMenuEl.querySelectorAll<HTMLElement>(".loc-menu-item")) {
-      widest = Math.max(widest, item.scrollWidth);
+      text.selectNodeContents(item);
+      widest = Math.max(widest, Math.ceil(text.getBoundingClientRect().width));
     }
     // item padding 10+10, menu padding 4+4, border 1+1
     const width = Math.max(96, Math.min(widest + 30, window.innerWidth - 24));

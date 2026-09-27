@@ -192,7 +192,9 @@
     /* Content width (not auto) so it shrinks to its options rather than
        stretching to the viewport's left edge in Android WebView. */
     width: max-content;
-    min-width: 160px;
+    /* As wide as the longest option; the floor only keeps a one-word list from
+       turning into a sliver. */
+    min-width: 96px;
     max-width: calc(100vw - 24px);
     left: auto;
     background: var(--bg-elev-3);
