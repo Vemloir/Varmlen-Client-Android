@@ -51,25 +51,30 @@ describe("shell: tabs by swipe, with the new page arriving from the side", () =>
     expect(action).toMatch(/const CONTROL = "button, a";/);
   });
 
-  it("wraps the page in the one element that can move", () => {
-    expect(shell).toMatch(
-      /<div bind:this=\{trackEl\} class="page-track">\s*<div class="page-shell"[^>]*>\s*\{@render children\?\.\(\)\}/s,
-    );
-    // Every page is absolutely positioned, so the wrapper has to be the box they
-    // position against, or the swipe moves nothing.
-    expect(css).toMatch(/\.page-shell\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;/s);
+  it("keeps every page mounted on the one element that moves", () => {
+    // Mounting a page on a tab change froze the main thread for 50-450ms right after
+    // the tap; every page now lives on the track from the start.
+    expect(shell).toMatch(/<div bind:this=\{trackEl\} class="page-track" style=\{`--shown: \$\{shown\}`\}>/);
+    expect(shell).toMatch(/\{#each TAB_PATHS as path, slot \(path\)\}/);
+    expect(shell).toMatch(/<HomePage \/>/);
+    expect(shell).toMatch(/<SplitPage \/>/);
+    expect(shell).toMatch(/<SettingsPage active=\{slot === shown\} \/>/);
+    expect(shell).not.toMatch(/@render children/);
+    // The pages that are not on screen cannot be reached.
+    expect(shell).toMatch(/inert=\{slot !== shown\}/);
+    // Placed by `left`, never a transform: a transform is a stacking context, and the
+    // page's modals would sit under the tab pill.
+    expect(css).toMatch(/\.page-shell\s*\{[^}]*position:\s*absolute;[^}]*left:\s*calc\(\(var\(--slot\) - var\(--shown\)\) \* 100%\);/s);
+    expect(css).not.toMatch(/\.page-shell\s*\{[^}]*transform/s);
   });
 
-  it("animates with transform and opacity only", () => {
-    const keyframes = css.slice(
-      css.indexOf("@keyframes page-from-right"),
-      css.indexOf(".page-shell.from-right"),
-    );
-    expect(keyframes).toMatch(/transform:\s*translateX\(-?\d+px\)/);
-    expect(keyframes).toMatch(/opacity:/);
-    expect(keyframes).not.toMatch(/margin|left:|width:/);
-    expect(css).toMatch(/\.page-shell\.from-right\s*\{\s*animation:/);
-    expect(css).toMatch(/\.page-shell\.from-left\s*\{\s*animation:/);
+  it("slides a tab tap the way a swipe lands, and lands a swipe without a slide", () => {
+    expect(layout).toMatch(/import \{ COMMIT, COMMIT_MS, swipeNav \} from "\$lib\/swipe-nav";/);
+    expect(layout).toMatch(/el\.style\.transition = COMMIT;/);
+    expect(layout).toMatch(/el\.style\.transform = `translateX\(\$\{\(from - target\) \* width\}px\)`;/);
+    expect(layout).toMatch(/if \(draggedIn === navPath\(\)\) \{\s*draggedIn = null;\s*shown = target;/s);
+    // The arrival keyframes are gone: nothing arrives, it was already there.
+    expect(css).not.toMatch(/@keyframes page-from/);
   });
 });
 
@@ -240,7 +245,7 @@ describe("shell: nothing in the interface is selectable", () => {
     );
     // And the shell knows which scroller to describe: the live page's, not the inert
     // half of the split page, not the neighbour standing beside the finger.
-    expect(layout).toMatch(/\.page-shell:not\(\.preview\) \[data-scroll\]/);
+    expect(layout).toMatch(/\.page-shell\.current \[data-scroll\]/);
     expect(layout).toMatch(/if \(!el\.hasAttribute\("inert"\)\) return el;/);
     for (const page of ["./+page.svelte", "./settings/+page.svelte", "./split/+page.svelte"]) {
       expect(read(page)).toMatch(/data-scroll/);
@@ -261,15 +266,11 @@ describe("shell: nothing in the interface is selectable", () => {
 });
 
 describe("shell: each tab keeps the position the reader stopped at", () => {
-  for (const page of ["./+page.svelte", "./split/+page.svelte", "./settings/+page.svelte"]) {
-    it(`${page} restores its own offset`, () => {
-      const source = read(page);
-      // Keyed by the live path, or by the path a preview is standing in for. Split
-      // keeps one memory per half; a preview stands in for a page it has not read.
-      expect(source).toMatch(
-        /use:persistScroll=\{preview \|\| navPath\(\)|preview \? null : SPLIT_(APPS|SITES)\}/,
-      );
-      expect(source).toMatch(/import \{ persistScroll \} from "\$lib\/scroll-memory"/);
-    });
-  }
+  it("keeps it by never taking the page down", () => {
+    // The scroll memory that restored an offset into a re-mounted page is gone with the
+    // re-mounting: a page that stays keeps its own scroller, and with it the place.
+    for (const page of ["./+page.svelte", "./split/+page.svelte", "./settings/+page.svelte"]) {
+      expect(read(page)).not.toMatch(/persistScroll|scroll-memory/);
+    }
+  });
 });

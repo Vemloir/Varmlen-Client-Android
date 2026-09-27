@@ -39,14 +39,18 @@ describe("the neighbour under the finger", () => {
     expect(layout).toMatch(/track: \(\) => trackEl \?\? null,/);
   });
 
-  it("mounts the neighbour the gesture is heading for", () => {
-    expect(source).toMatch(/preview\?: \(path: string \| null\) => void;/);
+  it("has the neighbour already standing where the finger is heading", () => {
+    // Every page is mounted on the track, so a swipe mounts nothing: the finger drags
+    // the track and the neighbour is simply there.
+    expect(source).not.toMatch(/preview/i);
     expect(source).toMatch(/const neighbour = neighbourTo\(options\.path\(\), direction\);/);
-    expect(source).toMatch(/showPreview\(neighbour\);/);
-    expect(layout).toMatch(/preview: setPreview,/);
-    expect(layout).toMatch(/<HomePage preview=\{preview\.path\} \/>/);
-    expect(layout).toMatch(/<SplitPage preview=\{preview\.path\} \/>/);
-    expect(layout).toMatch(/<SettingsPage preview=\{preview\.path\} \/>/);
+    expect(layout).toMatch(/track: \(\) => trackEl \?\? null,/);
+  });
+
+  it("leaves Settings' opening work to the moment it is opened", () => {
+    // Mounted beside the others from the start, it asks GitHub for core versions only
+    // when it becomes the page on screen, as it did when it mounted on open.
+    expect(settings).toMatch(/if \(!active\) return;\s*void core\.check\(\);/s);
   });
 
   it("drags the same sheet everywhere, and switches where there is a tab", () => {
@@ -64,21 +68,6 @@ describe("the neighbour under the finger", () => {
     expect(source).not.toMatch(/dragOffset/);
   });
 
-  it("pays for the neighbour while the page is still at rest", () => {
-    // Rendering a page costs 60-145ms measured. Mounting it when the drag starts
-    // spends that time with the page standing still and the finger ahead of it,
-    // which is the jump; inside the slop there is nothing to jump.
-    expect(source).toMatch(/const PREVIEW_START_PX = 4;/);
-    const slop = source.slice(source.indexOf("if (!dragging) {"));
-    expect(slop.slice(0, 900)).toMatch(/Math\.abs\(dx\) >= PREVIEW_START_PX/);
-    expect(slop.slice(0, 900)).toMatch(
-      /showPreview\(neighbourTo\(options\.path\(\), dx < 0 \? "next" : "prev"\)\);/,
-    );
-    // A refused gesture keeps its neighbour warm for a moment, because a refused
-    // swipe is usually tried again straight away.
-    expect(source).toMatch(/const WARM_MS = 1200;/);
-    expect(source).toMatch(/if \(pointerId === null && !committing && previewTo === token\) showPreview\(null\);/);
-  });
 
   it("starts the drag at the finger instead of at the press", () => {
     // The slop had already been travelled when the gesture became a swipe; carrying
@@ -115,12 +104,10 @@ describe("the neighbour under the finger", () => {
     const go = commit.indexOf("await options.go(to)");
     expect(go).toBeGreaterThan(-1);
     // The animation runs first, and the track is only returned to rest after the
-    // new page is in the DOM -- otherwise the old page flashes back at full width.
+    // shell has made the neighbour the resting page -- otherwise the old page flashes
+    // back at full width.
     expect(commit.slice(0, go)).toMatch(/await wait\(COMMIT_MS\);/);
-    expect(commit.slice(go)).toMatch(/showPreview\(null\);/);
-    expect(commit.slice(commit.indexOf("showPreview(null)"))).toMatch(
-      /element\.style\.transform = "";/,
-    );
+    expect(commit.slice(go)).toMatch(/element\.style\.transform = "";/);
   });
 
   it("ignores a second gesture while the page is landing", () => {
@@ -142,35 +129,14 @@ describe("the neighbour under the finger", () => {
     expect(source.match(/event\.pointerId !== pointerId/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("keeps the neighbour out of reach and out of the accessibility tree", () => {
-    expect(layout).toMatch(/class="page-shell preview"/);
-    expect(layout).toMatch(/aria-hidden="true"/);
-    expect(layout).toMatch(/\.preview\s*\{[^}]*pointer-events:\s*none;/s);
-    expect(layout).toMatch(/\.preview--next\s*\{\s*left:\s*100%;/);
-    expect(layout).toMatch(/\.preview--prev\s*\{\s*right:\s*100%;/);
-    // `.page-shell` sets `inset: 0` with the same specificity, so the neighbour's
-    // own placement has to come after it or it lands on top of the live page.
-    expect(layout.indexOf(".preview--next")).toBeGreaterThan(layout.indexOf(".page-shell {"));
-  });
 
-  it("does not run the arrival animation twice on a dragged-in page", () => {
-    // The flag is keyed by route, because that is what the slide effect compares
-    // against -- and a swipe between the two halves of the split page changes no
-    // route at all.
+  it("lands a dragged-in page without sliding it again", () => {
+    // Keyed by route, because that is what the shell compares -- and a swipe between
+    // the two halves of the split page changes no route at all.
     expect(layout).toMatch(/const route = routeOf\(zone\);/);
     expect(layout).toMatch(/draggedIn = route;/);
-    expect(layout).toMatch(/if \(draggedIn === path\) \{\s*draggedIn = null;\s*slide = null;/);
   });
 
-  it("keeps the neighbour's own reading position, not the current tab's", () => {
-    for (const page of [home, settings]) {
-      expect(page).toMatch(/use:persistScroll=\{preview \|\| navPath\(\)\}/);
-    }
-    // Split is two places on one route, so each half remembers its own offset, and a
-    // page standing in for one of them remembers nothing -- it has never been read.
-    expect(split).toMatch(/use:persistScroll=\{preview \? null : SPLIT_APPS\}/);
-    expect(split).toMatch(/use:persistScroll=\{preview \? null : SPLIT_SITES\}/);
-  });
 
   it("moves the halves of a page instead of sliding the window", () => {
     // Which page a place belongs to is the difference between a neighbour and a half.
@@ -179,23 +145,18 @@ describe("the neighbour under the finger", () => {
     expect(source).toMatch(
       /options\.route !== undefined && options\.route\(zone\) === options\.route\(options\.path\(\)\)/,
     );
-    // A half is not a neighbour: nothing is mounted beside it, and the track is not
-    // touched -- the pill over there is chrome and travels with the window.
-    expect(source).toMatch(/const movePanes = \(dx: number\) => \{[\s\S]*?showPreview\(null\);[\s\S]*?options\.panes\?\.\(offset\);/);
+    // A half is not a neighbour: the track is not touched -- the pill over there is
+    // chrome and travels with the window.
+    expect(source).toMatch(/const movePanes = \(dx: number\) => \{[\s\S]*?options\.panes\?\.\(offset\);/);
     expect(source).toMatch(/if \(neighbour && sameRoute\(neighbour\)\) \{\s*movePanes\(dx\);\s*return;/);
     // The finger is handed back at release, in the same frame the half is committed, so
     // the page's own transition continues from where the finger left it.
     expect(source).toMatch(/if \(target && wasDragging && sameRoute\(target\)\) \{[\s\S]*?endPaneGesture\(\);[\s\S]*?void options\.go\(target\);/);
     // Turning round towards a different page lets the halves go where they stand.
-    expect(source).toMatch(/endPaneGesture\(\);\s*showPreview\(neighbour\);/);
+    expect(source).toMatch(/endPaneGesture\(\);\s*\/\/ The page follows the finger/);
     // And the shell hands the layout the same offset the page reads.
     expect(layout).toMatch(/panes: \(offset\) => \(offset === null \? paneDrag\.release\(\) : paneDrag\.drag\(offset\)\),/);
     expect(layout).toMatch(/route: routeOf,/);
   });
 
-  it("does not let the neighbour do the live page's work", () => {
-    // Settings reads autostart, the app version and notification permission, and
-    // asks GitHub for core versions -- four round trips per gesture, twice.
-    expect(settings.match(/if \(preview\) return;/g)?.length).toBeGreaterThanOrEqual(4);
-  });
 });

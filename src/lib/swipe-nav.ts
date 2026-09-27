@@ -30,32 +30,28 @@ const CONTROL = "button, a";
 
 /** Sideways travel before we commit to "this is a swipe" and start dragging. */
 const DRAG_START_PX = 10;
-/** Sideways travel at which the neighbour is mounted instead: rendering a page costs
- *  60-145ms measured, and paying that after the page has started moving is the jerk
- *  that reads as "nothing happens, then it jumps". Inside the slop the page is still
+/** Sideways travel at which the track gets a layer of its own. The first transform
+ *  on the track rasterises all the pages on it -- 50ms measured in the emulator, a
+ *  dropped frame just as the page starts to move. Inside the slop the page is still
  *  at rest, so the cost lands where there is nothing to notice. */
-const PREVIEW_START_PX = 4;
-/** How long a released gesture keeps its neighbour mounted. A second attempt in the
- *  same direction is then free; after this the strip is not held in memory for a
- *  reader who went back to reading the list. */
-const WARM_MS = 1200;
+const LAYER_START_PX = 4;
 /** How far the page will ever slide at the end of the list, approached but not
  *  reached: see wallOffset(). */
 const WALL_LIMIT_PX = 96;
 /** The window the flick speed is measured over. */
 const FLICK_WINDOW_MS = 100;
 /** The way back when the drag did not reach the threshold. */
-const SETTLE = "transform 160ms cubic-bezier(0.2, 0, 0, 1)";
-/** The way forward when a frame was missed. Rendering the neighbour page costs
- *  60-145ms measured; the finger keeps moving while that runs, and the page has to
- *  cover the missed distance in one frame or the gesture reads as a jump. Over
- *  70ms it reads as the sheet catching up. */
+const SETTLE_MS = 160;
+const SETTLE = `transform ${SETTLE_MS}ms cubic-bezier(0.2, 0, 0, 1)`;
+/** The way forward when a frame was missed. The finger keeps moving while the main
+ *  thread is busy, and the page has to cover the missed distance in one frame or the
+ *  gesture reads as a jump. Over 70ms it reads as the sheet catching up. */
 const CATCH_UP = "transform 70ms linear";
 /** Two missed frames of pointer events: past this the gap is a stall, not jitter. */
 const STALL_MS = 32;
 /** How long the released page takes to land on the neighbour it was dragged to. */
-const COMMIT_MS = 180;
-const COMMIT = `transform ${COMMIT_MS}ms cubic-bezier(0.2, 0, 0, 1)`;
+export const COMMIT_MS = 180;
+export const COMMIT = `transform ${COMMIT_MS}ms cubic-bezier(0.2, 0, 0, 1)`;
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -64,13 +60,9 @@ export interface SwipeNavOptions {
   path: () => string;
   /** Resolves once the new page is in the DOM. */
   go: (path: string) => Promise<void> | void;
-  /** The element that rides with the pointer: the track carrying the current page
-   *  and the neighbour mounted beside it. */
+  /** The element that rides with the pointer: the track carrying every page, side
+   *  by side, so the neighbour is already standing where the finger is heading. */
   track?: () => HTMLElement | null;
-  /** The neighbour to mount beside the page while the finger is down, and null
-   *  when the gesture ends. Without it a swipe reveals a strip of background
-   *  instead of the tab it is heading for. */
-  preview?: (path: string | null) => void;
   /** The strip, read at the moment of the gesture: the split page is two places
    *  wide, and whether the applications one of them exists depends on the VPN mode. */
   order?: () => readonly string[];
@@ -100,7 +92,6 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
   let lastMoveAt = 0;
   let dragging = false;
   let offset = 0;
-  let previewTo: string | null = null;
   let committing = false;
   /** The control the finger landed on, if any, until the gesture takes it away. */
   let control: HTMLElement | null = null;
@@ -109,11 +100,24 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
 
   const track = () => options.track?.() ?? null;
 
-  /** Mount -- or keep mounted -- the neighbour the finger is heading for. */
-  const showPreview = (to: string | null) => {
-    if (to === previewTo) return;
-    previewTo = to;
-    options.preview?.(to);
+  /**
+   * The track's own layer, for the length of a gesture only. Kept for good it would
+   * make the track a stacking context, and every modal on a page would paint under the
+   * tab pill; no modal can be open while a gesture runs (see REFUSED). Dropped once
+   * the settle that follows has finished moving it.
+   */
+  let layerTimer: ReturnType<typeof setTimeout> | undefined;
+  const holdLayer = () => {
+    clearTimeout(layerTimer);
+    const element = track();
+    if (element) element.style.willChange = "transform";
+  };
+  const dropLayer = (afterMs = 0) => {
+    clearTimeout(layerTimer);
+    layerTimer = setTimeout(() => {
+      const element = track();
+      if (element) element.style.willChange = "";
+    }, afterMs);
   };
 
   /** Two places, one page: the neighbour is a half of what is already on screen. */
@@ -179,10 +183,10 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
   };
 
   /**
-   * Land the released page on its neighbour, then swap the route underneath it.
-   * The route changes only after the animation and the preview is dropped in the
-   * same frame the track returns to rest: do it the other way round and the old
-   * page flashes back at full width while the new one mounts.
+   * Land the released page on its neighbour, then change the route underneath it.
+   * The route changes only after the animation, and the track returns to rest in the
+   * same frame the shell makes the neighbour the resting page: do it the other way
+   * round and the old page flashes back at full width for a frame.
    */
   const commit = async (to: string, direction: SwipeDirection) => {
     committing = true;
@@ -195,12 +199,12 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
       await wait(COMMIT_MS);
     }
     await options.go(to);
-    showPreview(null);
     offset = 0;
     if (element) {
       element.style.transition = "none";
       element.style.transform = "";
     }
+    dropLayer();
     committing = false;
   };
 
@@ -227,7 +231,6 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
    */
   const movePanes = (dx: number) => {
     paneGesture = true;
-    showPreview(null);
     const span = node.getBoundingClientRect().width;
     offset = pageTravel(dx, span, WALL_LIMIT_PX);
     options.panes?.(offset);
@@ -246,11 +249,7 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
       // Not committed yet: a vertical drag belongs to the list underneath, and
       // stealing it would make the app unreadable by touch.
       if (Math.abs(dx) < DRAG_START_PX || Math.abs(dx) < 2 * Math.abs(dy)) {
-        // Still inside the slop. If the finger is going sideways, this is where the
-        // neighbour is paid for -- see PREVIEW_START_PX.
-        if (Math.abs(dx) >= PREVIEW_START_PX && Math.abs(dx) >= 2 * Math.abs(dy)) {
-          showPreview(neighbourTo(options.path(), dx < 0 ? "next" : "prev"));
-        }
+        if (Math.abs(dx) >= LAYER_START_PX && Math.abs(dx) >= 2 * Math.abs(dy)) holdLayer();
         return;
       }
       dragging = true;
@@ -287,7 +286,6 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
     // The finger turned round and is heading for a different page after all: the
     // halves stop where they are and the window takes over.
     endPaneGesture();
-    showPreview(neighbour);
     // The page follows the finger one for one where there is a page to follow, and
     // meets the wall where there is none.
     const span = neighbour ? node.getBoundingClientRect().width : 0;
@@ -314,6 +312,7 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
       // sections travel the rest of the way under their own transition.
       endPaneGesture();
       offset = 0;
+      dropLayer();
       void options.go(target);
       return;
     }
@@ -324,13 +323,7 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
     }
     offset = 0;
     if (wasDragging) move(0, "settle");
-    // Kept warm for a moment: an attempt that was refused is usually tried again.
-    const token = previewTo;
-    if (token) {
-      setTimeout(() => {
-        if (pointerId === null && !committing && previewTo === token) showPreview(null);
-      }, WARM_MS);
-    }
+    dropLayer(wasDragging ? SETTLE_MS : 0);
   };
 
   const onCancel = (event: Event) => {
@@ -346,9 +339,9 @@ export function swipeNav(node: HTMLElement, options: SwipeNavOptions) {
     if (pointerId === null) return;
     release();
     control = null;
-    showPreview(null);
     endPaneGesture();
     move(0, "settle");
+    dropLayer(SETTLE_MS);
   };
 
   // A drag over a picture would otherwise start the browser's own image drag and

@@ -1,9 +1,5 @@
 <script lang="ts">
-  import { navPath } from "$lib/nav-path";
-  import { tabOf, zoneOf } from "$lib/nav-zones";
-  import { persistScroll } from "$lib/scroll-memory";
   import { paneDrag } from "$lib/pane-drag.svelte";
-  import { SPLIT_APPS, SPLIT_SITES } from "$lib/nav-zones";
   import { onDestroy, tick } from "svelte";
   import { split, type Mode } from "$lib/split.svelte";
   import { appSplitAvailable } from "$lib/split-availability";
@@ -18,18 +14,10 @@
   } from "$lib/site-pattern";
   import Dropdown from "$lib/components/Dropdown.svelte";
 
-  interface Props {
-    /** Path of the tab this page is standing in as; empty when it is the page. */
-    preview?: string;
-  }
-  let { preview = "" }: Props = $props();
-
   /* The tab is the store's, not the page's: applications and websites are two places
      in the swipe strip that share this route, so the shell has to be able to read and
-     move it. A preview shows the half its zone asks for and changes nothing -- two
-     mounted copies of this page must not fight over the same state. */
-  const previewTab = $derived(tabOf(preview));
-  const tab = $derived(previewTab ?? split.tab);
+     move it. */
+  const tab = $derived(split.tab);
   /* On Android there is no VPN mode to ask: the tunnel is the VpnService and per-app
    routing is what it does, so the applications half always exists. */
   const appsAvailable = $derived(appSplitAvailable());
@@ -133,16 +121,15 @@
   }
 
   function selectAppsTab(): void {
-    if (!preview) split.setTab("apps");
+    split.setTab("apps");
   }
 
   function selectWebsitesTab(): void {
-    if (!preview) split.setTab("websites");
+    split.setTab("websites");
     hideAppsUnavailableNotice();
   }
 
   $effect(() => {
-    if (preview) return;
     if (!appsAvailable && split.tab === "apps") split.setTab("websites");
     if (appsAvailable) hideAppsUnavailableNotice();
   });
@@ -352,7 +339,6 @@
       inert={tab !== "apps"}
       aria-hidden={tab !== "apps"}
       data-scroll
-      use:persistScroll={preview ? null : SPLIT_APPS}
     >
       {@render modeCard("apps")}
       <button class="btn panel-add" onclick={openAddApp}>{t("split.addApp")}</button>
@@ -389,7 +375,6 @@
       inert={tab === "apps"}
       aria-hidden={tab === "apps"}
       data-scroll
-      use:persistScroll={preview ? null : SPLIT_SITES}
     >
       {@render modeCard("websites")}
       <button class="btn panel-add" onclick={openAddSite}>{t("split.addSites")}</button>

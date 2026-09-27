@@ -3,8 +3,6 @@
   import { onBackButtonPress } from "@tauri-apps/api/app";
   import type { PluginListener } from "@tauri-apps/api/core";
   import { conn } from "$lib/conn.svelte";
-  import { navPath } from "$lib/nav-path";
-  import { persistScroll } from "$lib/scroll-memory";
   import { subs } from "$lib/subs.svelte";
   import { t } from "$lib/i18n.svelte";
   import { readClipboard } from "$lib/api";
@@ -29,11 +27,6 @@
   import type { Subscription, ServerEntry } from "$lib/subs.svelte";
   import type { LocationAction } from "$lib/location-actions";
 
-  interface Props {
-    /** Path of the tab this page is standing in as; empty when it is the page. */
-    preview?: string;
-  }
-  let { preview = "" }: Props = $props();
 
   type ModalKind =
     | "none"
@@ -540,7 +533,6 @@
   <main
     class="scroll"
     data-scroll
-    use:persistScroll={preview || navPath()}
     onscroll={(event) => (listScrolled = event.currentTarget.scrollTop > 0)}
   >
 

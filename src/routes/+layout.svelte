@@ -1,6 +1,6 @@
 <script lang="ts">
   import "../app.css";
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { NAV } from "$lib/nav";
@@ -8,9 +8,8 @@
   import { entryZone, routeOf, tabOf, zoneOf, zoneOrder } from "$lib/nav-zones";
   import { paneDrag } from "$lib/pane-drag.svelte";
   import { appSplitAvailable } from "$lib/split-availability";
-  import { swipeNav } from "$lib/swipe-nav";
+  import { COMMIT, COMMIT_MS, swipeNav } from "$lib/swipe-nav";
   import { stripGeometry } from "$lib/scroll-strip";
-  import { slideDirection } from "$lib/swipe";
   import { t } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
   import { conn } from "$lib/conn.svelte";
@@ -93,7 +92,6 @@
     };
   });
 
-  let { children } = $props();
 
   // Read through a $derived so the active-tab class re-evaluates reliably on every
   // navigation (intermittent stale state otherwise), and through `navPath` because
@@ -108,13 +106,24 @@
   const appsAvailable = $derived(appSplitAvailable());
   const currentZone = $derived(zoneOf(currentPath, split.tab));
 
-  // Which way a new page arrives. Recorded while the path changes and cleared
-  // when the animation is over, so a re-render cannot restart it.
-  let slide = $state<"next" | "prev" | null>(null);
-  /** The element the finger drags: the current page and its neighbour together.
-   *  Read through a getter because the action is attached to the content area
-   *  before this child exists. */
+  /** The element the finger drags: every page, side by side. Read through a getter
+   *  because the action is attached to the content area before this child exists. */
   let trackEl: HTMLDivElement | undefined = $state();
+
+  /* Every page stays mounted, side by side on the track, and a tab change only moves
+     the track. Mounting a page is what a change used to cost -- measured in the
+     emulator, 50-120ms for Split and Settings and 83-450ms for Home with forty
+     locations, all of it a frozen main thread right after the tap -- and a swipe paid
+     it twice: once for the neighbour mounted under the finger, once more when the
+     route changed and the real page replaced it. Now nothing mounts while anything
+     moves. */
+  const pageIndexOf = (path: string) =>
+    Math.max(0, TAB_PATHS.findIndex((p) => (p === "/" ? path === "/" : path.startsWith(p))));
+  const routeIndex = $derived(pageIndexOf(currentPath));
+  /** The page the track is resting on. It trails the route while a tap's slide is
+   *  running, and lands with it. */
+  let shown = $state(pageIndexOf(navPath()));
+  let slideToken = 0;
 
   /* The scrollbar is drawn here, over the gutter of whichever page is live. It cannot
      live in the page: the page is the thing a swipe moves, and the bar travelled across
@@ -129,7 +138,7 @@
   /** The scroller of the live page. The half of the split page that is off screen is
    *  inert, so it is not the one the bar should describe. */
   function liveScroller(): HTMLElement | null {
-    const list = document.querySelectorAll<HTMLElement>(".page-shell:not(.preview) [data-scroll]");
+    const list = document.querySelectorAll<HTMLElement>(".page-shell.current [data-scroll]");
     for (const el of list) if (!el.hasAttribute("inert")) return el;
     return null;
   }
@@ -153,22 +162,8 @@
       stripResize.observe(el);
     }
   }
-  /** The neighbour mounted beside the page while a swipe is in progress. */
-  let preview = $state<{ path: string; side: "next" | "prev" } | null>(null);
-  /** A page that was dragged in is already standing where it belongs; running the
-   *  arrival keyframes on top of that reads as a stutter. */
+  /** A route a swipe has already carried the track to: it lands without a slide. */
   let draggedIn: string | null = null;
-  let previousPath = "/";
-
-  /** Which side of the page the neighbour belongs on. */
-  function setPreview(to: string | null): void {
-    if (!to) {
-      preview = null;
-      return;
-    }
-    const order = zoneOrder(appsAvailable);
-    preview = { path: to, side: order.indexOf(to) >= order.indexOf(currentZone) ? "next" : "prev" };
-  }
 
   /** A page opens where the reader left it. A gesture that arrives at the split page
    *  from another page lands on the half that is selected there, not on the half the
@@ -190,22 +185,35 @@
     await tick();
   }
 
+  /* A route change the finger did not make -- a tab tap, Back -- slides the track
+     there the way a swipe lands: the same motion, the same duration, and the pages in
+     between pass by because they are there. The track returns to rest in the same
+     frame the resting page changes, so nothing jumps. */
   $effect(() => {
-    const path = navPath();
-    const direction = slideDirection(previousPath, path, TAB_PATHS);
-    previousPath = path;
-    if (draggedIn === path) {
+    const target = routeIndex;
+    const from = untrack(() => shown);
+    if (target === from) return;
+    const token = ++slideToken;
+    if (draggedIn === navPath()) {
       draggedIn = null;
-      slide = null;
+      shown = target;
       return;
     }
-    if (!direction) {
-      slide = null;
+    const el = trackEl;
+    const width = el?.clientWidth ?? 0;
+    const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (!el || width === 0 || still) {
+      shown = target;
       return;
     }
-    slide = direction;
-    const timer = setTimeout(() => (slide = null), 200);
-    return () => clearTimeout(timer);
+    el.style.transition = COMMIT;
+    el.style.transform = `translateX(${(from - target) * width}px)`;
+    setTimeout(() => {
+      if (token !== slideToken) return;
+      el.style.transition = "none";
+      el.style.transform = "";
+      shown = target;
+    }, COMMIT_MS);
   });
 
   function isActive(path: string): boolean {
@@ -254,8 +262,9 @@
   });
 
   $effect(() => {
-    page.url.pathname;
+    shown;
     split.tab;
+    stripTarget = null;
     void tick().then(() => syncStrip());
   });
 
@@ -405,32 +414,29 @@
       panes: (offset) => (offset === null ? paneDrag.release() : paneDrag.drag(offset)),
     landing: landingZone,
       track: () => trackEl ?? null,
-      preview: setPreview,
     }}
   >
-    <div bind:this={trackEl} class="page-track">
-      <div class="page-shell" class:from-right={slide === "next"} class:from-left={slide === "prev"}>
-        {@render children?.()}
-      </div>
-      {#if preview}
-        <!-- The tab the finger is dragging towards, for real: same components,
-             same stores, no data of its own to invent. It cannot be touched
-             because the finger is busy with the gesture. -->
+    <!-- The routes decide which page is current; the pages themselves are mounted here,
+         once, so that no tab change and no swipe ever waits for one to render. The
+         pages that are not current cannot be reached by focus or by touch. -->
+    <div bind:this={trackEl} class="page-track" style={`--shown: ${shown}`}>
+      {#each TAB_PATHS as path, slot (path)}
         <div
-          class="page-shell preview"
-          class:preview--next={preview.side === "next"}
-          class:preview--prev={preview.side === "prev"}
-          aria-hidden="true"
+          class="page-shell"
+          class:current={slot === shown}
+          style={`--slot: ${slot}`}
+          inert={slot !== shown}
+          aria-hidden={slot !== shown ? "true" : undefined}
         >
-          {#if preview.path === "/"}
-            <HomePage preview={preview.path} />
-          {:else if preview.path.startsWith("/split")}
-            <SplitPage preview={preview.path} />
-          {:else if preview.path.startsWith("/settings")}
-            <SettingsPage preview={preview.path} />
+          {#if path === "/"}
+            <HomePage />
+          {:else if path === "/split"}
+            <SplitPage />
+          {:else}
+            <SettingsPage active={slot === shown} />
           {/if}
         </div>
-      {/if}
+      {/each}
     </div>
     <!-- Over the pages, under the pill (5) and under every modal (100). The fade
          is a layer rather than a mask on the scroll container: a mask makes that
@@ -547,40 +553,18 @@
     inset: 0;
   }
 
+  /* Each page in its slot, the current one at the window. Placed with `left`, not a
+     transform, and no will-change: either would give the page its own stacking
+     context, and every modal rendered inside it would then sit under the tab pill --
+     dimmed page, bright pill. The slots move only when the resting page changes; what
+     moves under the finger is the track. */
   .page-shell {
     position: absolute;
-    inset: 0;
-    /* No will-change here on purpose. It would give this element its own layer
-       and therefore its own stacking context, and every modal rendered inside a
-       page would then sit under the tab pill -- dimmed page, bright pill. */
-  }
-
-  /* The neighbour sits outside the viewport, ready to be dragged in. */
-  .preview {
-    left: auto;
-    right: auto;
+    top: 0;
+    bottom: 0;
     width: 100%;
-    pointer-events: none;
+    left: calc((var(--slot) - var(--shown)) * 100%);
   }
-  .preview--next {
-    left: 100%;
-  }
-  .preview--prev {
-    right: 100%;
-  }
-  /* Transform and opacity only, and the arriving page rather than a crossfade:
-     the outgoing page is already gone by the time the new one is rendered, and
-     pretending otherwise would need both mounted at once. */
-  @keyframes page-from-right {
-    from { transform: translateX(28px); opacity: 0.35; }
-    to { transform: none; opacity: 1; }
-  }
-  @keyframes page-from-left {
-    from { transform: translateX(-28px); opacity: 0.35; }
-    to { transform: none; opacity: 1; }
-  }
-  .page-shell.from-right { animation: page-from-right 180ms cubic-bezier(0.2, 0, 0, 1); }
-  .page-shell.from-left { animation: page-from-left 180ms cubic-bezier(0.2, 0, 0, 1); }
 
   /* Without the label the icon sits alone, so it gets the height the label used to
      take and stays on the same centre line. */
