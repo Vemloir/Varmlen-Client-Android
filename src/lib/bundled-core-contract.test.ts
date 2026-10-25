@@ -11,9 +11,9 @@ describe("Android bundled Xray core + in-app kill switch", () => {
     const nativeBuild = read("../../scripts/android-native.sh");
     const version = core.match(/BUNDLED_XRAY_VERSION: &str = "([^"]+)"/)?.[1];
 
-    expect(version).toBe("26.3.27");
+    expect(version).toBe("26.10.21");
     expect(nativeBuild).toContain(`XRAY_VER="${version}"`);
-    expect(nativeBuild).toContain("57149ffd48b629c07bf76938e73ab2729fde5910091497eab3e93d1c190f4c1b");
+    expect(nativeBuild).toContain("d81604f35a56c98ea6091142c1c744f4895c7384bc2e1c85cd910612c70794e9");
     expect(nativeBuild).toContain("libxray.so.version");
   });
 

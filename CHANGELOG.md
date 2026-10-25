@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Bundle stable Xray 26.10.21, the first stable release after 26.3.27, in the
+  APK (`libxray.so`) and in the desktop fetch script, each pinned to the SHA-256
+  XTLS publishes for it.
+
 ## 0.4.0
 
 - The dropdown control in Settings was the same grey as the row's hover, so the

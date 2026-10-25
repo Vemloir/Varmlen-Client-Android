@@ -4,8 +4,8 @@
 # VpnService executes it with its TUN descriptor inherited through XRAY_TUN_FD.
 set -euo pipefail
 
-XRAY_VER="26.3.27"
-XRAY_SHA256="57149ffd48b629c07bf76938e73ab2729fde5910091497eab3e93d1c190f4c1b"
+XRAY_VER="26.10.21"
+XRAY_SHA256="d81604f35a56c98ea6091142c1c744f4895c7384bc2e1c85cd910612c70794e9"
 ABI="arm64-v8a"
 ROOT="$(pwd)"
 JNI="$ROOT/src-tauri/gen/android/app/src/main/jniLibs/$ABI"
