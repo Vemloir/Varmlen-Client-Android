@@ -403,6 +403,10 @@ async fn fetch_latest_release(kind: CoreKind) -> Result<serde_json::Value, Strin
 }
 
 async fn fetch_release_by_tag(kind: CoreKind, tag: &str) -> Result<serde_json::Value, String> {
+    // The tag comes from the page and becomes part of the API path.
+    if !valid_tag(tag) {
+        return Err(format!("invalid version tag: {tag}"));
+    }
     let client = http_client()?;
     let tag = if tag.starts_with('v') {
         tag.to_string()
