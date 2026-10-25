@@ -18,7 +18,8 @@ describe("card surface contract", () => {
       /\.list > \* \+ \*\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
     );
     expect(home).toMatch(/\.sub-card\s*\{[^}]*border:\s*none;/s);
-    expect(settings).toMatch(/\.theme-tile\s*\{[^}]*border:\s*none;/s);
+    // The theme is a row of the settings list, as on Linux, not a card of tiles.
+    expect(settings).not.toContain("theme-tile");
     expect(settings).toMatch(
       /\.row \+ \.row\s*\{[^}]*border-top:\s*1px solid var\(--bg\);/s,
     );

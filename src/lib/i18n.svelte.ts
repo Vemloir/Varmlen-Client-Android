@@ -165,6 +165,7 @@ const EN: Dict = {
   // settings
   "settings.title": "Settings",
   "settings.appearance": "Appearance",
+  "settings.theme": "Theme",
   "settings.dark": "Dark",
   "settings.light": "Light",
   "settings.interface": "Interface",
@@ -415,6 +416,7 @@ const RU: Dict = {
 
   "settings.title": "Настройки",
   "settings.appearance": "Оформление",
+  "settings.theme": "Тема",
   "settings.dark": "Тёмная",
   "settings.light": "Светлая",
   "settings.interface": "Интерфейс",
