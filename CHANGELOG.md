@@ -2,8 +2,9 @@
 
 ## Unreleased
 
-- A home-screen widget (#2), 4x1 at the least: the location's flag (a white
-  one when it has none) and name, the tunnel's live upload and
+- A home-screen widget (#2), 4x1 at the least: the location's flag -- the
+  app's own flag picture, square and inset like the connect button, a white
+  one when the location has no country -- and name, the tunnel's live upload and
   download speed, written as the notification writes it (`↑ 1.2 MB/s`), and
   a square connect button that lights up in the app's
   accent while connected. It speaks the language chosen in the app, not the

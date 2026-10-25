@@ -16,10 +16,11 @@ import java.io.File
 import java.util.Locale
 
 /**
- * Home-screen widget, 4x1 at the least: the location's flag and name, the
- * tunnel's live upload and download speed and a connect button that lights up
- * in the app's accent while connected. A location without a flag shows a
- * plain white flag.
+ * Home-screen widget, 4x1 at the least: the location's flag -- the app's own
+ * square flag picture, inset like the button -- and name, the tunnel's live
+ * upload and download speed and a connect button that lights up in the app's
+ * accent while connected. A location without a country shows a plain white
+ * flag.
  *
  * The VPN service runs in its own process and pushes every state change and,
  * while connected, the speed once a second. The provider renders the same
@@ -83,7 +84,6 @@ object VarmlenWidget {
     const val ACTION_TOGGLE = "app.varmlen.client.WIDGET_TOGGLE"
     private const val LOCATION_FILE = "widget-location.txt"
 
-    private const val NO_FLAG = "🏳️"
     /** The widget's padding on every side (widget_4x1.xml). */
     private const val WIDGET_PADDING_DP = 8
     private const val LANGUAGE_FILE = "widget-language.txt"
@@ -148,10 +148,10 @@ object VarmlenWidget {
     }
 
     /**
-     * The button is as wide as the widget is high, less the padding, so it is
-     * square and inset the same on every side whatever height the launcher
-     * gives a cell. Android 12 can resize a view in a widget; earlier versions
-     * keep the layout's width.
+     * The flag and the button are as wide as the widget is high, less the
+     * padding, so both are square and inset the same on every side whatever
+     * height the launcher gives a cell. Android 12 can resize a view in a
+     * widget; earlier versions keep the layout's width.
      */
     private fun squareButton(views: RemoteViews, options: Bundle?) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
@@ -160,6 +160,7 @@ object VarmlenWidget {
         if (height <= 0) return
         val side = (height - 2 * WIDGET_PADDING_DP).coerceIn(44, 96)
         views.setViewLayoutWidth(R.id.widget_toggle, side.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
+        views.setViewLayoutWidth(R.id.widget_flag, side.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
     }
 
     private fun build(context: Context, state: WidgetState): RemoteViews {
@@ -193,7 +194,7 @@ object VarmlenWidget {
                 WidgetPhase.DISCONNECTED -> R.string.widget_connect
             }
         ))
-        views.setTextViewText(R.id.widget_flag, state.icon.ifEmpty { NO_FLAG })
+        views.setImageViewResource(R.id.widget_flag, flagDrawable(context, state.icon))
         views.setTextViewText(
             R.id.widget_name,
             state.name.ifEmpty { strings.getString(R.string.widget_no_location) },
@@ -217,6 +218,15 @@ object VarmlenWidget {
         return views
     }
 
+    /** The square flag picture for a label's leading flag emoji, rendered from
+     *  the app's flag set by scripts/widget-flags.sh. */
+    private fun flagDrawable(context: Context, icon: String): Int {
+        val code = countryCode(icon) ?: return R.drawable.widget_flag_none
+        @Suppress("DiscouragedApi")
+        val id = context.resources.getIdentifier("widget_flag_$code", "drawable", context.packageName)
+        return if (id != 0) id else R.drawable.widget_flag_none
+    }
+
     fun openAppIntent(context: Context): Intent =
         Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 }
@@ -230,6 +240,14 @@ internal fun speedParts(bytesPerSecond: Long): Pair<String, String> {
         b < 1024 * 1024 -> "${b / 1024}" to "KB/s"
         else -> String.format("%.1f", b / 1048576.0) to "MB/s"
     }
+}
+
+/** The two-letter code a flag emoji spells (🇫🇮 -> "fi"), as the app's
+ *  `countryCodeFromFlag` reads it; null for anything else. */
+internal fun countryCode(icon: String): String? {
+    val points = icon.trim().codePoints().toArray()
+    if (points.size != 2 || points.any { it !in 0x1F1E6..0x1F1FF }) return null
+    return points.joinToString("") { ('a' + (it - 0x1F1E6)).toString() }
 }
 
 /**

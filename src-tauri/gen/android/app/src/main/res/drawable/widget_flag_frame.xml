@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The flag tile's outline: the button's shape, so both clip alike. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FF2B2B2B" />
+    <corners android:radius="16dp" />
+</shape>

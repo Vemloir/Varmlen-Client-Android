@@ -7,16 +7,19 @@
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:padding="8dp">
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:layout_marginEnd="10dp"
-        android:text="🇫🇮"
-        android:textSize="30sp" />
+    <!-- The location's flag, square and inset like the button (VarmlenWidget sizes both). -->
+    <ImageView
+        android:layout_width="64dp"
+        android:layout_height="match_parent"
+        android:background="@drawable/widget_flag_frame"
+        android:clipToOutline="true"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop"
+        android:src="@drawable/widget_flag_fi" />
     <TextView
         android:layout_width="0dp"
         android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
         android:layout_marginEnd="8dp"
         android:layout_weight="1"
         android:ellipsize="end"
@@ -24,11 +27,11 @@
         android:text="Finland | Helsinki"
         android:textColor="#FFFFFFFF"
         android:textSize="16sp" />
-    <!-- Speeds read as in the notification: ↑ 1.2 MB/s over ↓ 8.4 MB/s. -->
+    <!-- Speeds read as in the notification, ↑ 1.2 MB/s over ↓ 8.4 MB/s, right-aligned against the button. -->
     <LinearLayout
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:minWidth="100dp"
+        android:gravity="end"
         android:orientation="vertical">
             <LinearLayout
                 android:layout_width="wrap_content"

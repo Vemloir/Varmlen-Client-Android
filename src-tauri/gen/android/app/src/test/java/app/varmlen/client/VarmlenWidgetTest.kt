@@ -21,6 +21,15 @@ class VarmlenWidgetTest {
     }
 
     @Test
+    fun aFlagEmojiNamesItsCountryAndNothingElseDoes() {
+        assertEquals("fi", countryCode("🇫🇮"))
+        assertEquals("un", countryCode("🇺🇳"))
+        assertEquals(null, countryCode("☁️"))
+        assertEquals(null, countryCode(""))
+        assertEquals(null, countryCode("🇫"))
+    }
+
+    @Test
     fun speedsReadAsInTheNotification() {
         java.util.Locale.setDefault(java.util.Locale.ROOT)
         assertEquals("0" to "B/s", speedParts(0))
