@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The loopback HTTP listeners a latency probe opens take a password. For as
+  long as a probe ran, any app on the device could use them to reach the
+  location's server around the per-app split. Each probe now gets a fresh
+  random password that only it knows.
 - Bundle stable Xray 26.10.21, the first stable release after 26.3.27, in the
   APK (`libxray.so`) and in the desktop fetch script, each pinned to the SHA-256
   XTLS publishes for it.

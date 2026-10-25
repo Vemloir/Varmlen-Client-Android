@@ -295,7 +295,10 @@ struct LongPressHapticsArgs {
 pub fn set_long_press_haptics<R: Runtime>(app: &AppHandle<R>, enabled: bool) -> Result<(), String> {
     let vpn = app.state::<Vpn<R>>();
     vpn.0
-        .run_mobile_plugin::<serde_json::Value>("setLongPressHaptics", LongPressHapticsArgs { enabled })
+        .run_mobile_plugin::<serde_json::Value>(
+            "setLongPressHaptics",
+            LongPressHapticsArgs { enabled },
+        )
         .map(|_| ())
         .map_err(|e| e.to_string())
 }

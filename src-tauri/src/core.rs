@@ -273,10 +273,7 @@ async fn bundled_core(app: &AppHandle) -> Option<BundledCore> {
             } else {
                 core_version_of(&p)
                     .filter(|t| valid_tag(t))
-                    .map(|tag| BundledCore {
-                        bin: p,
-                        tag,
-                    })
+                    .map(|tag| BundledCore { bin: p, tag })
             }
         }
         Err(_) => None,
@@ -320,9 +317,7 @@ async fn resolved_active(app: &AppHandle, kind: CoreKind) -> Option<(PathBuf, St
             return Some((p, tag, false));
         }
     }
-    bundled_core(app)
-        .await
-        .map(|b| (b.bin, b.tag, true))
+    bundled_core(app).await.map(|b| (b.bin, b.tag, true))
 }
 
 /// One-time cleanup of stale sing-box artifacts from the dual-core era. xray is
@@ -517,8 +512,7 @@ fn asset_matches(kind: CoreKind, name: &str) -> bool {
             // pins for the APK).
             #[cfg(target_os = "android")]
             {
-                return std::env::consts::ARCH == "aarch64"
-                    && name == "Xray-android-arm64-v8a.zip";
+                return std::env::consts::ARCH == "aarch64" && name == "Xray-android-arm64-v8a.zip";
             }
             #[cfg(not(target_os = "android"))]
             // The native-TUN host is Linux only.
@@ -739,11 +733,10 @@ pub async fn core_info(app: AppHandle, kind: String) -> Result<CoreInfo, String>
     #[cfg(target_os = "android")]
     {
         let bundled = bundled_core(&app).await;
-        let (active_bin, active_tag_str, _) = resolved_active(&app, kind).await.unwrap_or((
-            PathBuf::new(),
-            String::new(),
-            false,
-        ));
+        let (active_bin, active_tag_str, _) =
+            resolved_active(&app, kind)
+                .await
+                .unwrap_or((PathBuf::new(), String::new(), false));
         let _ = active_bin;
         let installed: Vec<InstalledVersion> = {
             let mut v: Vec<InstalledVersion> = bundled

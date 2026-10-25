@@ -1055,8 +1055,55 @@ async fn probe_dns_through_proxy(client: &reqwest::Client, urls: &[String]) -> R
 /// whole latency budget.
 const RESOLVER_PROBE_BUDGET: Duration = Duration::from_secs(5);
 
+/// The password on the loopback HTTP listeners a latency probe opens.
+///
+/// A listener on 127.0.0.1 serves every app on the device for as long as the
+/// probe runs, and through it reaches the location's server -- around the
+/// per-app split and without the user's say. Each probe's listeners get a
+/// fresh random password that only this probe knows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProbeCredential {
+    user: String,
+    pass: String,
+}
+
+impl ProbeCredential {
+    fn fresh() -> Result<Self, String> {
+        use std::io::Read;
+        let mut bytes = [0u8; 24];
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut random| random.read_exact(&mut bytes))
+            .map_err(|e| format!("read /dev/urandom: {e}"))?;
+        let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+        Ok(Self {
+            user: hex[..16].to_string(),
+            pass: hex[16..].to_string(),
+        })
+    }
+
+    /// Require this credential on every inbound of a probe config.
+    fn close_inbounds(&self, config: &mut serde_json::Value) -> Result<(), String> {
+        let inbounds = config
+            .get_mut("inbounds")
+            .and_then(serde_json::Value::as_array_mut)
+            .ok_or("ping config has no inbounds")?;
+        for inbound in inbounds {
+            let settings = inbound
+                .get_mut("settings")
+                .and_then(serde_json::Value::as_object_mut)
+                .ok_or("ping inbound has no settings")?;
+            settings.insert(
+                "accounts".into(),
+                serde_json::json!([{ "user": self.user, "pass": self.pass }]),
+            );
+        }
+        Ok(())
+    }
+}
+
 async fn probe_proxy_port(
     port: u16,
+    credential: &ProbeCredential,
     timeout: Duration,
     dns_urls: &[String],
     require_dns: bool,
@@ -1064,7 +1111,8 @@ async fn probe_proxy_port(
     let client = reqwest::Client::builder()
         .proxy(
             reqwest::Proxy::all(format!("http://127.0.0.1:{port}"))
-                .map_err(|e| format!("proxy: {e}"))?,
+                .map_err(|e| format!("proxy: {e}"))?
+                .basic_auth(&credential.user, &credential.pass),
         )
         .redirect(reqwest::redirect::Policy::none())
         .timeout(timeout)
@@ -1134,8 +1182,10 @@ pub async fn proxy_get_ping(
     let proxy_count = crate::xray::ping_proxy_count(&server)?;
     let dns_urls = crate::xray::dns_probe_urls(&server);
     let ports = free_local_ports(proxy_count)?;
-    let cfg = serde_json::to_string(&crate::xray::build_ping_config(&server, &ports)?)
-        .map_err(|e| e.to_string())?;
+    let credential = ProbeCredential::fresh()?;
+    let mut cfg = crate::xray::build_ping_config(&server, &ports)?;
+    credential.close_inbounds(&mut cfg)?;
+    let cfg = serde_json::to_string(&cfg).map_err(|e| e.to_string())?;
 
     // Android: exec the ACTIVE core (downloaded version or the APK-bundled
     // one), config in filesDir.
@@ -1216,7 +1266,7 @@ pub async fn proxy_get_ping(
             ports
                 .iter()
                 .copied()
-                .map(|port| probe_proxy_port(port, remaining, &dns_urls, true)),
+                .map(|port| probe_proxy_port(port, &credential, remaining, &dns_urls, true)),
         )
         .await
         {
@@ -1230,7 +1280,7 @@ pub async fn proxy_get_ping(
             ports
                 .iter()
                 .copied()
-                .map(|port| probe_proxy_port(port, remaining, &dns_urls, false)),
+                .map(|port| probe_proxy_port(port, &credential, remaining, &dns_urls, false)),
         )
         .await
         .ok_or_else(|| "all proxy variants failed the latency probe".to_string())
@@ -1271,8 +1321,7 @@ pub fn read_tunnel_stats(root: &std::path::Path, names: &[&str]) -> Option<Tunne
             let text = std::fs::read_to_string(stats_dir.join(file)).ok()?;
             text.trim().parse::<u64>().ok()
         };
-        let (Some(tx_bytes), Some(rx_bytes)) = (counter("tx_bytes"), counter("rx_bytes"))
-        else {
+        let (Some(tx_bytes), Some(rx_bytes)) = (counter("tx_bytes"), counter("rx_bytes")) else {
             continue;
         };
         let appeared = std::fs::metadata(root.join(name))
@@ -1427,5 +1476,30 @@ mod ping_tests {
             .expect("fast successful path should finish before the slow path");
 
         assert_eq!(result, Some(37));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProbeCredential;
+
+    #[test]
+    fn probe_listeners_require_a_password_of_their_own() {
+        let credential = ProbeCredential::fresh().unwrap();
+        assert_ne!(credential, ProbeCredential::fresh().unwrap());
+        let mut config = serde_json::json!({
+            "inbounds": [
+                {"tag": "http-in-0", "listen": "127.0.0.1", "port": 43001, "protocol": "http", "settings": {}},
+                {"tag": "http-in-1", "listen": "127.0.0.1", "port": 43002, "protocol": "http", "settings": {}}
+            ]
+        });
+        credential.close_inbounds(&mut config).unwrap();
+        for inbound in config["inbounds"].as_array().unwrap() {
+            assert_eq!(inbound["settings"]["accounts"][0]["user"], credential.user);
+            assert_eq!(inbound["settings"]["accounts"][0]["pass"], credential.pass);
+        }
+        assert!(credential
+            .close_inbounds(&mut serde_json::json!({"inbounds": [{"tag": "bare"}]}))
+            .is_err());
     }
 }
