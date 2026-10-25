@@ -722,7 +722,14 @@
     </div>
   </section>
 
-  <footer class="app-version muted">Varmlen {appVersion}</footer>
+  <footer class="app-version muted">
+    Varmlen {appVersion}{__VARMLEN_BUILD__.versionCode
+      ? ` (${__VARMLEN_BUILD__.versionCode})`
+      : ""}
+    {#if __VARMLEN_BUILD__.commit}
+      <span class="build-id">{__VARMLEN_BUILD__.commit} · {__VARMLEN_BUILD__.time}</span>
+    {/if}
+  </footer>
 </main>
 
 {#if showLog}
@@ -980,6 +987,11 @@
     text-align: center;
     font-size: 11px;
     letter-spacing: 0.02em;
+  }
+  .build-id {
+    display: block;
+    font-variant-numeric: tabular-nums;
+    user-select: text;
   }
   .row-text {
     flex: 1;
