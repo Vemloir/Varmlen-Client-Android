@@ -1676,9 +1676,9 @@ pub fn build_xray_config(
 }
 
 /// Device-free equivalent used to validate transport/routing JSON before
-/// touching kernel/OS network state (desktop `xray run -test`, and the
-/// Android preflight check run before a candidate config is ever allowed to
-/// replace the active tunnel).
+/// touching kernel/OS network state (desktop `xray run -test`; Android builds
+/// its own with `build_android_validation_config`).
+#[cfg(any(not(target_os = "android"), test))]
 pub fn build_xray_validation_config(
     server: &VlessServer,
     split: &SplitInput,

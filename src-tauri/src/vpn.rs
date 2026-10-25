@@ -7,7 +7,10 @@
 //! There is no unix socket / systemd service, and no second core anymore.
 
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+#[cfg(not(target_os = "android"))]
+use std::process::Child;
+use std::process::{Command, Stdio};
+#[cfg(not(target_os = "android"))]
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -18,9 +21,9 @@ use serde::{Deserialize, Serialize};
 use crate::core::CoreKind;
 use crate::split::SplitInput;
 use crate::subscription::VlessServer;
-use crate::xray::{
-    build_xray_config, build_xray_validation_config, validate_server, AppSplitOwner,
-};
+use crate::xray::validate_server;
+#[cfg(not(target_os = "android"))]
+use crate::xray::{build_xray_config, build_xray_validation_config, AppSplitOwner};
 
 /// Returned to the frontend; shape unchanged from the old socket protocol so
 /// `api.ts` keeps working.
@@ -67,6 +70,7 @@ impl HelperResponse {
 
 // --- child processes (owned by the GUI) ------------------------------------
 
+#[cfg(not(target_os = "android"))]
 fn xray_child() -> &'static Mutex<Option<Child>> {
     static C: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(None))
@@ -75,6 +79,7 @@ fn xray_child() -> &'static Mutex<Option<Child>> {
 /// Serializes connect/disconnect end-to-end. Without it two overlapping
 /// vpn_connect calls can interleave around the brief child-slot lock and orphan
 /// an xray process + tunnel; disconnect also takes it so it can't race a connect.
+#[cfg(not(target_os = "android"))]
 fn vpn_op_lock() -> &'static tokio::sync::Mutex<()> {
     static L: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
     L.get_or_init(|| tokio::sync::Mutex::new(()))
@@ -90,26 +95,32 @@ fn vpn_op_lock() -> &'static tokio::sync::Mutex<()> {
 // (which implies traffic flows freely). With the kill switch OFF, the watcher
 // instead tears the routing down so direct connectivity is restored.
 
+#[cfg(not(target_os = "android"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// "disconnected" | "connected" | "dropped". Authoritative for vpn_status.
+#[cfg(not(target_os = "android"))]
 fn conn_phase() -> &'static Mutex<String> {
     static P: OnceLock<Mutex<String>> = OnceLock::new();
     P.get_or_init(|| Mutex::new("disconnected".into()))
 }
+#[cfg(not(target_os = "android"))]
 fn set_phase(p: &str) {
     *conn_phase().lock().unwrap() = p.to_string();
 }
 
 /// Bumped on every connect; a watcher exits once its generation is stale (a
 /// newer connect superseded it).
+#[cfg(not(target_os = "android"))]
 static CONN_GEN: AtomicU64 = AtomicU64::new(0);
 /// Set before an intentional stop_all (user disconnect / reconnect) so the
 /// watcher never mistakes a deliberate teardown for a crash.
+#[cfg(not(target_os = "android"))]
 static INTENTIONAL_STOP: AtomicBool = AtomicBool::new(false);
 
 /// React to an unexpected xray exit. Kill switch on → keep blocking (the point),
 /// just mark the phase. Off → restore direct connectivity via the helper cleanup.
+#[cfg(not(target_os = "android"))]
 fn handle_crash(app: &tauri::AppHandle, killswitch: bool) {
     use tauri::Emitter;
     if killswitch {
@@ -126,6 +137,7 @@ fn handle_crash(app: &tauri::AppHandle, killswitch: bool) {
 
 /// Poll the xray child once a second; on an unexpected exit, run `handle_crash`.
 /// Exits quietly when superseded (stale generation) or on an intentional stop.
+#[cfg(not(target_os = "android"))]
 fn spawn_crash_watcher(app: tauri::AppHandle, killswitch: bool, generation: u64) {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(1000));
@@ -146,6 +158,7 @@ fn spawn_crash_watcher(app: tauri::AppHandle, killswitch: bool, generation: u64)
     });
 }
 
+#[cfg(not(target_os = "android"))]
 fn pid_of(slot: &Mutex<Option<Child>>) -> Option<u32> {
     let mut g = slot.lock().unwrap();
     match g.as_mut() {
@@ -163,6 +176,7 @@ fn pid_of(slot: &Mutex<Option<Child>>) -> Option<u32> {
 /// SIGTERM a child so it can tear down cleanly (xray closes its native tun fd,
 /// which removes the device), wait up to ~5s, then SIGKILL. The kernel routing
 /// is the helper's (`route-down`), not xray's.
+#[cfg(not(target_os = "android"))]
 fn terminate_gracefully(child: &mut Child) {
     let pid = child.id() as i32;
     unsafe {
@@ -185,6 +199,7 @@ fn terminate_gracefully(child: &mut Child) {
 /// Fast best-effort teardown for app exit: SIGKILL xray (no graceful wait —
 /// we're quitting) + drop the killswitch + cleanup, so the tunnel never
 /// outlives the process. Idempotent. Called from the RunEvent::Exit handler.
+#[cfg(not(target_os = "android"))]
 pub(crate) fn teardown_on_exit(app: &tauri::AppHandle) {
     INTENTIONAL_STOP.store(true, Ordering::SeqCst);
     if let Some(probe) = probe_bin(app) {
@@ -199,6 +214,7 @@ pub(crate) fn teardown_on_exit(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn stop_all(app: &tauri::AppHandle) {
     if let Some(probe) = probe_bin(app) {
         let _ = Command::new(&probe).arg("killswitch-down").status();
@@ -215,6 +231,7 @@ fn stop_all(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn last_error_line(stderr: &str) -> String {
     let strip = |s: &str| s.replace('\u{1b}', "");
     stderr
@@ -306,6 +323,7 @@ fn old_helper_uninstall(app: &tauri::AppHandle) -> Option<PathBuf> {
 
 /// Resolve a server host to IPs for the killswitch allow-list. Servers are IP
 /// literals now, so this is usually a no-op parse.
+#[cfg(not(target_os = "android"))]
 fn resolve_ips(host: &str) -> Vec<std::net::IpAddr> {
     use std::net::ToSocketAddrs;
     use std::str::FromStr;
@@ -398,6 +416,7 @@ fn ensure_probe_installed(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 // --- connect / disconnect ---------------------------------------------------
 
+#[cfg(not(target_os = "android"))]
 fn spawn_core(bin: &PathBuf, cfg_path: &PathBuf) -> Result<Child, String> {
     let mut child = Command::new(bin)
         .arg("run")
@@ -438,6 +457,7 @@ fn spawn_core(bin: &PathBuf, cfg_path: &PathBuf) -> Result<Child, String> {
     Ok(child)
 }
 
+#[cfg(not(target_os = "android"))]
 fn runtime_dir() -> PathBuf {
     let base = std::env::var("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -467,6 +487,8 @@ fn write_private(path: &PathBuf, content: &str) -> Result<(), String> {
     Ok(())
 }
 
+// A Tauri command's arguments are the page's call; they stay flat.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn vpn_connect(
     app: tauri::AppHandle,
@@ -527,6 +549,8 @@ pub async fn vpn_connect(
 
     #[cfg(not(target_os = "android"))]
     {
+        // The desktop path always rebuilds the tunnel.
+        let _ = reconfigure;
         // Hold the op lock for the whole connect so it can't interleave with another
         // connect/disconnect and orphan a tunnel.
         let _op = vpn_op_lock().lock().await;
@@ -663,6 +687,7 @@ pub async fn vpn_connect(
 }
 
 /// Validate an xray config with `xray run -test -c <file>` before launch.
+#[cfg(not(target_os = "android"))]
 fn validate_xray(bin: &PathBuf, cfg: &PathBuf) -> Result<(), String> {
     let out = Command::new(bin)
         .arg("run")
@@ -1314,6 +1339,7 @@ pub struct TunnelStats {
 /// VpnService's UID counters there instead. A name that cannot be read is
 /// skipped and no counters at all is `None`, which the interface renders as a
 /// dash: a zero would claim an idle tunnel on the strength of nothing.
+#[cfg(any(not(target_os = "android"), test))]
 pub fn read_tunnel_stats(root: &std::path::Path, names: &[&str]) -> Option<TunnelStats> {
     for name in names {
         let stats_dir = root.join(name).join("statistics");

@@ -5,7 +5,9 @@
 //! Each app's icon is resolved from the icon theme dirs and returned inline as
 //! a data URI, so the webview can render it without extra asset permissions.
 
-use std::collections::{BTreeMap, HashMap};
+#[cfg(not(target_os = "android"))]
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +24,7 @@ pub struct InstalledApp {
     pub icon: Option<String>,
 }
 
+#[cfg(not(target_os = "android"))]
 fn desktop_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![
         PathBuf::from("/usr/share/applications"),
@@ -284,6 +287,7 @@ fn resolve_icon(icon: &str, index: &HashMap<String, PathBuf>) -> Option<String> 
     read_icon_data_uri(path)
 }
 
+#[cfg(not(target_os = "android"))]
 fn parse_desktop_entry(path: &Path, icon_index: &HashMap<String, PathBuf>) -> Option<InstalledApp> {
     let text = fs::read_to_string(path).ok()?;
     let mut in_entry = false;

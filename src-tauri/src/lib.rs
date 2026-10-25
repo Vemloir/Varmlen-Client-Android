@@ -1,3 +1,8 @@
+// A command split by platform returns early from its Android block; the
+// desktop block after it is compiled out there, which leaves the `return`
+// looking needless to clippy on that target only.
+#![cfg_attr(target_os = "android", allow(clippy::needless_return))]
+
 #[cfg(target_os = "android")]
 mod android_xray;
 mod apps;
@@ -431,6 +436,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            #[cfg(not(target_os = "android"))]
             use tauri::Manager;
             // Seed the bundled xray into the core dir if nothing is installed,
             // so the app has a working core on first launch even when GitHub is

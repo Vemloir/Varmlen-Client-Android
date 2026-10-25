@@ -19,6 +19,7 @@ use tauri::{AppHandle, Emitter, Manager};
 /// discovery (`bundled_tag`) reads the actual version from the binary, so this
 /// constant is documentation + the contract-test anchor, not a live source.
 #[cfg(target_os = "android")]
+#[allow(dead_code)]
 const BUNDLED_XRAY_VERSION: &str = "26.10.21";
 
 /// Which core a request targets. xray is now the sole core: its native tun does

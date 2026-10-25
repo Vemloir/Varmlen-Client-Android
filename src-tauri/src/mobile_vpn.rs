@@ -59,13 +59,14 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 /// Watch the (cheap, want-flag-backed) running state on a NATIVE thread and emit
 /// a global `vpn-running` event the instant it flips. Why this and not the
 /// Kotlin plugin's `trigger`:
-///   - A native thread isn't throttled like the WebView's JS timers when the app
-///     is backgrounded (the notification shade is open), so a disconnect there is
-///     still caught promptly.
-///   - A GLOBAL event (`app.emit`) goes through `core:event`, which the default
-///     capability already grants — unlike a plugin `trigger`, whose
-///     `registerListener` command is ACL-gated and silently denied for this
-///     inline plugin (no permission manifest exists for it).
+/// - A native thread isn't throttled like the WebView's JS timers when the app
+///   is backgrounded (the notification shade is open), so a disconnect there is
+///   still caught promptly.
+/// - A GLOBAL event (`app.emit`) goes through `core:event`, which the default
+///   capability already grants — unlike a plugin `trigger`, whose
+///   `registerListener` command is ACL-gated and silently denied for this
+///   inline plugin (no permission manifest exists for it).
+///
 /// Polls fast while connected (catch a drop), slow while idle (catch a tile/boot
 /// connect cheaply). User-initiated connect/disconnect update the UI directly.
 fn start_state_watcher<R: Runtime>(app: AppHandle<R>) {
@@ -84,6 +85,8 @@ fn start_state_watcher<R: Runtime>(app: AppHandle<R>) {
 }
 
 /// Start the VPN: hand the generated xray config + per-app split to the service.
+// Each argument is one field of the service intent; they stay flat.
+#[allow(clippy::too_many_arguments)]
 pub fn connect<R: Runtime>(
     app: &AppHandle<R>,
     config: String,
