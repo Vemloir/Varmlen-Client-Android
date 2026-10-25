@@ -56,6 +56,7 @@
                     android:textSize="17sp" />
             </LinearLayout>
             <TextView
+                android:id="@+id/widget_up_unit"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/widget_unit"
@@ -91,6 +92,7 @@
                     android:textSize="17sp" />
             </LinearLayout>
             <TextView
+                android:id="@+id/widget_down_unit"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/widget_unit"

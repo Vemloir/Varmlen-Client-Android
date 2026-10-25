@@ -828,6 +828,21 @@ pub async fn set_status_bar(app: tauri::AppHandle, light: bool) -> Result<(), St
     }
 }
 
+/// The language the home-screen widget speaks: the app's (Android). Nothing to
+/// do on desktop.
+#[tauri::command]
+pub async fn set_widget_language(app: tauri::AppHandle, language: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::mobile_vpn::set_widget_language(&app, language);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (&app, language);
+        Ok(())
+    }
+}
+
 /// Whether a long press may play the system haptic (Android): only over text that
 /// can be copied. Nothing to do on desktop.
 #[tauri::command]

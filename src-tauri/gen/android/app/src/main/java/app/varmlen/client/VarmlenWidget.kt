@@ -6,6 +6,7 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.VpnService
 import android.os.Bundle
 import android.widget.RemoteViews
@@ -81,6 +82,29 @@ object VarmlenWidget {
     private const val LOCATION_FILE = "widget-location.txt"
 
     private const val NO_FLAG = "🏳️"
+    private const val LANGUAGE_FILE = "widget-language.txt"
+    private val LANGUAGES = setOf("en", "ru")
+
+    /** The app's language, which the widget speaks instead of the system's.
+     *  Returns whether it changed. */
+    fun saveLanguage(context: Context, language: String): Boolean {
+        if (language !in LANGUAGES) return false
+        val file = File(context.filesDir, LANGUAGE_FILE)
+        val current = try { file.readText() } catch (_: Throwable) { "" }
+        if (current == language) return false
+        return try { file.writeText(language); true } catch (_: Throwable) { false }
+    }
+
+    /** A context whose resources are in the app's language, when it set one. */
+    private fun localized(context: Context): Context {
+        val language = try {
+            File(context.filesDir, LANGUAGE_FILE).readText().trim()
+        } catch (_: Throwable) { "" }
+        if (language !in LANGUAGES) return context
+        val configuration = Configuration(context.resources.configuration)
+        configuration.setLocale(Locale(language))
+        return context.createConfigurationContext(configuration)
+    }
     private const val ICON_IDLE = 0xFFFFFFFF.toInt()
     private const val ICON_CONNECTING = 0xFF8C8C8C.toInt()
     private const val ICON_ON_ACCENT = 0xFF1E1E1E.toInt()
@@ -120,6 +144,11 @@ object VarmlenWidget {
 
     private fun build(context: Context, state: WidgetState): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.widget_4x1)
+        // The launcher would resolve the layout's own strings in the system's
+        // language, so every word is set here in the app's.
+        val strings = localized(context)
+        views.setTextViewText(R.id.widget_up_unit, strings.getString(R.string.widget_unit))
+        views.setTextViewText(R.id.widget_down_unit, strings.getString(R.string.widget_unit))
         val live = state.phase == WidgetPhase.CONNECTED
         views.setTextViewText(R.id.widget_up, if (live) mbps(state.upBps ?: 0) else "—")
         views.setTextViewText(R.id.widget_down, if (live) mbps(state.downBps ?: 0) else "—")
@@ -135,7 +164,7 @@ object VarmlenWidget {
                 WidgetPhase.DISCONNECTED -> ICON_IDLE
             },
         )
-        views.setContentDescription(R.id.widget_toggle, context.getString(
+        views.setContentDescription(R.id.widget_toggle, strings.getString(
             when (state.phase) {
                 WidgetPhase.CONNECTED -> R.string.widget_disconnect
                 WidgetPhase.CONNECTING -> R.string.widget_connecting
@@ -145,7 +174,7 @@ object VarmlenWidget {
         views.setTextViewText(R.id.widget_flag, state.icon.ifEmpty { NO_FLAG })
         views.setTextViewText(
             R.id.widget_name,
-            state.name.ifEmpty { context.getString(R.string.widget_no_location) },
+            state.name.ifEmpty { strings.getString(R.string.widget_no_location) },
         )
         val openApp = PendingIntent.getActivity(
             context, 0, openAppIntent(context),

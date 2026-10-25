@@ -9,7 +9,7 @@
   import { appSplitAvailable } from "$lib/split-availability";
   import { COMMIT, COMMIT_MS, swipeNav } from "$lib/swipe-nav";
   import { stripGeometry } from "$lib/scroll-strip";
-  import { t } from "$lib/i18n.svelte";
+  import { i18n, t } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
   import { conn } from "$lib/conn.svelte";
   import { subs } from "$lib/subs.svelte";
@@ -22,6 +22,7 @@
     setTrayStatus,
     setCloseToTray,
     setStatusBar,
+    setWidgetLanguage,
     syncSubscriptionRefresh,
   } from "$lib/api";
   import { listen } from "@tauri-apps/api/event";
@@ -238,6 +239,11 @@
   onMount(() => (isAndroid ? watchKeyboard() : undefined));
   // And the long-press buzz, which belongs to copyable text only: see $lib/long-press-haptics.
   onMount(() => (isAndroid ? watchLongPressHaptics() : undefined));
+  // The home-screen widget speaks the app's language: told at start and on every change.
+  $effect(() => {
+    const language = i18n.lang;
+    if (isAndroid) void setWidgetLanguage(language).catch(() => {});
+  });
 
   /* The bar follows the page it belongs to: on scroll, when the content under it grows
      (flags, ping results, subscription cards), when the window changes size, and when

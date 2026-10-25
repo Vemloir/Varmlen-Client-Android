@@ -5,7 +5,8 @@
 - A home-screen widget (#2), 4x1 at the least: the location's flag (a white
   one when it has none) and name, the tunnel's live upload and
   download speed in Mbit/s and a connect button that lights up in the app's
-  accent while connected. While connected the VPN
+  accent while connected. It speaks the language chosen in the app, not the
+  system's. While connected the VPN
   service updates it once a second; otherwise it costs nothing. The button
   connects to the last location the way the Quick Settings tile does and
   opens the app when there is none yet. It reaches the VPN through a receiver

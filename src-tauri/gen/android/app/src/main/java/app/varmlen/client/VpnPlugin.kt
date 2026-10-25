@@ -77,6 +77,11 @@ class ConnectArgs {
 }
 
 @InvokeArg
+class WidgetLanguageArgs {
+    var language: String = ""
+}
+
+@InvokeArg
 class AppUpdateArgs {
     var tag: String = ""
 }
@@ -430,6 +435,17 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
 
     /** Whether a long press may buzz: only over text that can be copied. The page
      *  says so at every touch-down, before the long press can happen. */
+    /** The home-screen widget speaks the app's language, not the system's. */
+    @Command
+    fun setWidgetLanguage(invoke: Invoke) {
+        val args = invoke.parseArgs(WidgetLanguageArgs::class.java)
+        val context = activity.applicationContext
+        if (VarmlenWidget.saveLanguage(context, args.language)) {
+            VarmlenWidget.render(context, VarmlenWidget.restingState(context))
+        }
+        invoke.resolve()
+    }
+
     @Command
     fun setLongPressHaptics(invoke: Invoke) {
         val args = invoke.parseArgs(LongPressHapticsArgs::class.java)

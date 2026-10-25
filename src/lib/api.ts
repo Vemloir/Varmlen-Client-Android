@@ -299,6 +299,11 @@ export function setStatusBar(light: boolean): Promise<void> {
 }
 
 /** Allow the long-press haptic (Android) -- only while the finger is on copyable text. */
+/** The home-screen widget speaks the app's language (Android). */
+export function setWidgetLanguage(language: string): Promise<void> {
+  return invoke<void>("set_widget_language", { language });
+}
+
 export function setLongPressHaptics(enabled: boolean): Promise<void> {
   return invoke<void>("set_long_press_haptics", { enabled });
 }

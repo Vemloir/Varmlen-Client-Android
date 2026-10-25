@@ -290,6 +290,23 @@ pub fn set_bar_style<R: Runtime>(app: &AppHandle<R>, light: bool) -> Result<(), 
 }
 
 #[derive(Serialize)]
+struct WidgetLanguageArgs {
+    language: String,
+}
+
+/// Tell the home-screen widget which language the app speaks.
+pub fn set_widget_language<R: Runtime>(app: &AppHandle<R>, language: String) -> Result<(), String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>(
+            "setWidgetLanguage",
+            WidgetLanguageArgs { language },
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
 struct LongPressHapticsArgs {
     enabled: bool,
 }
