@@ -4,7 +4,8 @@
 
 - A home-screen widget (#2), 4x1 at the least: the location's flag (a white
   one when it has none) and name, the tunnel's live upload and
-  download speed in Mbit/s and a connect button that lights up in the app's
+  download speed, written as the notification writes it (`↑ 1.2 MB/s`), and
+  a square connect button that lights up in the app's
   accent while connected. It speaks the language chosen in the app, not the
   system's. While connected the VPN
   service updates it once a second; otherwise it costs nothing. The button

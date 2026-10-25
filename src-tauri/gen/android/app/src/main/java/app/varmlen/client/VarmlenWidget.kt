@@ -8,7 +8,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
+import android.util.TypedValue
 import android.widget.RemoteViews
 import java.io.File
 import java.util.Locale
@@ -82,6 +84,8 @@ object VarmlenWidget {
     private const val LOCATION_FILE = "widget-location.txt"
 
     private const val NO_FLAG = "🏳️"
+    /** The widget's padding on every side (widget_4x1.xml). */
+    private const val WIDGET_PADDING_DP = 8
     private const val LANGUAGE_FILE = "widget-language.txt"
     private val LANGUAGES = setOf("en", "ru")
 
@@ -136,10 +140,26 @@ object VarmlenWidget {
             manager.getAppWidgetIds(ComponentName(context, VarmlenWidgetProvider::class.java))
         } catch (_: Throwable) { return }
         if (ids.isEmpty()) return
-        val views = build(context, state)
         for (id in ids) {
+            val views = build(context, state)
+            squareButton(views, manager.getAppWidgetOptions(id))
             try { manager.updateAppWidget(id, views) } catch (_: Throwable) {}
         }
+    }
+
+    /**
+     * The button is as wide as the widget is high, less the padding, so it is
+     * square and inset the same on every side whatever height the launcher
+     * gives a cell. Android 12 can resize a view in a widget; earlier versions
+     * keep the layout's width.
+     */
+    private fun squareButton(views: RemoteViews, options: Bundle?) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        // A portrait home screen lays the widget out at its maximum height.
+        val height = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT) ?: 0
+        if (height <= 0) return
+        val side = (height - 2 * WIDGET_PADDING_DP).coerceIn(44, 96)
+        views.setViewLayoutWidth(R.id.widget_toggle, side.toFloat(), TypedValue.COMPLEX_UNIT_DIP)
     }
 
     private fun build(context: Context, state: WidgetState): RemoteViews {
@@ -147,11 +167,13 @@ object VarmlenWidget {
         // The launcher would resolve the layout's own strings in the system's
         // language, so every word is set here in the app's.
         val strings = localized(context)
-        views.setTextViewText(R.id.widget_up_unit, strings.getString(R.string.widget_unit))
-        views.setTextViewText(R.id.widget_down_unit, strings.getString(R.string.widget_unit))
         val live = state.phase == WidgetPhase.CONNECTED
-        views.setTextViewText(R.id.widget_up, if (live) mbps(state.upBps ?: 0) else "—")
-        views.setTextViewText(R.id.widget_down, if (live) mbps(state.downBps ?: 0) else "—")
+        val (up, upUnit) = speedParts(state.upBps ?: 0)
+        val (down, downUnit) = speedParts(state.downBps ?: 0)
+        views.setTextViewText(R.id.widget_up, if (live) up else "—")
+        views.setTextViewText(R.id.widget_up_unit, if (live) upUnit else "")
+        views.setTextViewText(R.id.widget_down, if (live) down else "—")
+        views.setTextViewText(R.id.widget_down_unit, if (live) downUnit else "")
         views.setInt(
             R.id.widget_toggle, "setBackgroundResource",
             if (live) R.drawable.widget_button_active else R.drawable.widget_button,
@@ -199,11 +221,15 @@ object VarmlenWidget {
         Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 }
 
-/** Megabits per second, as the widget shows them: one decimal below 100. */
-internal fun mbps(bytesPerSecond: Long): String {
-    val value = bytesPerSecond.coerceAtLeast(0) * 8 / 1_000_000.0
-    return if (value < 100) String.format(Locale.ROOT, "%.1f", value)
-    else String.format(Locale.ROOT, "%.0f", value)
+/** A speed as the notification and the widget show it: whole B/s and KB/s,
+ *  MB/s with one decimal. */
+internal fun speedParts(bytesPerSecond: Long): Pair<String, String> {
+    val b = bytesPerSecond.coerceAtLeast(0)
+    return when {
+        b < 1024 -> "$b" to "B/s"
+        b < 1024 * 1024 -> "${b / 1024}" to "KB/s"
+        else -> String.format("%.1f", b / 1048576.0) to "MB/s"
+    }
 }
 
 /**

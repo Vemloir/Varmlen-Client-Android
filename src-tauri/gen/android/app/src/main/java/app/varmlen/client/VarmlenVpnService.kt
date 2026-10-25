@@ -763,14 +763,7 @@ class VarmlenVpnService : VpnService() {
         }
     }
 
-    private fun speed(bps: Long): String {
-        val b = bps.coerceAtLeast(0)
-        return when {
-            b < 1024 -> "$b B/s"
-            b < 1024 * 1024 -> "${b / 1024} KB/s"
-            else -> String.format("%.1f MB/s", b / 1048576.0)
-        }
-    }
+    private fun speed(bps: Long): String = speedParts(bps).let { (value, unit) -> "$value $unit" }
 
     private fun duration(sec: Long): String {
         val h = sec / 3600

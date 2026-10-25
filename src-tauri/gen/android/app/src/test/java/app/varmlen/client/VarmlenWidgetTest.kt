@@ -21,11 +21,13 @@ class VarmlenWidgetTest {
     }
 
     @Test
-    fun speedsAreShownInMegabitsWithOneDecimalBelowAHundred() {
-        assertEquals("0.0", mbps(0))
-        assertEquals("0.0", mbps(-5))
-        assertEquals("18.4", mbps(2_300_000))
-        assertEquals("42.7", mbps(5_337_500))
-        assertEquals("120", mbps(15_000_000))
+    fun speedsReadAsInTheNotification() {
+        java.util.Locale.setDefault(java.util.Locale.ROOT)
+        assertEquals("0" to "B/s", speedParts(0))
+        assertEquals("0" to "B/s", speedParts(-5))
+        assertEquals("1023" to "B/s", speedParts(1023))
+        assertEquals("512" to "KB/s", speedParts(512 * 1024 + 300))
+        assertEquals("1.2" to "MB/s", speedParts(1_258_291))
+        assertEquals("8.4" to "MB/s", speedParts(8_808_038))
     }
 }
