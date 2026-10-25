@@ -710,41 +710,48 @@
         </button>
       </div>
       {#if appUpdate.info}
-        {#each [{ label: t("update.stable"), release: appUpdate.info.stable }, { label: t("update.preview"), release: appUpdate.info.preview }] as channel (channel.label)}
-          {@const release = channel.release}
-          {@const prog = release && appUpdate.progress?.tag === release.tag ? appUpdate.progress : null}
+        {@const offers = [
+          { label: t("update.stable"), release: appUpdate.info.stable },
+          { label: t("update.preview"), release: appUpdate.info.preview },
+        ].filter((offer) => offer.release?.newer)}
+        {#if offers.length === 0}
           <div class="row">
             <div class="row-text">
-              <div class="row-title">{channel.label} · {release?.version ?? "—"}</div>
+              <div class="row-sub muted">{t("update.upToDate")}</div>
+            </div>
+          </div>
+        {/if}
+        {#each offers as offer (offer.label)}
+          {@const release = offer.release!}
+          {@const prog = appUpdate.progress?.tag === release.tag ? appUpdate.progress : null}
+          <div class="row">
+            <div class="row-text">
+              <div class="row-title">{offer.label} · {release.version}</div>
               <div class="row-sub muted">
-                {#if !release}
-                  {t("update.none")}
-                {:else if prog?.phase === "verifying"}
+                {#if prog?.phase === "verifying"}
                   {t("update.verifying")}
                 {:else if prog?.phase === "installing"}
                   {t("update.installing")}
                 {:else}
-                  {release.newer ? t("update.newer") : t("update.notNewer")}
+                  {t("update.newer")}
                 {/if}
               </div>
             </div>
-            {#if release?.newer}
-              {#if prog?.phase === "downloading"}
-                {@const pct = prog.total > 0 ? Math.floor((prog.downloaded / prog.total) * 100) : 0}
-                <div class="progress" aria-label="downloading">
-                  <div class="progress-track">
-                    <div class="progress-fill" style="transform: scaleX({pct / 100})"></div>
-                  </div>
-                  <div class="progress-meta muted">
-                    {formatBytes(prog.downloaded)}
-                    {#if prog.total > 0}/ {formatBytes(prog.total)} · {pct}%{/if}
-                  </div>
+            {#if prog?.phase === "downloading"}
+              {@const pct = prog.total > 0 ? Math.floor((prog.downloaded / prog.total) * 100) : 0}
+              <div class="progress" aria-label="downloading">
+                <div class="progress-track">
+                  <div class="progress-fill" style="transform: scaleX({pct / 100})"></div>
                 </div>
-              {:else}
-                <button class="btn" onclick={() => appUpdate.install(release.tag)} disabled={appUpdate.busy(release.tag)}>
-                  {t("update.install")}
-                </button>
-              {/if}
+                <div class="progress-meta muted">
+                  {formatBytes(prog.downloaded)}
+                  {#if prog.total > 0}/ {formatBytes(prog.total)} · {pct}%{/if}
+                </div>
+              </div>
+            {:else}
+              <button class="btn" onclick={() => appUpdate.install(release.tag)} disabled={appUpdate.busy(release.tag)}>
+                {t("update.install")}
+              </button>
             {/if}
           </div>
         {/each}
