@@ -693,67 +693,74 @@
   {/if}
 
   {#if isAndroid}
+  {@const offers = appUpdate.info
+    ? [
+        { label: t("update.stable"), release: appUpdate.info.stable },
+        { label: t("update.preview"), release: appUpdate.info.preview },
+      ].filter((offer) => offer.release?.newer)
+    : []}
   <section>
     <h2>{t("update.title")}</h2>
     <div class="list">
-      <div class="row">
+      <button
+        type="button"
+        class="row log-row"
+        onclick={() => appUpdate.check()}
+        disabled={appUpdate.checking}
+      >
         <div class="row-text">
-          <div class="row-title">{t("update.installed")} · {appUpdate.info?.installed ?? appVersion}</div>
-          <div class="row-sub muted">{t("update.hint")}</div>
+          <div class="row-title">{appUpdate.checking ? t("update.checking") : t("update.check")}</div>
+          <div class="row-sub muted">
+            {t("update.installed")} · {appUpdate.info?.installed ?? appVersion}{appUpdate.info && offers.length === 0
+              ? ` · ${t("update.upToDate")}`
+              : ""}
+          </div>
         </div>
-        <button class="btn" onclick={() => appUpdate.check()} disabled={appUpdate.checking}>
-          {appUpdate.checking ? t("update.checking") : t("update.check")}
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
+      {#each offers as offer (offer.label)}
+        {@const release = offer.release!}
+        {@const prog = appUpdate.progress?.tag === release.tag ? appUpdate.progress : null}
+        <button
+          type="button"
+          class="row log-row"
+          onclick={() => appUpdate.install(release.tag)}
+          disabled={appUpdate.busy(release.tag)}
+        >
+          <div class="row-text">
+            <div class="row-title">{t("update.to", { v: release.version })}</div>
+            <div class="row-sub muted">
+              {#if prog?.phase === "verifying"}
+                {t("update.verifying")}
+              {:else if prog?.phase === "installing"}
+                {t("update.installing")}
+              {:else}
+                {offer.label}
+              {/if}
+            </div>
+          </div>
+          {#if prog?.phase === "downloading"}
+            {@const pct = prog.total > 0 ? Math.floor((prog.downloaded / prog.total) * 100) : 0}
+            <div class="progress" aria-label="downloading">
+              <div class="progress-track">
+                <div class="progress-fill" style="transform: scaleX({pct / 100})"></div>
+              </div>
+              <div class="progress-meta muted">
+                {formatBytes(prog.downloaded)}
+                {#if prog.total > 0}/ {formatBytes(prog.total)} · {pct}%{/if}
+              </div>
+            </div>
+          {:else}
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          {/if}
         </button>
-      </div>
-      {#if appUpdate.info}
-        {@const offers = [
-          { label: t("update.stable"), release: appUpdate.info.stable },
-          { label: t("update.preview"), release: appUpdate.info.preview },
-        ].filter((offer) => offer.release?.newer)}
-        {#if offers.length === 0}
-          <div class="row">
-            <div class="row-text">
-              <div class="row-sub muted">{t("update.upToDate")}</div>
-            </div>
-          </div>
-        {/if}
-        {#each offers as offer (offer.label)}
-          {@const release = offer.release!}
-          {@const prog = appUpdate.progress?.tag === release.tag ? appUpdate.progress : null}
-          <div class="row">
-            <div class="row-text">
-              <div class="row-title">{offer.label} · {release.version}</div>
-              <div class="row-sub muted">
-                {#if prog?.phase === "verifying"}
-                  {t("update.verifying")}
-                {:else if prog?.phase === "installing"}
-                  {t("update.installing")}
-                {:else}
-                  {t("update.newer")}
-                {/if}
-              </div>
-            </div>
-            {#if prog?.phase === "downloading"}
-              {@const pct = prog.total > 0 ? Math.floor((prog.downloaded / prog.total) * 100) : 0}
-              <div class="progress" aria-label="downloading">
-                <div class="progress-track">
-                  <div class="progress-fill" style="transform: scaleX({pct / 100})"></div>
-                </div>
-                <div class="progress-meta muted">
-                  {formatBytes(prog.downloaded)}
-                  {#if prog.total > 0}/ {formatBytes(prog.total)} · {pct}%{/if}
-                </div>
-              </div>
-            {:else}
-              <button class="btn" onclick={() => appUpdate.install(release.tag)} disabled={appUpdate.busy(release.tag)}>
-                {t("update.install")}
-              </button>
-            {/if}
-          </div>
-        {/each}
-      {/if}
+      {/each}
     </div>
-    {#if appUpdate.info && (appUpdate.info.stable?.newer || appUpdate.info.preview?.newer)}
+    {#if offers.length > 0}
       <div class="row-sub muted" style="padding: 0 4px;">{t("update.reconnect")}</div>
     {/if}
     {#if appUpdate.progress?.phase === "needs_permission"}
