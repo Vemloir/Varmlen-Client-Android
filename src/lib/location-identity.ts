@@ -21,6 +21,24 @@ export function locationKey(srv: SelectableServer): string {
   return `${serverKey(srv)}${LOCATION_KEY_SEP}${normalizeLocationLabel(srv.name)}`;
 }
 
+/** Which location is selected, as a connection sees it: the card it was picked
+ *  from, its endpoint and its label. The endpoint alone does not tell AegisVPN's
+ *  «Автовыбор» from «Finland | Helsinki» -- the balancer leads with the same
+ *  proxy -- so a switch between them read as no change and never reconnected.
+ *  Survives a refresh, which regenerates entry ids but keeps all three. */
+export function selectedLocationSignature(selection: {
+  subId: string | null;
+  key: string | null;
+  label: string | null;
+}): string | null {
+  if (selection.key === null && selection.label === null) return null;
+  return [
+    selection.subId ?? "",
+    selection.key ?? "",
+    selection.label === null ? "" : normalizeLocationLabel(selection.label),
+  ].join(LOCATION_KEY_SEP);
+}
+
 interface KeyedLocations {
   servers: SelectableServer[];
   hiddenKeys?: string[];

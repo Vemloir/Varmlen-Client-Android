@@ -23,7 +23,8 @@
         android:layout_marginEnd="8dp"
         android:layout_weight="1"
         android:ellipsize="end"
-        android:maxLines="2"
+        android:maxLines="1"
+        android:singleLine="true"
         android:text="Finland | Helsinki"
         android:textColor="#FFFFFFFF"
         android:textSize="16sp" />

@@ -128,12 +128,13 @@ class ConnStore {
   private readonly CONNECT_GRACE_MS = 6000;
 
   /** Signature of everything that affects the generated config. Keyed on the
-   *  stable host:port (NOT the per-entry id, which is regenerated on every
-   *  refresh) so refreshing a subscription doesn't look like a config change
-   *  and trigger a needless reconnect. */
+   *  location's card, endpoint and label (NOT the per-entry id, which is
+   *  regenerated on every refresh) so refreshing a subscription doesn't look
+   *  like a config change and trigger a needless reconnect, while two locations
+   *  that lead with the same proxy still differ. */
   private configSig(): string {
     return JSON.stringify({
-      server: subs.selectedKey,
+      server: subs.selectedLocation,
       killswitch: settings.killswitch,
       allowLan: settings.allowLan,
       // The MTU belongs in the signature: a tunnel that is already up must be
@@ -204,11 +205,11 @@ class ConnStore {
     // connection move there, as on the desktop, so it shows "connecting" while
     // the service swaps -- the tunnel still stays up underneath.
     const reconfigure = this.status === "connected";
-    const newLocation = reconfigure && this.appliedServer !== subs.selectedKey;
+    const newLocation = reconfigure && this.appliedServer !== subs.selectedLocation;
     const quiet = reconfigure && !newLocation;
     if (!quiet) this.status = "connecting";
     this.lastSig = this.configSig();
-    this.appliedServer = subs.selectedKey;
+    this.appliedServer = subs.selectedLocation;
     // Hold the "connecting" indicator visible for at least this long even
     // when the helper rejects in <50ms — otherwise the spinner / animated
     // ring is gone before the user perceives it, and a fast failure looks

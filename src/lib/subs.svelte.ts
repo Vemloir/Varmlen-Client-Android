@@ -35,7 +35,11 @@ import {
   nextRefreshBatch,
 } from "$lib/subscription-refresh";
 import { runPingsInParallel } from "$lib/ping-scheduler";
-import { locationKey, migrateLocationKeys } from "$lib/location-identity";
+import {
+  locationKey,
+  migrateLocationKeys,
+  selectedLocationSignature,
+} from "$lib/location-identity";
 import { hasTraffic, trafficPercent } from "$lib/traffic";
 import { measureLocationPing } from "$lib/location-ping";
 import {
@@ -287,6 +291,16 @@ class SubsStore {
       }),
     );
     this.rescheduleAutoRefresh();
+  }
+
+  /** The selected location as a connection tells locations apart; see
+   *  `selectedLocationSignature`. */
+  get selectedLocation(): string | null {
+    return selectedLocationSignature({
+      subId: this.selectedSubId,
+      key: this.selectedKey,
+      label: this.selectedLabel,
+    });
   }
 
   selectServer(id: string): void {

@@ -12,10 +12,13 @@ const source = readFileSync(new URL("./conn.svelte.ts", import.meta.url), "utf8"
  */
 describe("reconfiguring a running tunnel", () => {
   it("shows connecting for a new location and nothing for anything else", () => {
-    expect(source).toMatch(/const newLocation = reconfigure && this\.appliedServer !== subs\.selectedKey;/);
+    // A location is its card, endpoint and label: two rows on one endpoint (a
+    // balancer and the location it leads with) are still two locations.
+    expect(source).toMatch(/const newLocation = reconfigure && this\.appliedServer !== subs\.selectedLocation;/);
     expect(source).toMatch(/const quiet = reconfigure && !newLocation;/);
     expect(source).toMatch(/if \(!quiet\) this\.status = "connecting";/);
-    expect(source).toMatch(/this\.appliedServer = subs\.selectedKey;/);
+    expect(source).toMatch(/this\.appliedServer = subs\.selectedLocation;/);
+    expect(source).toMatch(/server: subs\.selectedLocation,/);
   });
 
   it("still asks the service for a swap, not a teardown, when it shows connecting", () => {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { locationKey, migrateLocationKeys } from "./location-identity";
+import {
+  locationKey,
+  migrateLocationKeys,
+  selectedLocationSignature,
+} from "./location-identity";
 
 /** A provider that puts its balancer in front of the same servers produces rows
  *  that share every endpoint field and differ only by label — AegisVPN's
@@ -35,6 +39,24 @@ describe("locationKey", () => {
     expect(locationKey(row("a", "🇩🇪 Berlin"))).toBe(
       locationKey(row("b", "BERLIN")),
     );
+  });
+});
+
+describe("selectedLocationSignature", () => {
+  const auto = { subId: "aegis", key: "vless|2.29.11.34|2053", label: "🇪🇺 Автовыбор" };
+  const finland = { ...auto, label: "🇫🇮 Finland | Helsinki" };
+
+  it("tells a balancer from the location it leads with", () => {
+    // AegisVPN's «Автовыбор» and Finland share the first proxy exactly; the
+    // connection must still see a switch between them as a new location.
+    expect(selectedLocationSignature(auto)).not.toBe(selectedLocationSignature(finland));
+  });
+
+  it("is stable for the same location", () => {
+    expect(selectedLocationSignature(finland)).toBe(
+      selectedLocationSignature({ ...finland, label: "🇫🇮 FINLAND | Helsinki " }),
+    );
+    expect(selectedLocationSignature({ subId: null, key: null, label: null })).toBeNull();
   });
 });
 
