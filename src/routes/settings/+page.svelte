@@ -723,12 +723,16 @@
   </section>
 
   <footer class="app-version muted">
-    Varmlen {appVersion}{__VARMLEN_BUILD__.versionCode
-      ? ` (${__VARMLEN_BUILD__.versionCode})`
-      : ""}
-    {#if __VARMLEN_BUILD__.commit}
-      <span class="build-id">{__VARMLEN_BUILD__.commit} · {__VARMLEN_BUILD__.time}</span>
-    {/if}
+    Varmlen {appVersion}
+    <span class="build-id">
+      {[
+        __VARMLEN_BUILD__.versionCode && `versionCode ${__VARMLEN_BUILD__.versionCode}`,
+        __VARMLEN_BUILD__.commit,
+        __VARMLEN_BUILD__.commit && __VARMLEN_BUILD__.time,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+    </span>
   </footer>
 </main>
 
