@@ -2,9 +2,10 @@
 
 ## Unreleased
 
-- A home-screen widget (#2): the tunnel's live upload and download speed in
-  Mbit/s and a connect button, in three widths -- 2x2 with the speeds, 3x2
-  with the location's flag, 4x2 with its name. While connected the VPN
+- A home-screen widget (#2), one cell high: the tunnel's live upload and
+  download speed in Mbit/s and a connect button, in three widths -- 2x1 with
+  the speeds, 3x1 with the location's flag, 4x1 with its name. The button
+  lights up in the app's accent while connected. While connected the VPN
   service updates it once a second; otherwise it costs nothing. The button
   connects to the last location the way the Quick Settings tile does and
   opens the app when there is none yet. It reaches the VPN through a receiver
