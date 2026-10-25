@@ -7,18 +7,16 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.os.Bundle
-import android.util.SizeF
 import android.widget.RemoteViews
 import java.io.File
 import java.util.Locale
 
 /**
- * Home-screen widget, one cell high: the tunnel's live upload and download
- * speed and a connect button, in three widths -- 2x1 (speeds), 3x1 (with the
- * location's flag) and 4x1 (with its name). The button lights up in the app's
- * accent while connected.
+ * Home-screen widget, 4x1 at the least: the location's flag and name, the
+ * tunnel's live upload and download speed and a connect button that lights up
+ * in the app's accent while connected. A location without a flag shows a
+ * plain white flag.
  *
  * The VPN service runs in its own process and pushes every state change and,
  * while connected, the speed once a second. The provider renders the same
@@ -82,12 +80,7 @@ object VarmlenWidget {
     const val ACTION_TOGGLE = "app.varmlen.client.WIDGET_TOGGLE"
     private const val LOCATION_FILE = "widget-location.txt"
 
-    /** The launcher picks the largest of these that fits the widget. */
-    private val SIZES = listOf(
-        SizeF(110f, 40f) to R.layout.widget_2x1,
-        SizeF(180f, 40f) to R.layout.widget_3x1,
-        SizeF(250f, 40f) to R.layout.widget_4x1,
-    )
+    private const val NO_FLAG = "🏳️"
     private const val ICON_IDLE = 0xFFFFFFFF.toInt()
     private const val ICON_CONNECTING = 0xFF8C8C8C.toInt()
     private const val ICON_ON_ACCENT = 0xFF1E1E1E.toInt()
@@ -119,30 +112,17 @@ object VarmlenWidget {
             manager.getAppWidgetIds(ComponentName(context, VarmlenWidgetProvider::class.java))
         } catch (_: Throwable) { return }
         if (ids.isEmpty()) return
+        val views = build(context, state)
         for (id in ids) {
-            val views = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                RemoteViews(SIZES.associate { (size, layout) -> size to build(context, layout, state) })
-            } else {
-                build(context, layoutForWidth(manager.getAppWidgetOptions(id)), state)
-            }
             try { manager.updateAppWidget(id, views) } catch (_: Throwable) {}
         }
     }
 
-    private fun layoutForWidth(options: Bundle?): Int {
-        val width = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH) ?: 0
-        return SIZES.lastOrNull { (size, _) -> width >= size.width }?.second ?: R.layout.widget_2x1
-    }
-
-    private fun build(context: Context, layout: Int, state: WidgetState): RemoteViews {
-        val views = RemoteViews(context.packageName, layout)
+    private fun build(context: Context, state: WidgetState): RemoteViews {
+        val views = RemoteViews(context.packageName, R.layout.widget_4x1)
         val live = state.phase == WidgetPhase.CONNECTED
-        val up = if (live) mbps(state.upBps ?: 0) else "—"
-        val down = if (live) mbps(state.downBps ?: 0) else "—"
-        // The narrowest widget has no room for the arrows' own column.
-        val compact = layout == R.layout.widget_2x1
-        views.setTextViewText(R.id.widget_up, if (compact) "↑ $up" else up)
-        views.setTextViewText(R.id.widget_down, if (compact) "↓ $down" else down)
+        views.setTextViewText(R.id.widget_up, if (live) mbps(state.upBps ?: 0) else "—")
+        views.setTextViewText(R.id.widget_down, if (live) mbps(state.downBps ?: 0) else "—")
         views.setInt(
             R.id.widget_toggle, "setBackgroundResource",
             if (live) R.drawable.widget_button_active else R.drawable.widget_button,
@@ -162,15 +142,11 @@ object VarmlenWidget {
                 WidgetPhase.DISCONNECTED -> R.string.widget_connect
             }
         ))
-        if (layout != R.layout.widget_2x1) {
-            views.setTextViewText(R.id.widget_flag, state.icon.ifEmpty { "🌐" })
-        }
-        if (layout == R.layout.widget_4x1) {
-            views.setTextViewText(
-                R.id.widget_name,
-                state.name.ifEmpty { context.getString(R.string.widget_no_location) },
-            )
-        }
+        views.setTextViewText(R.id.widget_flag, state.icon.ifEmpty { NO_FLAG })
+        views.setTextViewText(
+            R.id.widget_name,
+            state.name.ifEmpty { context.getString(R.string.widget_no_location) },
+        )
         val openApp = PendingIntent.getActivity(
             context, 0, openAppIntent(context),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
