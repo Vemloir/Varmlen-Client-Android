@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- In-app updates hand a verified release APK to the system installer. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -88,6 +90,24 @@
                 android:name="android.service.quicksettings.TILE_CATEGORY"
                 android:value="android.service.quicksettings.CATEGORY_CONNECTIVITY" />
         </service>
+
+        <!-- Home-screen widget. The launcher drives the provider, so it is
+             exported; the connect button goes to the toggle receiver, which
+             is not, so no other app can switch the VPN through it. -->
+        <receiver
+            android:name=".VarmlenWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/varmlen_widget_info" />
+        </receiver>
+        <receiver
+            android:name=".VarmlenWidgetToggleReceiver"
+            android:exported="false" />
 
         <provider
           android:name="androidx.core.content.FileProvider"

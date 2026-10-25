@@ -43,6 +43,8 @@ class VarmlenVpnService : VpnService() {
     /** Backoff bookkeeping for the core retry (kill switch ON). */
     @Volatile private var lastCoreRetryAt = 0L
     @Volatile private var coreDeadSince = 0L
+    /** Label of the location a connect request names, saved once it connects. */
+    @Volatile private var pendingLabel: String? = null
 
     // Live notification (speed + uptime), refreshed once a second.
     private val notifHandler = Handler(Looper.getMainLooper())
@@ -82,6 +84,8 @@ class VarmlenVpnService : VpnService() {
         const val EXTRA_RECONFIGURE = "reconfigure"
         const val EXTRA_REQUEST_ID = "requestId"
         const val EXTRA_ERROR = "error"
+        /** The connecting location's label, shown by the home-screen widget. */
+        const val EXTRA_LABEL = "label"
         /** Session is up but the core is down while the kill switch holds. */
         const val EXTRA_DEGRADED = "degraded"
         const val LOG_FILE = "varmlen.log"
@@ -245,6 +249,8 @@ class VarmlenVpnService : VpnService() {
             }
             ACTION_CONNECT -> {
                 val requestId = intent.getStringExtra(EXTRA_REQUEST_ID)
+                pendingLabel = intent.getStringExtra(EXTRA_LABEL)
+                if (tun == null) VarmlenWidget.push(this, WidgetPhase.CONNECTING)
                 try {
                     startAll(
                         intent.getStringExtra(EXTRA_CONFIG) ?: error("no config"),
@@ -476,7 +482,12 @@ class VarmlenVpnService : VpnService() {
             .putInt("mtu", tunMtu(mtu))
             .apply()
         setWant(this, true)
+        // A tile or widget start relaunches the remembered location and
+        // carries no label; the one saved with it still names it.
+        pendingLabel?.takeIf { it.isNotBlank() }?.let { VarmlenWidget.saveLocation(this, it) }
+        pendingLabel = null
         broadcastState(true, requestId = requestId)
+        VarmlenWidget.push(this, WidgetPhase.CONNECTED, 0, 0)
         // Start the per-second speed + uptime notification updates.
         connectedAt = System.currentTimeMillis()
         setSessionSince(this, connectedAt / 1000)
@@ -589,6 +600,7 @@ class VarmlenVpnService : VpnService() {
         // Confirm only after every data-plane component is down. The plugin
         // keeps disconnect() pending until it receives this request ID.
         broadcastState(false, error, requestId)
+        VarmlenWidget.push(this, WidgetPhase.DISCONNECTED)
         if (requestStopSelf) stopSelf()
     }
 
@@ -678,6 +690,7 @@ class VarmlenVpnService : VpnService() {
         }
         val uptime = if (connectedAt > 0) (now - connectedAt) / 1000 else 0
         val text = "↑ ${speed(up)}   ↓ ${speed(down)}   ${duration(uptime)}"
+        VarmlenWidget.push(this, WidgetPhase.CONNECTED, up, down)
         try {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
                 .notify(NOTIF_ID, buildNotif(text))

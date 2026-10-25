@@ -1,0 +1,8 @@
+<resources>
+    <string name="widget_description">Скорость и кнопка подключения</string>
+    <string name="widget_connect">ПОДКЛЮЧИТЬ</string>
+    <string name="widget_disconnect">ОТКЛЮЧИТЬ</string>
+    <string name="widget_connecting">ПОДКЛЮЧЕНИЕ…</string>
+    <string name="widget_unit">Мбит/с</string>
+    <string name="widget_no_location">Локация не выбрана</string>
+</resources>

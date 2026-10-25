@@ -9,6 +9,7 @@
   import type { PinOrder } from "$lib/location-actions";
   import { i18n, t, LANGUAGES, type Lang } from "$lib/i18n.svelte";
   import { core } from "$lib/core.svelte";
+  import { appUpdate } from "$lib/app-update.svelte";
   import { autostartStatus, setAutostart, vpnLog, clearVpnLog, writeClipboard, notificationsEnabled, openNotificationSettings, openVpnSettings } from "$lib/api";
   import { copyDisplayedLog } from "$lib/log-copy";
   import Dropdown from "$lib/components/Dropdown.svelte";
@@ -692,6 +693,74 @@
         </svg>
       </button>
     </div>
+  </section>
+  {/if}
+
+  {#if isAndroid}
+  <section>
+    <h2>{t("update.title")}</h2>
+    <div class="list">
+      <div class="row">
+        <div class="row-text">
+          <div class="row-title">{t("update.installed")} · {appUpdate.info?.installed ?? appVersion}</div>
+          <div class="row-sub muted">{t("update.hint")}</div>
+        </div>
+        <button class="btn" onclick={() => appUpdate.check()} disabled={appUpdate.checking}>
+          {appUpdate.checking ? t("update.checking") : t("update.check")}
+        </button>
+      </div>
+      {#if appUpdate.info}
+        {#each [{ label: t("update.stable"), release: appUpdate.info.stable }, { label: t("update.preview"), release: appUpdate.info.preview }] as channel (channel.label)}
+          {@const release = channel.release}
+          {@const prog = release && appUpdate.progress?.tag === release.tag ? appUpdate.progress : null}
+          <div class="row">
+            <div class="row-text">
+              <div class="row-title">{channel.label} · {release?.version ?? "—"}</div>
+              <div class="row-sub muted">
+                {#if !release}
+                  {t("update.none")}
+                {:else if prog?.phase === "verifying"}
+                  {t("update.verifying")}
+                {:else if prog?.phase === "installing"}
+                  {t("update.installing")}
+                {:else}
+                  {release.newer ? t("update.newer") : t("update.notNewer")}
+                {/if}
+              </div>
+            </div>
+            {#if release?.newer}
+              {#if prog?.phase === "downloading"}
+                {@const pct = prog.total > 0 ? Math.floor((prog.downloaded / prog.total) * 100) : 0}
+                <div class="progress" aria-label="downloading">
+                  <div class="progress-track">
+                    <div class="progress-fill" style="transform: scaleX({pct / 100})"></div>
+                  </div>
+                  <div class="progress-meta muted">
+                    {formatBytes(prog.downloaded)}
+                    {#if prog.total > 0}/ {formatBytes(prog.total)} · {pct}%{/if}
+                  </div>
+                </div>
+              {:else}
+                <button class="btn" onclick={() => appUpdate.install(release.tag)} disabled={appUpdate.busy(release.tag)}>
+                  {t("update.install")}
+                </button>
+              {/if}
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    </div>
+    {#if appUpdate.info && (appUpdate.info.stable?.newer || appUpdate.info.preview?.newer)}
+      <div class="row-sub muted" style="padding: 0 4px;">{t("update.reconnect")}</div>
+    {/if}
+    {#if appUpdate.progress?.phase === "needs_permission"}
+      <div class="row-sub" style="padding: 0 4px;">{t("update.needsPermission")}</div>
+    {/if}
+    {#if appUpdate.error || appUpdate.progress?.phase === "error"}
+      <div class="row-sub" style="color: var(--danger); padding: 0 4px;">
+        {appUpdate.error ?? appUpdate.progress?.error}
+      </div>
+    {/if}
   </section>
   {/if}
 

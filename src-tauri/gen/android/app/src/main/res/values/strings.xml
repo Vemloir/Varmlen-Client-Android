@@ -1,4 +1,11 @@
 <resources>
     <string name="app_name">Varmlen</string>
     <string name="main_activity_title">Varmlen</string>
+    <string name="widget_label">Varmlen</string>
+    <string name="widget_description">Live speed and a connect button</string>
+    <string name="widget_connect">CONNECT</string>
+    <string name="widget_disconnect">DISCONNECT</string>
+    <string name="widget_connecting">CONNECTING…</string>
+    <string name="widget_unit">Mbps</string>
+    <string name="widget_no_location">No location yet</string>
 </resources>

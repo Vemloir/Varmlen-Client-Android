@@ -51,6 +51,8 @@ class ClipboardWriteArgs {
 
 @InvokeArg
 class ConnectArgs {
+    /** The location's label as the app shows it, for the home-screen widget. */
+    var label: String = ""
     var config: String = ""
     /** Device-free variant of `config`, validated with `xray run -test`
      *  before the candidate config may replace the active tunnel. */
@@ -72,6 +74,11 @@ class ConnectArgs {
      *  refuses the change instead of tearing anything down, so an edit that cannot
      *  be applied leaves the user exactly as protected as he was. */
     var reconfigure: Boolean = false
+}
+
+@InvokeArg
+class AppUpdateArgs {
+    var tag: String = ""
 }
 
 @InvokeArg
@@ -440,6 +447,59 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve(ret)
     }
 
+    /** The newest stable release and preview on GitHub, and the installed version. */
+    @Command
+    fun checkAppUpdate(invoke: Invoke) {
+        val context = activity.applicationContext
+        Thread {
+            try {
+                val choice = AppUpdater.check(context)
+                val installed = AppUpdater.installedVersion(context)
+                fun describe(release: ReleaseCandidate?) = release?.let {
+                    JSObject().apply {
+                        put("tag", it.tag)
+                        put("version", it.version)
+                        put("publishedAt", it.publishedAt)
+                        put("size", it.size)
+                        put("newer", compareVersions(it.version, installed) > 0)
+                    }
+                }
+                invoke.resolve(JSObject().apply {
+                    put("installed", installed)
+                    put("stable", describe(choice.stable))
+                    put("preview", describe(choice.preview))
+                })
+            } catch (error: Throwable) {
+                invoke.reject(error.message ?: error.javaClass.simpleName)
+            }
+        }.start()
+    }
+
+    /** Download, verify and install a release offered by checkAppUpdate. The
+     *  call returns at once; appUpdateProgress reports how it goes. */
+    @Command
+    fun installAppUpdate(invoke: Invoke) {
+        val args = invoke.parseArgs(AppUpdateArgs::class.java)
+        val context = activity.applicationContext
+        val busy = AppUpdater.progress.phase.let {
+            it == UpdatePhase.DOWNLOADING || it == UpdatePhase.VERIFYING
+        }
+        if (!busy) Thread { AppUpdater.install(context, args.tag) }.start()
+        invoke.resolve()
+    }
+
+    @Command
+    fun appUpdateProgress(invoke: Invoke) {
+        val progress = AppUpdater.progress
+        invoke.resolve(JSObject().apply {
+            put("phase", progress.phase.name.lowercase())
+            put("tag", progress.tag)
+            put("downloaded", progress.downloaded)
+            put("total", progress.total)
+            put("error", progress.error)
+        })
+    }
+
     @Command
     fun openNotificationSettings(invoke: Invoke) {
         try {
@@ -585,6 +645,7 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         intent.putExtra(VarmlenVpnService.EXTRA_MTU, args.mtu)
         intent.putExtra(VarmlenVpnService.EXTRA_RECONFIGURE, args.reconfigure)
         intent.putExtra(VarmlenVpnService.EXTRA_REQUEST_ID, requestId)
+        intent.putExtra(VarmlenVpnService.EXTRA_LABEL, args.label)
         ContextCompat.startForegroundService(activity, intent)
     }
 }

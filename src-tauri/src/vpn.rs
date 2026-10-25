@@ -534,6 +534,7 @@ pub async fn vpn_connect(
             .map_err(|e| format!("xray core: {e}"))?;
         crate::mobile_vpn::connect(
             &app,
+            server.label.clone(),
             xray_cfg,
             validate_cfg,
             split.apps.clone(),

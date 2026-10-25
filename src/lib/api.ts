@@ -313,6 +313,52 @@ export function openNotificationSettings(): Promise<void> {
   return invoke<void>("open_notification_settings");
 }
 
+/** One release offered by the in-app updater. */
+export interface AppRelease {
+  tag: string;
+  version: string;
+  publishedAt: string;
+  size: number;
+  /** Newer than the installed version, so it can be installed over it. */
+  newer: boolean;
+}
+
+export interface AppUpdateInfo {
+  installed: string;
+  stable?: AppRelease;
+  preview?: AppRelease;
+}
+
+export type AppUpdatePhase =
+  | "idle"
+  | "downloading"
+  | "verifying"
+  | "installing"
+  | "needs_permission"
+  | "error";
+
+export interface AppUpdateProgress {
+  phase: AppUpdatePhase;
+  tag: string;
+  downloaded: number;
+  total: number;
+  error?: string;
+}
+
+/** The newest stable release and preview on GitHub (Android). */
+export function checkAppUpdate(): Promise<AppUpdateInfo> {
+  return invoke<AppUpdateInfo>("check_app_update");
+}
+
+/** Start downloading, verifying and installing a release (Android). */
+export function installAppUpdate(tag: string): Promise<void> {
+  return invoke<void>("install_app_update", { tag });
+}
+
+export function appUpdateProgress(): Promise<AppUpdateProgress> {
+  return invoke<AppUpdateProgress>("app_update_progress");
+}
+
 /** Open Android's Always-on VPN / lockdown settings. */
 export function openVpnSettings(): Promise<void> {
   return invoke<void>("open_vpn_settings");

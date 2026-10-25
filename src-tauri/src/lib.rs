@@ -15,6 +15,7 @@ mod split;
 mod storage;
 mod subscription;
 mod tray;
+mod updates;
 mod vpn;
 mod xray;
 
@@ -419,7 +420,10 @@ pub fn run() {
             tray::set_close_to_tray,
             tray::set_autostart,
             tray::autostart_status,
-            storage::read_legacy_storage
+            storage::read_legacy_storage,
+            updates::check_app_update,
+            updates::install_app_update,
+            updates::app_update_progress
         ])
         .on_window_event(|_window, _event| {
             // Desktop: closing the window hides it to the tray (VPN keeps

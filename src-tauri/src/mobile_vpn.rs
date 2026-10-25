@@ -11,6 +11,8 @@ use crate::{StagedSubscriptionResponse, SubscriptionRefreshScheduleInput};
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConnectArgs {
+    /// The location's label, for the home-screen widget.
+    label: String,
     config: String,
     /// Device-free variant of `config` (no native TUN inbound), run through
     /// `xray run -test` on the Kotlin side before the candidate config is
@@ -89,6 +91,7 @@ fn start_state_watcher<R: Runtime>(app: AppHandle<R>) {
 #[allow(clippy::too_many_arguments)]
 pub fn connect<R: Runtime>(
     app: &AppHandle<R>,
+    label: String,
     config: String,
     validation_config: String,
     apps: Vec<String>,
@@ -104,6 +107,7 @@ pub fn connect<R: Runtime>(
         .run_mobile_plugin::<serde_json::Value>(
             "connect",
             ConnectArgs {
+                label,
                 config,
                 validation_config,
                 dns: "1.1.1.1".to_string(),
@@ -322,6 +326,36 @@ pub fn open_notification_settings<R: Runtime>(app: &AppHandle<R>) -> Result<(), 
     vpn.0
         .run_mobile_plugin::<serde_json::Value>("openNotificationSettings", ())
         .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// The newest stable release and preview on GitHub, and the installed version.
+pub fn check_app_update<R: Runtime>(app: &AppHandle<R>) -> Result<serde_json::Value, String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>("checkAppUpdate", ())
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+struct AppUpdateArgs {
+    tag: String,
+}
+
+/// Start downloading, verifying and installing a release; returns at once.
+pub fn install_app_update<R: Runtime>(app: &AppHandle<R>, tag: String) -> Result<(), String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>("installAppUpdate", AppUpdateArgs { tag })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// How the update started by `install_app_update` is going.
+pub fn app_update_progress<R: Runtime>(app: &AppHandle<R>) -> Result<serde_json::Value, String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>("appUpdateProgress", ())
         .map_err(|e| e.to_string())
 }
 
