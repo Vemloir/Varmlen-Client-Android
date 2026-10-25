@@ -699,7 +699,13 @@ fn extract_binary_zip(zip_bytes: &[u8], dest: &PathBuf, member: &str) -> Result<
         zip::ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| format!("zip open: {e}"))?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| format!("zip entry: {e}"))?;
-        let name = file.name().rsplit('/').next().unwrap_or("").to_string();
+        let name = file
+            .name()
+            .map_err(|e| format!("zip entry name: {e}"))?
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
         if name == member {
             let mut out = std::fs::File::create(dest).map_err(|e| format!("create binary: {e}"))?;
             let mut chunk = [0u8; 65536];
