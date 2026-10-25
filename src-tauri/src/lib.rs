@@ -253,8 +253,9 @@ async fn fetch_subscription(
     let (user_agent, device_os) = subscription_headers(subscription_user_agent.as_deref())?;
     #[cfg(target_os = "android")]
     {
-        let response =
-            mobile_vpn::fetch_subscription(&app, trimmed.to_string(), user_agent, device_os)?;
+        let _ = (user_agent, device_os);
+        let client = subscription_user_agent.unwrap_or_else(|| "varmlen".into());
+        let response = mobile_vpn::fetch_subscription(&app, trimmed.to_string(), client)?;
         return parse_subscription_response(response.body, response.headers);
     }
 

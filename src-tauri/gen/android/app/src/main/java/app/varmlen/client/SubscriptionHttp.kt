@@ -46,8 +46,7 @@ internal data class SubscriptionHttpResponse(
 internal fun fetchSubscriptionHttp(
     context: Context,
     sourceUrl: String,
-    userAgent: String,
-    deviceOs: String = "android",
+    requestHeaders: List<Pair<String, String>>,
 ): SubscriptionHttpResponse {
     // A freshly launched process can run before Android has published a usable
     // default network to this UID. Synchronize with ConnectivityManager once;
@@ -70,8 +69,7 @@ internal fun fetchSubscriptionHttp(
         val request = Request.Builder()
             .url(url.toString())
             .get()
-            .header("User-Agent", userAgent)
-            .header("X-Device-OS", deviceOs)
+            .apply { requestHeaders.forEach { (name, value) -> header(name, value) } }
             .build()
 
         client.newCall(request).execute().use { response ->

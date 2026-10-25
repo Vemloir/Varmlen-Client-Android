@@ -115,7 +115,11 @@ describe("subscription refresh setting contract", () => {
     expect(layout).toContain("syncSubscriptionRefresh(schedules)");
     expect(worker).toContain("CoroutineWorker");
     expect(worker).toContain("fetchSubscriptionHttp(");
-    expect(http).toContain('.header("X-Device-OS", deviceOs)');
+    // Interactive imports and background refreshes send the same client's
+    // request, built from the device's own facts.
+    expect(http).toContain("requestHeaders.forEach { (name, value) -> header(name, value) }");
+    expect(worker).toContain("subscriptionRequestHeaders(");
+    expect(worker).toContain("currentSubscriptionDeviceFacts(applicationContext)");
     expect(worker).not.toContain("VarmlenVpnService");
     expect(worker).not.toContain("startActivity");
   });

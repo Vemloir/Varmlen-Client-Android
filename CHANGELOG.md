@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Choosing Happ, INCY or V2RayTun in Settings sends that client's subscription
+  request, not only its name in the User-Agent. The headers, their order and
+  spelling follow what Happ 4.7.1, INCY 3.7.x and V2RayTun 5.25.81 send when
+  they add or refresh a subscription: Happ's day-dependent User-Agent and
+  `X-Device-Locale`; INCY's `x-hwid`, `x-ver-os`, `x-device-model`,
+  `x-device-locale` and `x-client`; V2RayTun's upper-case `X-HWID` and
+  `X-Ver-OS`. Every value that describes the device is this device's own --
+  its ANDROID_ID, release, maker, model and locale -- so a provider's device
+  limit counts it once. Imports and background refreshes send the same
+  request. The setting is now called "Subscription client".
 - Settings no longer reports a failed update check after a few visits. Every
   visit asked GitHub's API for the latest Xray, which answers 60 anonymous
   requests an hour; the answer is now kept for ten minutes, and the last one

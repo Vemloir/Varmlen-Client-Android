@@ -151,8 +151,9 @@ struct SyncSubscriptionRefreshArgs {
 #[serde(rename_all = "camelCase")]
 struct FetchSubscriptionArgs {
     url: String,
-    user_agent: String,
-    device_os: String,
+    /// varmlen | happ | incy | v2raytun. The service builds that client's
+    /// request from the device's own facts.
+    client: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -201,18 +202,13 @@ pub fn drain_subscription_refreshes<R: Runtime>(
 pub fn fetch_subscription<R: Runtime>(
     app: &AppHandle<R>,
     url: String,
-    user_agent: String,
-    device_os: String,
+    client: String,
 ) -> Result<FetchedSubscription, String> {
     let vpn = app.state::<Vpn<R>>();
     vpn.0
         .run_mobile_plugin::<FetchedSubscription>(
             "fetchSubscription",
-            FetchSubscriptionArgs {
-                url,
-                user_agent,
-                device_os,
-            },
+            FetchSubscriptionArgs { url, client },
         )
         .map_err(|e| e.to_string())
 }

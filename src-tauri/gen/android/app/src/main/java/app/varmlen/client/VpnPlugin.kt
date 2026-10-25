@@ -92,8 +92,8 @@ class SyncSubscriptionRefreshArgs {
 @InvokeArg
 class FetchSubscriptionArgs {
     var url: String = ""
-    var userAgent: String = ""
-    var deviceOs: String = "android"
+    /** varmlen | happ | incy | v2raytun: whose request to send. */
+    var client: String = "varmlen"
 }
 
 /** Tauri bridge: the Rust `vpn_connect`/`vpn_disconnect` commands call into this
@@ -360,11 +360,11 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         val args = invoke.parseArgs(FetchSubscriptionArgs::class.java)
         Thread {
             try {
+                val context = activity.applicationContext
                 val response = fetchSubscriptionHttp(
-                    activity.applicationContext,
+                    context,
                     args.url,
-                    args.userAgent,
-                    args.deviceOs,
+                    subscriptionRequestHeaders(args.client, currentSubscriptionDeviceFacts(context)),
                 )
                 val headers = JSObject()
                 response.headers.forEach { (name, value) -> headers.put(name, value) }

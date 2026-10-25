@@ -1,7 +1,6 @@
 package app.varmlen.client
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -32,9 +31,9 @@ class SubscriptionRefreshWorker(
                 fetchSubscriptionHttp(
                     applicationContext,
                     schedule.url,
-                    subscriptionRefreshUserAgent(
+                    subscriptionRequestHeaders(
                         schedule.userAgent,
-                        Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
+                        currentSubscriptionDeviceFacts(applicationContext),
                     ),
                 )
             }
