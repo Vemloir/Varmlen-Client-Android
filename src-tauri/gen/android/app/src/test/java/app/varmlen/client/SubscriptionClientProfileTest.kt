@@ -17,27 +17,43 @@ class SubscriptionClientProfileTest {
         abi = "arm64-v8a",
     )
 
+    /** Happ 4.8.0 on a Galaxy S25 Ultra (Android 16), captured on the 25th. */
     @Test
-    fun happSendsItsOrdinarySubscriptionRequest() {
+    fun happSendsTheRequestCapturedFromHapp480() {
+        val captured = facts.copy(
+            androidId = "466aeb2e62b7254e",
+            release = "16",
+            model = "SM-S938B",
+            dayOfMonth = 25,
+        )
         assertEquals(
             listOf(
                 "Connection" to "close",
-                "User-agent" to "Happ/4.7.1/Android/17912103176801703550",
+                "User-agent" to "Happ/4.8.0/Android/17921395329952009531",
                 "X-Device-Locale" to "ru",
+                "X-HWID" to "466aeb2e62b7254e",
+                "X-Device-OS" to "Android",
+                "X-Ver-OS" to "16",
+                "X-Device-model" to "SM-S938B",
             ),
-            subscriptionRequestHeaders("happ", facts),
+            subscriptionRequestHeaders("happ", captured),
         )
     }
 
     @Test
     fun happsTokenFollowsTheParityOfTheDayAndTheTelevisionBuild() {
         assertEquals(
-            "Happ/4.7.1/Android/17912103176801703650",
+            "Happ/4.8.0/Android/17921395329952009631",
             happUserAgent(facts.copy(dayOfMonth = 24)),
         )
         assertEquals(
-            "Happ/4.7.1/AndroidTV/17912103176801703550",
+            "Happ/4.8.0/AndroidTV/17921395329952009531",
             happUserAgent(facts.copy(television = true)),
+        )
+        assertEquals(
+            "AndroidTV",
+            subscriptionRequestHeaders("happ", facts.copy(television = true))
+                .first { it.first == "X-Device-OS" }.second,
         )
     }
 

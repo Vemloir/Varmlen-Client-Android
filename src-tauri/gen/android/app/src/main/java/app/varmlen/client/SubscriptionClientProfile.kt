@@ -16,16 +16,19 @@ import java.util.Locale
  * Providers decide what to serve -- and some whether to serve at all -- by the
  * client asking, and they look at more than the User-Agent. Varmlen asks as
  * itself by default; it can also send the headers Happ, INCY or V2RayTun send
- * when they add or refresh a subscription, in their order and spelling, as
- * read from Happ 4.7.1, INCY 3.7.x and V2RayTun 5.25.81 by static analysis.
+ * when they add or refresh a subscription, in their order and spelling. Happ's
+ * request is the one Happ 4.8.0 sent to a capturing server; INCY's and
+ * V2RayTun's are read from INCY 3.7.x and V2RayTun 5.25.81 by static analysis.
+ * OkHttp then adds Host and Accept-Encoding after them, as it does for the
+ * real clients.
  * Every value that describes the device is this device's own: its ANDROID_ID
  * (unique per app signing key and device since Android 8), release, maker,
  * model and locale. A provider's device limit therefore counts this phone
  * once, as it would the real client.
  *
  * Happ's own backend also expects an X-Credential JWT signed with a secret
- * from its native library; that flow is not reproduced, and ordinary
- * subscription servers never see it.
+ * from its native library; Happ does not send it to other subscription
+ * servers, and it is not reproduced.
  */
 internal data class SubscriptionDeviceFacts(
     val androidId: String,
@@ -39,9 +42,14 @@ internal data class SubscriptionDeviceFacts(
     val abi: String,
 )
 
-/** The client versions whose requests were analysed. A newer release may
- *  change its headers, so these move only with a fresh analysis. */
-internal const val HAPP_MIMIC_VERSION = "4.7.1"
+/** The client versions whose requests were captured or analysed. A newer
+ *  release may change its headers, so these move only with a fresh capture. */
+internal const val HAPP_MIMIC_VERSION = "4.8.0"
+
+/** Happ's User-Agent token is fixed per build -- it opens with the build's
+ *  Unix time -- except for one digit that follows the day of the month. */
+private const val HAPP_TOKEN_HEAD = "17921395329952009"
+private const val HAPP_TOKEN_TAIL = "31"
 internal const val INCY_MIMIC_VERSION = "3.7.9"
 internal const val V2RAYTUN_MIMIC_VERSION = "5.25.81"
 
@@ -49,11 +57,14 @@ internal fun subscriptionRequestHeaders(
     choice: String,
     facts: SubscriptionDeviceFacts,
 ): List<Pair<String, String>> = when (choice.lowercase(Locale.ROOT)) {
-    // Happ's request for an ordinary subscription server carries no HWID.
     "happ" -> listOf(
         "Connection" to "close",
         "User-agent" to happUserAgent(facts),
         "X-Device-Locale" to facts.locale.language,
+        "X-HWID" to facts.androidId,
+        "X-Device-OS" to happPlatform(facts),
+        "X-Ver-OS" to facts.release,
+        "X-Device-model" to facts.model,
     )
     "incy" -> listOf(
         "User-Agent" to "InCy/1.0",
@@ -82,14 +93,17 @@ internal fun subscriptionRequestHeaders(
 }.map { (name, value) -> name to headerSafe(value) }
 
 /**
- * `Happ/<version>/<Android|AndroidTV>/<token>`, where the token's next-to-last
- * digit follows the parity of the day of the month: 6 on even days, 5 on odd.
+ * `Happ/<version>/<Android|AndroidTV>/<token>`, where the token's third digit
+ * from the end follows the parity of the day of the month: 6 on even days, 5
+ * on odd.
  */
 internal fun happUserAgent(facts: SubscriptionDeviceFacts): String {
-    val platform = if (facts.television) "AndroidTV" else "Android"
     val parity = if (facts.dayOfMonth % 2 == 0) "6" else "5"
-    return "Happ/$HAPP_MIMIC_VERSION/$platform/17912103176801703${parity}50"
+    return "Happ/$HAPP_MIMIC_VERSION/${happPlatform(facts)}/$HAPP_TOKEN_HEAD$parity$HAPP_TOKEN_TAIL"
 }
+
+private fun happPlatform(facts: SubscriptionDeviceFacts): String =
+    if (facts.television) "AndroidTV" else "Android"
 
 /** OkHttp refuses header values outside printable ASCII; a device model can
  *  carry other characters, and a refused request would fail the import. */
