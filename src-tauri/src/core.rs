@@ -436,9 +436,35 @@ fn version_from_tag(release: &serde_json::Value) -> Option<String> {
         .map(|t| strip_v(t).to_string())
 }
 
+/// GitHub answers 60 anonymous API requests an hour per address, and the
+/// settings page asks for the latest version every time it opens. The answer
+/// is kept for ten minutes, and the last one known stands in when GitHub
+/// refuses, so the page does not report a failed check for a rate limit.
 async fn latest_version(kind: CoreKind) -> Result<String, String> {
-    let release = fetch_latest_release(kind).await?;
-    version_from_tag(&release).ok_or_else(|| "no tag_name in release".to_string())
+    use std::sync::Mutex;
+    const FRESH_FOR: Duration = Duration::from_secs(10 * 60);
+    static LATEST: Mutex<Option<(Instant, String)>> = Mutex::new(None);
+
+    let cached = LATEST.lock().ok().and_then(|cached| cached.clone());
+    if let Some((at, tag)) = &cached {
+        if at.elapsed() < FRESH_FOR {
+            return Ok(tag.clone());
+        }
+    }
+    let fetched = async {
+        let release = fetch_latest_release(kind).await?;
+        version_from_tag(&release).ok_or_else(|| "no tag_name in release".to_string())
+    }
+    .await;
+    match fetched {
+        Ok(tag) => {
+            if let Ok(mut latest) = LATEST.lock() {
+                *latest = Some((Instant::now(), tag.clone()));
+            }
+            Ok(tag)
+        }
+        Err(error) => cached.map(|(_, tag)| tag).ok_or(error),
+    }
 }
 
 #[derive(Serialize)]

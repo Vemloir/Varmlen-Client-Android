@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Settings no longer reports a failed update check after a few visits. Every
+  visit asked GitHub's API for the latest Xray, which answers 60 anonymous
+  requests an hour; the answer is now kept for ten minutes, and the last one
+  known stands in when GitHub refuses.
 - The loopback HTTP listeners a latency probe opens take a password. For as
   long as a probe ran, any app on the device could use them to reach the
   location's server around the per-app split. Each probe now gets a fresh
