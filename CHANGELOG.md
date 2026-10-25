@@ -4,10 +4,11 @@
 
 - Choosing Happ, INCY or V2RayTun in Settings sends that client's subscription
   request, not only its name in the User-Agent. The headers, their order and
-  spelling follow what Happ 4.8.0 sent to a capturing server and what INCY
-  3.7.x and V2RayTun 5.25.81 send by static analysis: Happ's build- and
+  spelling follow what Happ 4.8.0 and INCY 3.7.9 sent to a capturing server
+  and what V2RayTun 5.25.81 sends by static analysis: Happ's build- and
   day-dependent User-Agent, `X-Device-Locale`, `X-HWID`, `X-Device-OS`,
-  `X-Ver-OS` and `X-Device-model`; INCY's `x-hwid`, `x-ver-os`, `x-device-model`,
+  `X-Ver-OS` and `X-Device-model`; INCY's `INCY/3.7.9/android Dalvik/2.1.0`
+  User-Agent, UUID-shaped `x-hwid`, `x-ver-os`, `x-device-model`,
   `x-device-locale` and `x-client`; V2RayTun's upper-case `X-HWID` and
   `X-Ver-OS`. Every value that describes the device is this device's own --
   its ANDROID_ID, release, maker, model and locale -- so a provider's device

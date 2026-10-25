@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Calendar
 import java.util.Locale
@@ -17,8 +18,9 @@ import java.util.Locale
  * client asking, and they look at more than the User-Agent. Varmlen asks as
  * itself by default; it can also send the headers Happ, INCY or V2RayTun send
  * when they add or refresh a subscription, in their order and spelling. Happ's
- * request is the one Happ 4.8.0 sent to a capturing server; INCY's and
- * V2RayTun's are read from INCY 3.7.x and V2RayTun 5.25.81 by static analysis.
+ * and INCY's requests are the ones Happ 4.8.0 and INCY 3.7.9 sent to a
+ * capturing server; V2RayTun's is read from V2RayTun 5.25.81 by static
+ * analysis.
  * OkHttp then adds Host and Accept-Encoding after them, as it does for the
  * real clients.
  * Every value that describes the device is this device's own: its ANDROID_ID
@@ -67,10 +69,10 @@ internal fun subscriptionRequestHeaders(
         "X-Device-model" to facts.model,
     )
     "incy" -> listOf(
-        "User-Agent" to "InCy/1.0",
+        "User-Agent" to "INCY/$INCY_MIMIC_VERSION/android Dalvik/2.1.0",
         "Accept" to "*/*",
         "Accept-Language" to facts.locale.toLanguageTag(),
-        "x-hwid" to facts.androidId,
+        "x-hwid" to incyHwid(facts.androidId),
         "x-device-os" to "Android",
         "x-ver-os" to facts.release,
         "x-device-model" to "${facts.manufacturer} ${facts.model}",
@@ -100,6 +102,21 @@ internal fun subscriptionRequestHeaders(
 internal fun happUserAgent(facts: SubscriptionDeviceFacts): String {
     val parity = if (facts.dayOfMonth % 2 == 0) "6" else "5"
     return "Happ/$HAPP_MIMIC_VERSION/${happPlatform(facts)}/$HAPP_TOKEN_HEAD$parity$HAPP_TOKEN_TAIL"
+}
+
+/**
+ * INCY's HWID is sixteen bytes written as an upper-case UUID
+ * (`5BB0A38F-106D-678C-4643-999D6BC97C00`), not a well-formed one: its version
+ * and variant digits are arbitrary. How INCY derives them is not visible, so
+ * this device's are a hash of its ANDROID_ID -- the same on every request.
+ */
+internal fun incyHwid(androidId: String): String {
+    val hex = MessageDigest.getInstance("SHA-256")
+        .digest("incy-hwid:$androidId".toByteArray(Charsets.UTF_8))
+        .take(16)
+        .joinToString("") { "%02X".format(it) }
+    return listOf(hex.substring(0, 8), hex.substring(8, 12), hex.substring(12, 16),
+        hex.substring(16, 20), hex.substring(20, 32)).joinToString("-")
 }
 
 private fun happPlatform(facts: SubscriptionDeviceFacts): String =

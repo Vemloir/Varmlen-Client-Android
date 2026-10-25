@@ -2,6 +2,8 @@ package app.varmlen.client
 
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SubscriptionClientProfileTest {
@@ -57,23 +59,34 @@ class SubscriptionClientProfileTest {
         )
     }
 
+    /** INCY 3.7.9 on a Galaxy S25 Ultra (Android 16), captured over HTTPS. */
     @Test
-    fun incySendsItsHeadersInOrderWithThisDevicesFacts() {
+    fun incySendsTheRequestCapturedFromIncy379() {
+        val captured = facts.copy(release = "16", model = "SM-S938B")
+        val headers = subscriptionRequestHeaders("incy", captured)
         assertEquals(
             listOf(
-                "User-Agent" to "InCy/1.0",
+                "User-Agent" to "INCY/3.7.9/android Dalvik/2.1.0",
                 "Accept" to "*/*",
                 "Accept-Language" to "ru-RU",
-                "x-hwid" to "9774d56d682e549c",
+                "x-hwid" to incyHwid("9774d56d682e549c"),
                 "x-device-os" to "Android",
-                "x-ver-os" to "14",
-                "x-device-model" to "samsung SM-S918B",
+                "x-ver-os" to "16",
+                "x-device-model" to "samsung SM-S938B",
                 "x-app-version" to "3.7.9",
                 "x-device-locale" to "ru_RU",
                 "x-client" to "INCY",
             ),
-            subscriptionRequestHeaders("incy", facts),
+            headers,
         )
+    }
+
+    @Test
+    fun incysHwidIsAStableUpperCaseUuidShapeOfThisDevice() {
+        val hwid = incyHwid("9774d56d682e549c")
+        assertTrue(Regex("^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$").matches(hwid))
+        assertEquals(hwid, incyHwid("9774d56d682e549c"))
+        assertNotEquals(hwid, incyHwid("0000000000000001"))
     }
 
     @Test
