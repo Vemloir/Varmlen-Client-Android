@@ -1,18 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
-- A home-screen widget (#2), 4x1 at the least: the location's flag -- the
-  app's own flag picture, square and inset like the connect button, a white
-  one when the location has no country -- and name, the tunnel's live upload and
-  download speed, written as the notification writes it (`↑ 1.2 MB/s`), and
-  a square connect button that lights up in the app's
-  accent while connected. It speaks the language chosen in the app, not the
-  system's. While connected the VPN
-  service updates it once a second; otherwise it costs nothing. The button
-  connects to the last location the way the Quick Settings tile does and
-  opens the app when there is none yet. It reaches the VPN through a receiver
-  no other app can send to.
+- A home-screen widget (#2), 4x1 at the least and one cell high: the
+  location's flag -- the app's own flag picture, square and inset like the
+  connect button, a white one when the location has no country -- and its
+  name on one line, then, while connected, the tunnel's upload and download
+  speed written as the notification writes it (`↑ 1.2 MB/s`), and a square
+  connect button that lights up in the app's accent. With the VPN off there
+  is no speed at all and the name takes the room. The widget speaks the
+  language and wears the theme, dark or light, chosen in the app. While
+  connected the VPN service updates it once a second; otherwise it costs
+  nothing. The button connects to the last location the way the Quick
+  Settings tile does and opens the app when there is none yet. It reaches the
+  VPN through a receiver no other app can send to.
 - Settings checks for updates: the newest stable release and the newest
   preview on GitHub, each with an Update button when it is newer than the
   installed version. The APK for this device is downloaded, checked against
@@ -38,11 +39,29 @@
   long as a probe ran, any app on the device could use them to reach the
   location's server around the per-app split. Each probe now gets a fresh
   random password that only it knows.
+- Switching between two locations that share a server -- "Auto" and the
+  country it currently picks, say -- reconnects. The client compared only the
+  endpoint a location dials, found nothing new and did nothing.
+- A connect onto a different location while the tunnel is up shows the
+  connecting ring while the service swaps the interface, as the desktop
+  clients do; split and setting edits stay silent.
+- The theme in Settings is a dropdown row, as on Linux, and the footer names
+  the build -- versionCode, commit and build time -- under the Varmlen line,
+  so it is clear which build is installed.
+- The location menu opens to the left of the finger with a short grow out of
+  that corner, and every menu is as wide as its longest item.
+- A touch screen no longer leaves a hover colour on the last row, button or
+  picked app it touched; a picked app shows as selected as soon as the
+  finger lifts.
+- A tab change only moves the track: every page stays mounted, so a tap or a
+  swipe no longer waits 50-450 ms for the new page to mount.
+- A long press buzzes only over text that can be copied, not anywhere a
+  thumb rests.
+- Dependencies past RUSTSEC-2026-0194, 0195 and 0367-0369 and the fixed
+  rustls, webpki, h2, quinn-proto and tokio.
 - Bundle stable Xray 26.10.21, the first stable release after 26.3.27, in the
   APK (`libxray.so`) and in the desktop fetch script, each pinned to the SHA-256
   XTLS publishes for it.
-
-## 0.4.0
 
 - The dropdown control in Settings was the same grey as the row's hover, so the
   control disappeared into the state that hover is supposed to reveal, and its own
