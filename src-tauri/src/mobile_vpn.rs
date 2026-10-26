@@ -307,6 +307,20 @@ pub fn set_widget_language<R: Runtime>(app: &AppHandle<R>, language: String) -> 
 }
 
 #[derive(Serialize)]
+struct WidgetThemeArgs {
+    theme: String,
+}
+
+/// Tell the home-screen widget which theme the app wears.
+pub fn set_widget_theme<R: Runtime>(app: &AppHandle<R>, theme: String) -> Result<(), String> {
+    let vpn = app.state::<Vpn<R>>();
+    vpn.0
+        .run_mobile_plugin::<serde_json::Value>("setWidgetTheme", WidgetThemeArgs { theme })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
 struct LongPressHapticsArgs {
     enabled: bool,
 }

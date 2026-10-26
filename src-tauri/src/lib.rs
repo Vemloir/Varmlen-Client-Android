@@ -414,6 +414,7 @@ pub fn run() {
             vpn::set_status_bar,
             vpn::set_long_press_haptics,
             vpn::set_widget_language,
+            vpn::set_widget_theme,
             vpn::notifications_enabled,
             vpn::open_notification_settings,
             vpn::open_vpn_settings,

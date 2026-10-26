@@ -298,12 +298,17 @@ export function setStatusBar(light: boolean): Promise<void> {
   return invoke<void>("set_status_bar", { light });
 }
 
-/** Allow the long-press haptic (Android) -- only while the finger is on copyable text. */
 /** The home-screen widget speaks the app's language (Android). */
 export function setWidgetLanguage(language: string): Promise<void> {
   return invoke<void>("set_widget_language", { language });
 }
 
+/** The home-screen widget wears the app's theme (Android). */
+export function setWidgetTheme(theme: string): Promise<void> {
+  return invoke<void>("set_widget_theme", { theme });
+}
+
+/** Allow the long-press haptic (Android) -- only while the finger is on copyable text. */
 export function setLongPressHaptics(enabled: boolean): Promise<void> {
   return invoke<void>("set_long_press_haptics", { enabled });
 }

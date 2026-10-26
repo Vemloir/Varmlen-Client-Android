@@ -23,6 +23,7 @@
     setCloseToTray,
     setStatusBar,
     setWidgetLanguage,
+    setWidgetTheme,
     syncSubscriptionRefresh,
   } from "$lib/api";
   import { listen } from "@tauri-apps/api/event";
@@ -243,6 +244,11 @@
   $effect(() => {
     const language = i18n.lang;
     if (isAndroid) void setWidgetLanguage(language).catch(() => {});
+  });
+  // And wears its theme.
+  $effect(() => {
+    const current = theme.current;
+    if (isAndroid) void setWidgetTheme(current).catch(() => {});
   });
 
   /* The bar follows the page it belongs to: on scroll, when the content under it grows

@@ -843,6 +843,21 @@ pub async fn set_widget_language(app: tauri::AppHandle, language: String) -> Res
     }
 }
 
+/// The theme the home-screen widget wears: the app's (Android). Nothing to do
+/// on desktop.
+#[tauri::command]
+pub async fn set_widget_theme(app: tauri::AppHandle, theme: String) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        return crate::mobile_vpn::set_widget_theme(&app, theme);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (&app, theme);
+        Ok(())
+    }
+}
+
 /// Whether a long press may play the system haptic (Android): only over text that
 /// can be copied. Nothing to do on desktop.
 #[tauri::command]

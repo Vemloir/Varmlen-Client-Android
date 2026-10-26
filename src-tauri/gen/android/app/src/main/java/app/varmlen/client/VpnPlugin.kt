@@ -82,6 +82,11 @@ class WidgetLanguageArgs {
 }
 
 @InvokeArg
+class WidgetThemeArgs {
+    var theme: String = ""
+}
+
+@InvokeArg
 class AppUpdateArgs {
     var tag: String = ""
 }
@@ -441,6 +446,17 @@ class VpnPlugin(private val activity: Activity) : Plugin(activity) {
         val args = invoke.parseArgs(WidgetLanguageArgs::class.java)
         val context = activity.applicationContext
         if (VarmlenWidget.saveLanguage(context, args.language)) {
+            VarmlenWidget.render(context, VarmlenWidget.restingState(context))
+        }
+        invoke.resolve()
+    }
+
+    /** The home-screen widget wears the app's theme, dark or light. */
+    @Command
+    fun setWidgetTheme(invoke: Invoke) {
+        val args = invoke.parseArgs(WidgetThemeArgs::class.java)
+        val context = activity.applicationContext
+        if (VarmlenWidget.saveTheme(context, args.theme)) {
             VarmlenWidget.render(context, VarmlenWidget.restingState(context))
         }
         invoke.resolve()

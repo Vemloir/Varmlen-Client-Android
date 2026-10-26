@@ -15,6 +15,7 @@
         android:background="@drawable/widget_flag_frame"
         android:clipToOutline="true"
         android:contentDescription="@null"
+        android:foreground="@drawable/widget_flag_outline"
         android:scaleType="centerCrop"
         android:src="@drawable/widget_flag_none" />
     <TextView
@@ -43,6 +44,7 @@
                 android:baselineAligned="true"
                 android:orientation="horizontal">
                 <TextView
+                    android:id="@+id/widget_up_arrow"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="5dp"
@@ -74,6 +76,7 @@
                 android:baselineAligned="true"
                 android:orientation="horizontal">
                 <TextView
+                    android:id="@+id/widget_down_arrow"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginEnd="5dp"

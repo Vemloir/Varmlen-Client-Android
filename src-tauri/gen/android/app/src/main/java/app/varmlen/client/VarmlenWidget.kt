@@ -20,7 +20,8 @@ import java.util.Locale
  * square flag picture, inset like the button -- and name, the tunnel's live
  * upload and download speed and a connect button that lights up in the app's
  * accent while connected. A location without a country shows a plain white
- * flag.
+ * flag. The widget takes the app's theme, dark or light, as it takes its
+ * language.
  *
  * The VPN service runs in its own process and pushes every state change and,
  * while connected, the speed once a second. The provider renders the same
@@ -109,9 +110,62 @@ object VarmlenWidget {
         configuration.setLocale(Locale(language))
         return context.createConfigurationContext(configuration)
     }
-    private const val ICON_IDLE = 0xFFFFFFFF.toInt()
-    private const val ICON_CONNECTING = 0xFF8C8C8C.toInt()
-    private const val ICON_ON_ACCENT = 0xFF1E1E1E.toInt()
+    private const val THEME_FILE = "widget-theme.txt"
+    private val THEMES = setOf("dark", "light")
+
+    /** The app's theme, which the widget wears. Returns whether it changed. */
+    fun saveTheme(context: Context, theme: String): Boolean {
+        if (theme !in THEMES) return false
+        val file = File(context.filesDir, THEME_FILE)
+        val current = try { file.readText() } catch (_: Throwable) { "" }
+        if (current == theme) return false
+        return try { file.writeText(theme); true } catch (_: Throwable) { false }
+    }
+
+    /** The widget's colours in one of the app's themes (src/app.css). */
+    private class Palette(
+        val background: Int,
+        val button: Int,
+        val buttonActive: Int,
+        val flagFrame: Int,
+        val text: Int,
+        val muted: Int,
+        val iconIdle: Int,
+        val iconConnecting: Int,
+        val iconOnAccent: Int,
+    )
+
+    private val DARK = Palette(
+        background = R.drawable.widget_background,
+        button = R.drawable.widget_button,
+        buttonActive = R.drawable.widget_button_active,
+        flagFrame = R.drawable.widget_flag_frame,
+        text = 0xFFFFFFFF.toInt(),
+        muted = 0xFF8C8C8C.toInt(),
+        iconIdle = 0xFFFFFFFF.toInt(),
+        iconConnecting = 0xFF8C8C8C.toInt(),
+        iconOnAccent = 0xFF1E1E1E.toInt(),
+    )
+
+    private val LIGHT = Palette(
+        background = R.drawable.widget_background_light,
+        button = R.drawable.widget_button_light,
+        buttonActive = R.drawable.widget_button_active_light,
+        flagFrame = R.drawable.widget_flag_frame_light,
+        text = 0xFF111111.toInt(),
+        muted = 0xFF5A5A5A.toInt(),
+        iconIdle = 0xFF111111.toInt(),
+        iconConnecting = 0xFF8A8A8A.toInt(),
+        iconOnAccent = 0xFFFFFFFF.toInt(),
+    )
+
+    /** Dark until the app says otherwise, as the app itself starts. */
+    private fun palette(context: Context): Palette {
+        val theme = try {
+            File(context.filesDir, THEME_FILE).readText().trim()
+        } catch (_: Throwable) { "" }
+        return if (theme == "light") LIGHT else DARK
+    }
 
     /** Remember the location a connect used, for the widget's flag and name. */
     fun saveLocation(context: Context, label: String) {
@@ -168,6 +222,17 @@ object VarmlenWidget {
         // The launcher would resolve the layout's own strings in the system's
         // language, so every word is set here in the app's.
         val strings = localized(context)
+        val colors = palette(context)
+        views.setInt(R.id.widget_root, "setBackgroundResource", colors.background)
+        views.setInt(R.id.widget_flag, "setBackgroundResource", colors.flagFrame)
+        for (id in listOf(R.id.widget_name, R.id.widget_up, R.id.widget_down)) {
+            views.setTextColor(id, colors.text)
+        }
+        for (id in listOf(
+            R.id.widget_up_arrow, R.id.widget_up_unit, R.id.widget_down_arrow, R.id.widget_down_unit,
+        )) {
+            views.setTextColor(id, colors.muted)
+        }
         val live = state.phase == WidgetPhase.CONNECTED
         val (up, upUnit) = speedParts(state.upBps ?: 0)
         val (down, downUnit) = speedParts(state.downBps ?: 0)
@@ -177,14 +242,14 @@ object VarmlenWidget {
         views.setTextViewText(R.id.widget_down_unit, if (live) downUnit else "")
         views.setInt(
             R.id.widget_toggle, "setBackgroundResource",
-            if (live) R.drawable.widget_button_active else R.drawable.widget_button,
+            if (live) colors.buttonActive else colors.button,
         )
         views.setInt(
             R.id.widget_toggle_icon, "setColorFilter",
             when (state.phase) {
-                WidgetPhase.CONNECTED -> ICON_ON_ACCENT
-                WidgetPhase.CONNECTING -> ICON_CONNECTING
-                WidgetPhase.DISCONNECTED -> ICON_IDLE
+                WidgetPhase.CONNECTED -> colors.iconOnAccent
+                WidgetPhase.CONNECTING -> colors.iconConnecting
+                WidgetPhase.DISCONNECTED -> colors.iconIdle
             },
         )
         views.setContentDescription(R.id.widget_toggle, strings.getString(

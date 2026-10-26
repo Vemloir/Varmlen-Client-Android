@@ -14,6 +14,7 @@
         android:background="@drawable/widget_flag_frame"
         android:clipToOutline="true"
         android:contentDescription="@null"
+        android:foreground="@drawable/widget_flag_outline"
         android:scaleType="centerCrop"
         android:src="@drawable/widget_flag_fi" />
     <TextView
