@@ -11,15 +11,17 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
+import android.view.View
 import android.widget.RemoteViews
 import java.io.File
 import java.util.Locale
 
 /**
  * Home-screen widget, 4x1 at the least: the location's flag -- the app's own
- * square flag picture, inset like the button -- and name, the tunnel's live
- * upload and download speed and a connect button that lights up in the app's
- * accent while connected. A location without a country shows a plain white
+ * square flag picture, inset like the button -- and name, and a connect
+ * button. While connected the button lights up in the app's accent and the
+ * tunnel's live upload and download speed shows beside it; otherwise there is
+ * no speed at all. A location without a country shows a plain white
  * flag. The widget takes the app's theme, dark or light, as it takes its
  * language.
  *
@@ -236,10 +238,12 @@ object VarmlenWidget {
         val live = state.phase == WidgetPhase.CONNECTED
         val (up, upUnit) = speedParts(state.upBps ?: 0)
         val (down, downUnit) = speedParts(state.downBps ?: 0)
-        views.setTextViewText(R.id.widget_up, if (live) up else "—")
-        views.setTextViewText(R.id.widget_up_unit, if (live) upUnit else "")
-        views.setTextViewText(R.id.widget_down, if (live) down else "—")
-        views.setTextViewText(R.id.widget_down_unit, if (live) downUnit else "")
+        // Without a tunnel there is no speed to show, so the name takes the room.
+        views.setViewVisibility(R.id.widget_speeds, if (live) View.VISIBLE else View.GONE)
+        views.setTextViewText(R.id.widget_up, up)
+        views.setTextViewText(R.id.widget_up_unit, upUnit)
+        views.setTextViewText(R.id.widget_down, down)
+        views.setTextViewText(R.id.widget_down_unit, downUnit)
         views.setInt(
             R.id.widget_toggle, "setBackgroundResource",
             if (live) colors.buttonActive else colors.button,

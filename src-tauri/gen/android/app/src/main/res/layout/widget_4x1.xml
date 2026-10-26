@@ -31,9 +31,12 @@
         android:text=""
         android:textColor="#FFFFFFFF"
         android:textSize="16sp" />
-    <!-- Speeds read as in the notification, ↑ 1.2 MB/s over ↓ 8.4 MB/s, right-aligned against the button. -->
+    <!-- Speeds read as in the notification, ↑ 1.2 MB/s over ↓ 8.4 MB/s, right-aligned against the button.
+         Shown only while connected. -->
     <LinearLayout
+        android:id="@+id/widget_speeds"
         android:layout_width="wrap_content"
+        android:visibility="gone"
         android:layout_height="wrap_content"
         android:gravity="end"
         android:orientation="vertical">
